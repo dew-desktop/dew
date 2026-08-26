@@ -1,4 +1,4 @@
-﻿# 💧 Dew
+﻿# 💧 Dew (Development Branch)
 
 Minimalist desktop HUD and Luau tooling platform.
 
@@ -10,12 +10,12 @@ Dew is an open-source, keyboard-driven desktop HUD powered by an embedded Luau r
 
 ---
 
-## Repository Structure
+## Repository Structure (Dev)
 
+- [`types/`](types/): Luau type definitions (`@dew/core.d.luau`) for mod SDK interfaces.
+- [`mods/`](mods/): Reference Luau mod implementations.
 - [`scripts/`](scripts/): Repository automation, versioning, and commit validation scripts written in Luau.
 - [`VERSION`](VERSION): Current development version.
-
-Active feature development and experimental modules reside on the `dev` branch.
 
 ---
 
