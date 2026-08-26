@@ -1,12 +1,13 @@
 ﻿:root {
   --bg-hud: rgba(13, 17, 23, 0.88);
+  --bg-widget-hover: rgba(255, 255, 255, 0.08);
   --border-hud: rgba(255, 255, 255, 0.12);
-  --border-hud-glow: rgba(56, 189, 248, 0.35);
+  --border-hud-glow: rgba(56, 189, 248, 0.4);
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
   --text-muted: #64748b;
   --accent-emerald: #10b981;
-  --accent-glow: rgba(16, 185, 129, 0.4);
+  --accent-glow: rgba(16, 185, 129, 0.35);
   --font-mono: "JetBrains Mono", "Cascadia Code", "SF Mono", Consolas, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
@@ -24,13 +25,16 @@ body {
   overflow: hidden;
   background: transparent;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   font-family: var(--font-sans);
 }
 
+/* Floating Pill Container */
 .dew-pill-container {
-  width: 360px;
+  min-width: 360px;
+  max-width: 95vw;
   height: 56px;
   background: var(--bg-hud);
   backdrop-filter: blur(24px) saturate(180%);
@@ -39,8 +43,7 @@ body {
   border-radius: 28px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 8px;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 1px 1px rgba(255, 255, 255, 0.08);
   transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
   cursor: grab;
@@ -51,18 +54,47 @@ body {
 }
 
 .dew-pill-container.is-running {
-  border-color: rgba(16, 185, 129, 0.4);
+  border-color: rgba(16, 185, 129, 0.45);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6), 0 0 16px var(--accent-glow);
 }
 
-/* Left Brand / Icon Zone */
-.dew-icon-zone {
+/* Multi-Widgets Row */
+.dew-widgets-wrapper {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+}
+
+.dew-widget-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  transition: background 0.2s ease, transform 0.15s ease;
+  cursor: pointer;
   flex-shrink: 0;
 }
 
+.dew-widget-item:hover {
+  background: var(--bg-widget-hover);
+}
+
+.dew-widget-item:active {
+  transform: scale(0.97);
+}
+
+.dew-widget-divider {
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.1);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+/* Indicator Dot */
 .dew-brand-dot {
   width: 8px;
   height: 8px;
@@ -71,7 +103,7 @@ body {
   transition: all 0.3s ease;
 }
 
-.dew-pill-container.is-running .dew-brand-dot {
+.dew-brand-dot.glow-active {
   background: var(--accent-emerald);
   box-shadow: 0 0 10px var(--accent-emerald);
   animation: pulse-dot 2s infinite ease-in-out;
@@ -82,23 +114,18 @@ body {
   50% { opacity: 0.6; transform: scale(1.25); }
 }
 
-/* Center Info: Timer & Task */
-.dew-info-zone {
+/* Widget Text */
+.dew-widget-text-group {
   display: flex;
   flex-direction: column;
-  align-items: center;
   justify-content: center;
-  flex-grow: 1;
-  text-align: center;
-  overflow: hidden;
-  padding: 0 8px;
 }
 
 .dew-timer-display {
   font-family: var(--font-mono);
-  font-size: 19px;
+  font-size: 17px;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   color: var(--text-primary);
   line-height: 1.1;
 }
@@ -110,49 +137,63 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 180px;
-  margin-top: 2px;
-}
-
-/* Right Controls Zone */
-.dew-action-zone {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
+  max-width: 120px;
+  margin-top: 1px;
 }
 
 .dew-badge {
-  font-size: 10px;
-  font-weight: 600;
+  font-size: 9px;
+  font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  padding: 2px 8px;
-  border-radius: 10px;
+  padding: 2px 6px;
+  border-radius: 8px;
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-secondary);
   border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.dew-btn-action {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
+/* Command Palette Modal */
+.dew-palette-container {
+  position: absolute;
+  top: 64px;
+  width: 360px;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 100;
+}
+
+.dew-palette-container.hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-8px) scale(0.98);
+}
+
+.dew-palette-box {
+  background: var(--bg-hud);
+  backdrop-filter: blur(24px) saturate(180%);
+  border: 1px solid var(--border-hud);
+  border-radius: 16px;
+  padding: 8px 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+
+.dew-palette-input-wrapper {
   display: flex;
   align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s ease;
+  gap: 8px;
+  color: var(--text-secondary);
 }
 
-.dew-btn-action:hover {
-  background: rgba(255, 255, 255, 0.18);
-  transform: scale(1.08);
+.dew-palette-input-wrapper input {
+  width: 100%;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
 }
 
-.dew-btn-action:active {
-  transform: scale(0.95);
+.dew-palette-input-wrapper input::placeholder {
+  color: var(--text-muted);
 }
