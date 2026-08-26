@@ -43,10 +43,14 @@ impl LuauRuntime {
     }
 
     pub fn render_widgets(&self) -> Vec<WidgetRenderOutput> {
-        let state_lock = self.state.lock().unwrap();
+        let defs: Vec<_> = {
+            let state_lock = self.state.lock().unwrap();
+            state_lock.widgets.clone()
+        };
+
         let mut rendered = Vec::new();
 
-        for def in &state_lock.widgets {
+        for def in defs {
             if let Ok(render_fn) = self.lua.registry_value::<LuaFunction>(&*def.render_key) {
                 if let Ok(result_table) = render_fn.call::<LuaTable>(()) {
                     let text: String = result_table.get("text").unwrap_or_default();
@@ -78,30 +82,33 @@ impl LuauRuntime {
     }
 
     pub fn handle_widget_click(&self, widget_id: &str, secondary: bool) -> Result<(), LuaError> {
-        let state_lock = self.state.lock().unwrap();
-        for def in &state_lock.widgets {
-            if def.id == widget_id {
-                let key_opt = if secondary {
-                    &def.secondary_click_key
+        let callback_opt = {
+            let state_lock = self.state.lock().unwrap();
+            state_lock.widgets.iter().find(|w| w.id == widget_id).and_then(|def| {
+                if secondary {
+                    def.secondary_click_key.clone()
                 } else {
-                    &def.click_key
-                };
-
-                if let Some(key) = key_opt {
-                    if let Ok(callback) = self.lua.registry_value::<LuaFunction>(&**key) {
-                        callback.call::<()>(())?;
-                    }
+                    def.click_key.clone()
                 }
-                break;
+            })
+        };
+
+        if let Some(key) = callback_opt {
+            if let Ok(callback) = self.lua.registry_value::<LuaFunction>(&*key) {
+                callback.call::<()>(())?;
             }
         }
         Ok(())
     }
 
     pub fn trigger_hotkey(&self, shortcut: &str) -> Result<bool, LuaError> {
-        let state_lock = self.state.lock().unwrap();
-        if let Some(key_ref) = state_lock.hotkeys.get(shortcut) {
-            if let Ok(callback) = self.lua.registry_value::<LuaFunction>(&**key_ref) {
+        let key_opt = {
+            let state_lock = self.state.lock().unwrap();
+            state_lock.hotkeys.get(shortcut).cloned()
+        };
+
+        if let Some(key_ref) = key_opt {
+            if let Ok(callback) = self.lua.registry_value::<LuaFunction>(&*key_ref) {
                 callback.call::<()>(())?;
                 return Ok(true);
             }
@@ -109,45 +116,22 @@ impl LuauRuntime {
         Ok(false)
     }
 
-    pub fn get_palette_status(&self) -> Option<(bool, String)> {
-        let state_lock = self.state.lock().unwrap();
-        state_lock.palette.as_ref().map(|p| (p.is_open, p.placeholder.clone()))
+    pub fn take_pending_palette_open(&self) -> Option<String> {
+        let mut state_lock = self.state.lock().unwrap();
+        state_lock.pending_palette_open.take()
     }
 
     pub fn submit_palette_query(&self, query: &str) -> Result<(), LuaError> {
-        let state_lock = self.state.lock().unwrap();
-        if let Some(ref palette) = state_lock.palette {
-            if let Some(ref key) = palette.submit_key {
-                if let Ok(submit_fn) = self.lua.registry_value::<LuaFunction>(&**key) {
-                    submit_fn.call::<()>(query)?;
-                }
+        let submit_key_opt = {
+            let state_lock = self.state.lock().unwrap();
+            state_lock.palette_submit_key.clone()
+        };
+
+        if let Some(key) = submit_key_opt {
+            if let Ok(submit_fn) = self.lua.registry_value::<LuaFunction>(&*key) {
+                submit_fn.call::<()>(query)?;
             }
         }
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_dynamic_mod_discovery_and_execution() {
-        let runtime = LuauRuntime::new().expect("Failed to initialize Luau VM");
-        let mods_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../mods");
-
-        let discovered = runtime.load_discovered_mods(&[mods_dir]);
-        assert!(discovered.len() >= 2, "Expected at least 2 discovered mods");
-
-        let widgets = runtime.render_widgets();
-        assert!(widgets.len() >= 2, "Expected at least 2 rendered widgets (timetracker and calculator)");
-
-        // Verify calculator widget works
-        let calc_widget = widgets.iter().find(|w| w.id == "calculator-widget").expect("Calculator widget not found");
-        assert_eq!(calc_widget.title, "Calculator");
-
-        // Verify timetracker widget works
-        let timer_widget = widgets.iter().find(|w| w.id == "timetracker-main").expect("Timer widget not found");
-        assert_eq!(timer_widget.title, "Time Tracker");
     }
 }

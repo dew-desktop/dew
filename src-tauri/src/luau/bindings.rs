@@ -28,20 +28,14 @@ pub struct WidgetDef {
     pub secondary_click_key: Option<Arc<mlua::RegistryKey>>,
 }
 
-#[derive(Clone)]
-pub struct PaletteState {
-    pub is_open: bool,
-    pub placeholder: String,
-    pub submit_key: Option<Arc<mlua::RegistryKey>>,
-}
-
 #[derive(Default)]
 pub struct HostState {
     pub widgets: Vec<WidgetDef>,
     pub hotkeys: HashMap<String, Arc<mlua::RegistryKey>>,
-    pub palette: Option<PaletteState>,
+    pub palette_submit_key: Option<Arc<mlua::RegistryKey>>,
     pub storage: HashMap<String, String>,
     pub clipboard_text: String,
+    pub pending_palette_open: Option<String>,
 }
 
 pub type SharedHostState = Arc<Mutex<HostState>>;
@@ -140,25 +134,11 @@ pub fn setup_dew_bindings(lua: &Lua, state: SharedHostState) -> LuaResult<()> {
         };
 
         let mut lock = state_palette.lock().unwrap();
-        lock.palette = Some(PaletteState {
-            is_open: true,
-            placeholder,
-            submit_key,
-        });
-
+        lock.palette_submit_key = submit_key;
+        lock.pending_palette_open = Some(placeholder);
         Ok(())
     })?;
     palette_table.set("open", open_palette)?;
-
-    let state_palette_close = Arc::clone(&state);
-    let close_palette = lua.create_function(move |_lua, ()| {
-        let mut lock = state_palette_close.lock().unwrap();
-        if let Some(ref mut p) = lock.palette {
-            p.is_open = false;
-        }
-        Ok(())
-    })?;
-    palette_table.set("close", close_palette)?;
     dew_table.set("commandPalette", palette_table)?;
 
     // 5. dew.storage

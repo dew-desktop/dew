@@ -5,7 +5,7 @@ use luau::LuauRuntime;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tauri::{Emitter, State};
+use tauri::{Emitter, LogicalSize, Manager, State};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 pub struct AppState {
@@ -20,25 +20,55 @@ fn get_widgets(state: State<'_, Arc<AppState>>) -> Vec<WidgetRenderOutput> {
 
 #[tauri::command]
 fn click_widget(
+    app: tauri::AppHandle,
     state: State<'_, Arc<AppState>>,
     widget_id: String,
     secondary: bool,
 ) -> Result<(), String> {
-    let rt = state.runtime.lock().unwrap();
-    rt.handle_widget_click(&widget_id, secondary)
-        .map_err(|e| e.to_string())
+    let (click_res, pending_palette) = {
+        let rt = state.runtime.lock().unwrap();
+        let res = rt.handle_widget_click(&widget_id, secondary);
+        let pending = rt.take_pending_palette_open();
+        (res, pending)
+    };
+
+    if let Some(placeholder) = pending_palette {
+        let _ = resize_window(&app, true);
+        let _ = app.emit("dew:open-palette", placeholder);
+    }
+
+    click_res.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn submit_palette(state: State<'_, Arc<AppState>>, query: String) -> Result<(), String> {
-    let rt = state.runtime.lock().unwrap();
-    rt.submit_palette_query(&query).map_err(|e| e.to_string())
+fn submit_palette(
+    app: tauri::AppHandle,
+    state: State<'_, Arc<AppState>>,
+    query: String,
+) -> Result<(), String> {
+    let res = {
+        let rt = state.runtime.lock().unwrap();
+        rt.submit_palette_query(&query)
+    };
+    let _ = resize_window(&app, false);
+    res.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-fn get_palette_status(state: State<'_, Arc<AppState>>) -> Option<(bool, String)> {
-    let rt = state.runtime.lock().unwrap();
-    rt.get_palette_status()
+fn set_hud_expanded(app: tauri::AppHandle, expanded: bool) {
+    let _ = resize_window(&app, expanded);
+}
+
+fn resize_window(app: &tauri::AppHandle, expanded: bool) -> Result<(), tauri::Error> {
+    if let Some(window) = app.get_webview_window("main") {
+        let new_size = if expanded {
+            LogicalSize::new(380.0, 140.0)
+        } else {
+            LogicalSize::new(380.0, 72.0)
+        };
+        window.set_size(new_size)?;
+    }
+    Ok(())
 }
 
 pub fn run() {
@@ -47,12 +77,10 @@ pub fn run() {
     // Discover and load all mods from standard paths
     let mut mod_dirs = Vec::new();
 
-    // 1. User global directory (~/.dew/mods)
     if let Some(user_dir) = dirs::home_dir() {
         mod_dirs.push(user_dir.join(".dew").join("mods"));
     }
 
-    // 2. Relative project directory (mods/)
     let project_mods = PathBuf::from("../mods");
     if project_mods.exists() {
         mod_dirs.push(project_mods);
@@ -88,25 +116,32 @@ pub fn run() {
             get_widgets,
             click_widget,
             submit_palette,
-            get_palette_status
+            set_hud_expanded
         ])
         .setup(move |app| {
             let app_handle = app.handle().clone();
             let state_clone = Arc::clone(&app_state);
 
-            // Register standard global hotkey Alt+Shift+T if available
             if let Ok(shortcut) = "Alt+Shift+T".parse::<Shortcut>() {
                 let _ = app.global_shortcut().register(shortcut);
             }
 
-            // High-Precision Tick Loop via Tauri's native async runtime
+            // 100ms High-Precision Tick Loop to stream HUD state
             tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_millis(100)).await;
-                    let widgets = {
+                    let (widgets, pending_palette) = {
                         let rt = state_clone.runtime.lock().unwrap();
-                        rt.render_widgets()
+                        let w = rt.render_widgets();
+                        let p = rt.take_pending_palette_open();
+                        (w, p)
                     };
+
+                    if let Some(placeholder) = pending_palette {
+                        let _ = resize_window(&app_handle, true);
+                        let _ = app_handle.emit("dew:open-palette", placeholder);
+                    }
+
                     let _ = app_handle.emit("dew:update-widgets", &widgets);
                 }
             });
