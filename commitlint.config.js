@@ -1,5 +1,7 @@
-﻿// Scopes strictly corresponding to existing repository directories:
-const activeScopes = [
+﻿const activeScopes = [
+  'core',      // src-tauri/
+  'luau',      // src-tauri/src/luau/
+  'ui',        // ui/
   'types',     // types/
   'scripts',   // scripts/
   'mods',      // mods/

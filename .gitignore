@@ -1,16 +1,20 @@
 ﻿# Rust / Cargo
-/target
+target/
+**/target/
 Cargo.lock
+**/Cargo.lock
 
 # Node / Web
-node_modules
-dist
+node_modules/
+**/node_modules/
+dist/
+**/dist/
 .env
 .env.local
 
 # IDE / OS
-.vscode
-.idea
+.vscode/
+.idea/
 *.log
 Thumbs.db
 [Dd]esktop.ini
