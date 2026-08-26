@@ -1,0 +1,35 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dew HUD</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="hud-pill" class="dew-pill-container" data-tauri-drag-region>
+    <!-- Left Indicator -->
+    <div class="dew-icon-zone" data-tauri-drag-region>
+      <div id="brand-dot" class="dew-brand-dot"></div>
+      <span id="widget-badge" class="dew-badge">FOCUS</span>
+    </div>
+
+    <!-- Center Display -->
+    <div class="dew-info-zone" data-tauri-drag-region>
+      <div id="timer-display" class="dew-timer-display">00:00</div>
+      <div id="subtext-display" class="dew-subtext-display">Deep Focus</div>
+    </div>
+
+    <!-- Right Controls -->
+    <div class="dew-action-zone">
+      <button id="btn-toggle" class="dew-btn-action" title="Toggle Timer (Click / Alt+Shift+T)">
+        <svg id="icon-play-pause" width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <polygon points="5 3 19 12 5 21 5 3"></polygon>
+        </svg>
+      </button>
+    </div>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>
