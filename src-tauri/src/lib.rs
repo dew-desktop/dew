@@ -99,11 +99,10 @@ pub fn run() {
                 let _ = app.global_shortcut().register(shortcut);
             }
 
-            // 100ms High-Precision Tick Loop to stream HUD state
-            tokio::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(100));
+            // High-Precision Tick Loop via Tauri's native async runtime
+            tauri::async_runtime::spawn(async move {
                 loop {
-                    interval.tick().await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     let widgets = {
                         let rt = state_clone.runtime.lock().unwrap();
                         rt.render_widgets()
