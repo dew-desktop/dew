@@ -1,6 +1,6 @@
 ﻿--!strict
 -- Dew Mod: Specialized Workflow Calculator
-local dew = require("@dew/core")
+local dew = (_G.dew or require("@dew/core")) :: any
 
 type CalcState = {
     lastResult: string,
@@ -18,20 +18,22 @@ dew.hud.registerWidget({
     priority = 50,
     render = function()
         return {
-            text = if #state.lastResult > 0 then `= {state.lastResult}` else "Calc",
+            text = if #state.lastResult > 0 then state.lastResult else "Calc",
+            subtext = "Quick Math",
             icon = "hash",
-            color = "#f59e0b"
+            color = "#f59e0b",
+            glow = false,
+            badge = "MATH"
         }
     end,
     onClick = function()
         dew.commandPalette.open({
-            placeholder = "Calculate: e.g. '4.5h * $85', '1280 / 4', '500MB to GB'...",
+            placeholder = "Calculate (e.g. '4.5h * $85', '1024 / 4', '500MB to GB')...",
             onSubmit = function(expr: string)
-                -- Simple expression evaluation or return
-                state.lastResult = expr
+                state.lastResult = `= {expr}`
                 table.insert(state.history, expr)
                 dew.clipboard.writeText(expr)
-                dew.notifications.show(`📋 Copied result: {expr}`)
+                dew.notifications.show(`📋 Result: {expr}`)
                 dew.hud.refresh()
             end
         })
@@ -39,5 +41,5 @@ dew.hud.registerWidget({
 })
 
 dew.hotkeys.register("Alt+Shift+K", function()
-    dew.hud.expand()
+    dew.hud.refresh()
 end)
