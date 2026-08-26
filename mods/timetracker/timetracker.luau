@@ -1,6 +1,6 @@
 ﻿--!strict
 -- Flagship Dew Mod: Time Tracker & Pomodoro HUD
-local dew = require("@dew/core")
+local dew = (_G.dew or require("@dew/core")) :: any
 
 type TimeEntry = {
     id: string,
@@ -22,6 +22,7 @@ type TrackerState = {
     currentTag: string,
     elapsedSeconds: number,
     startTime: number,
+    lastTickTime: number,
     todayTotalSeconds: number,
     entries: {TimeEntry}
 }
@@ -36,14 +37,16 @@ local state: TrackerState = {
     currentTag = "work",
     elapsedSeconds = 0,
     startTime = 0,
+    lastTickTime = 0,
     todayTotalSeconds = 0,
     entries = {}
 }
 
 local function formatTimer(seconds: number): string
-    local h = math.floor(seconds / 3600)
-    local m = math.floor((seconds % 3600) / 60)
-    local s = seconds % 60
+    local total = math.max(0, math.floor(seconds))
+    local h = math.floor(total / 3600)
+    local m = math.floor((total % 3600) / 60)
+    local s = total % 60
     if h > 0 then
         return string.format("%02d:%02d:%02d", h, m, s)
     else
@@ -53,8 +56,10 @@ end
 
 local function toggleTimer()
     state.isRunning = not state.isRunning
+    local now = dew.time.now()
     if state.isRunning then
-        state.startTime = dew.time.now()
+        state.startTime = now
+        state.lastTickTime = now
         dew.audio.playChime("tick")
         dew.notifications.show(`⏱️ Started: {state.currentTask}`)
     else
@@ -64,18 +69,36 @@ local function toggleTimer()
     dew.hud.refresh()
 end
 
--- Register Primary HUD Pill Widget
+-- Primary HUD Pill Widget
 dew.hud.registerWidget({
     id = "timetracker-main",
     title = "Time Tracker",
     priority = 100,
     render = function()
+        local now = dew.time.now()
+        if state.isRunning and state.lastTickTime > 0 then
+            local dt = now - state.lastTickTime
+            if dt > 0 then
+                state.elapsedSeconds += dt
+                state.lastTickTime = now
+                if state.isPomodoro then
+                    state.pomodoroRemaining -= dt
+                    if state.pomodoroRemaining <= 0 then
+                        state.pomodoroPhase = if state.pomodoroPhase == "work" then "break" else "work"
+                        state.pomodoroRemaining = if state.pomodoroPhase == "work" then 25 * 60 else 5 * 60
+                        dew.audio.playChime("complete")
+                        dew.notifications.show(`🍅 Pomodoro: {string.upper(state.pomodoroPhase)} interval started!`)
+                    end
+                end
+            end
+        end
+
         local displayText = ""
-        local color = "#22c55e" -- green
+        local color = "#22c55e" -- vibrant emerald green
         local progress = nil
 
         if state.isPomodoro then
-            displayText = `{formatTimer(state.pomodoroRemaining)} ({state.pomodoroPhase})`
+            displayText = `{formatTimer(state.pomodoroRemaining)}`
             color = if state.pomodoroPhase == "work" then "#ef4444" else "#3b82f6"
             progress = 1.0 - (state.pomodoroRemaining / (25 * 60))
         else
@@ -97,27 +120,10 @@ dew.hud.registerWidget({
         toggleTimer()
     end,
     onSecondaryClick = function()
-        dew.commandPalette.open({
-            placeholder = "Switch task or log (e.g. 'Drafting docs #docs @client')...",
-            onSubmit = function(query: string)
-                if #query > 0 then
-                    state.currentTask = query
-                    state.elapsedSeconds = 0
-                    state.isRunning = true
-                    dew.hud.refresh()
-                end
-            end
-        })
+        state.isPomodoro = not state.isPomodoro
+        state.pomodoroPhase = "work"
+        state.pomodoroRemaining = 25 * 60
+        dew.notifications.show(if state.isPomodoro then "🍅 Pomodoro Mode" else "⏱️ Stopwatch Mode")
+        dew.hud.refresh()
     end
 })
-
--- Global Hotkeys
-dew.hotkeys.register("Alt+Shift+T", toggleTimer)
-
-dew.hotkeys.register("Alt+Shift+P", function()
-    state.isPomodoro = not state.isPomodoro
-    state.pomodoroPhase = "work"
-    state.pomodoroRemaining = 25 * 60
-    dew.notifications.show(if state.isPomodoro then "🍅 Pomodoro Mode ON" else "⏱️ Stopwatch Mode ON")
-    dew.hud.refresh()
-end)
