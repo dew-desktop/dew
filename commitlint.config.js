@@ -1,5 +1,8 @@
-﻿const activeScopes = [
+﻿// Scopes strictly corresponding to existing repository directories:
+const activeScopes = [
+  'types',     // types/
   'scripts',   // scripts/
+  'mods',      // mods/
   'deps',      // VERSION, root config files
 ];
 

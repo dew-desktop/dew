@@ -35,7 +35,9 @@ local config: CommitLintConfig = {
         "ci"
     },
     allowedScopes = {
+        "types",     -- types/
         "scripts",   -- scripts/
+        "mods",      -- mods/ (or builtin mods)
         "deps"       -- VERSION / root configs
     },
     maxHeaderLength = 100,
@@ -101,7 +103,7 @@ local function validateCommit(message: string): ValidationResult
             table.insert(errors, `Scope '{parsed.scope}' must be lower-case`)
         end
     else
-        table.insert(errors, "Scope is required for all Dew commits (e.g. chore(scripts): ...)")
+        table.insert(errors, "Scope is required for all Dew commits (e.g. feat(types): ...)")
     end
 
     -- 3. Header Length
