@@ -1,7 +1,6 @@
 ﻿const activeScopes = [
-  'core',      // src-tauri/
-  'luau',      // src-tauri/src/luau/
-  'ui',        // ui/
+  'host',      // host/
+  'luau',      // host/src/luau/
   'types',     // types/
   'scripts',   // scripts/
   'mods',      // mods/

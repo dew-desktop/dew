@@ -1,0 +1,16 @@
+﻿name = "dew/app"
+version = "0.0.1"
+description = "Dew Native Luau Desktop HUD & Applet Ecosystem"
+
+[target]
+environment = "luau"
+lib = "scripts/init.luau"
+
+[dependencies]
+aether = { name = "spektr/aether", version = "^0.1.0-alpha.5" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"

@@ -34,9 +34,8 @@ local config: CommitLintConfig = {
         "ci"
     },
     allowedScopes = {
-        "core",      -- src-tauri/
-        "luau",      -- src-tauri/src/luau/
-        "ui",        -- ui/
+        "host",      -- host/
+        "luau",      -- host/src/luau/
         "types",     -- types/
         "scripts",   -- scripts/
         "mods",      -- mods/
@@ -105,7 +104,7 @@ local function validateCommit(message: string): ValidationResult
             table.insert(errors, `Scope '{parsed.scope}' must be lower-case`)
         end
     else
-        table.insert(errors, "Scope is required for all Dew commits (e.g. feat(core): ...)")
+        table.insert(errors, "Scope is required for all Dew commits (e.g. feat(host): ...)")
     end
 
     -- 3. Header Length
