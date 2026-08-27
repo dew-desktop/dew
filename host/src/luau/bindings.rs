@@ -148,8 +148,14 @@ pub fn setup_dew_bindings(lua: &Lua, state: SharedHostState) -> LuaResult<()> {
     audio_table.set("playChime", play_chime)?;
     dew_table.set("audio", audio_table)?;
 
-    // Register globally in Luau
+    // Bind to globals
     lua.globals().set("dew", dew_table)?;
+
+    // Load & Bind @dew/aether into globals
+    let aether_source = include_str!("../../../types/aether.luau");
+    let clean_aether = aether_source.strip_prefix('\u{feff}').unwrap_or(aether_source);
+    let aether_module: LuaTable = lua.load(clean_aether).set_name("@dew/aether").eval()?;
+    lua.globals().set("Aether", aether_module)?;
 
     Ok(())
 }

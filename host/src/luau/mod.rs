@@ -64,7 +64,28 @@ impl LuauRuntime {
         for comp in components {
             if let Ok(render_fn) = self.lua.registry_value::<LuaFunction>(&*comp.render_fn) {
                 if let Ok(res_table) = render_fn.call::<LuaTable>(()) {
-                    if let Ok(cmds) = res_table.get::<LuaTable>("commands") {
+                    // 1. If result is a Roblox/Aether Virtual Instance (has ClassName), compile it!
+                    let compiled_table = if res_table.contains_key("ClassName").unwrap_or(false) {
+                        if let Ok(aether_global) = self.lua.globals().get::<LuaTable>("Aether") {
+                            if let Ok(compile_fn) = aether_global.get::<LuaFunction>("compileTree") {
+                                let bounds = self.lua.create_table().unwrap();
+                                bounds.set("x", 0.0).unwrap();
+                                bounds.set("y", 0.0).unwrap();
+                                bounds.set("w", 380.0).unwrap();
+                                bounds.set("h", 56.0).unwrap();
+                                compile_fn.call::<LuaTable>((res_table.clone(), bounds)).unwrap_or(res_table)
+                            } else {
+                                res_table
+                            }
+                        } else {
+                            res_table
+                        }
+                    } else {
+                        res_table
+                    };
+
+                    // 2. Extract compiled draw commands
+                    if let Ok(cmds) = compiled_table.get::<LuaTable>("commands") {
                         for pair in cmds.pairs::<i32, LuaTable>() {
                             if let Ok((_, cmd_tbl)) = pair {
                                 let kind: String = cmd_tbl.get("kind").unwrap_or_else(|_| "rect".into());

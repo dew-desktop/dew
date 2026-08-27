@@ -1,6 +1,13 @@
 ﻿--!strict
--- Flagship Dew Native Mod: Time Tracker HUD (Aether Vello GPU Presentation)
+-- Flagship Dew Native Mod: Time Tracker HUD (Aether Roblox UI Parity DSL)
 local dew = (_G.dew or require("@dew/core")) :: any
+local Aether = (_G.Aether or require("@dew/aether")) :: any
+
+local New = Aether.New
+local UDim2 = Aether.UDim2
+local UDim = Aether.UDim
+local Color3 = Aether.Color3
+local Enum = Aether.Enum
 
 type TrackerState = {
     isRunning: boolean,
@@ -63,110 +70,92 @@ dew.hud.registerComponent({
         end
 
         local displayTime = formatTimer(state.elapsedSeconds)
-        local dotColor = if state.isRunning then { r = 16, g = 185, b = 129, a = 255 } else { r = 100, g = 116, b = 139, a = 255 }
+        local statusColor = if state.isRunning then Color3.fromHex("#10b981") else Color3.fromHex("#64748b")
+        local textColor = if state.isRunning then Color3.fromHex("#10b981") else Color3.fromHex("#f8fafc")
 
-        return {
-            commands = {
-                -- 1. Glowing Indicator Dot
-                {
-                    kind = "rounded_rect",
-                    x = 20.0,
-                    y = 24.0,
-                    w = 8.0,
-                    h = 8.0,
-                    radius = 4.0,
-                    r = dotColor.r,
-                    g = dotColor.g,
-                    b = dotColor.b,
-                    a = dotColor.a
+        -- Pure Roblox UI Tree Construction
+        return New "Frame" {
+            Size = UDim2.new(1, 0, 1, 0),
+            BackgroundTransparency = 1,
+
+            -- 1. Glowing Indicator Dot
+            New "Frame" {
+                Position = UDim2.new(0, 20, 0, 24),
+                Size = UDim2.new(0, 8, 0, 8),
+                BackgroundColor3 = statusColor,
+                BackgroundTransparency = 0,
+
+                New "UICorner" {
+                    CornerRadius = UDim.new(0, 4)
+                }
+            },
+
+            -- 2. Project Badge Pill
+            New "Frame" {
+                Position = UDim2.new(0, 36, 0, 18),
+                Size = UDim2.new(0, 46, 0, 20),
+                BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+                BackgroundTransparency = 0.9,
+
+                New "UICorner" {
+                    CornerRadius = UDim.new(0, 10)
                 },
-                -- 2. Project Badge Pill
-                {
-                    kind = "rounded_rect",
-                    x = 36.0,
-                    y = 18.0,
-                    w = 46.0,
-                    h = 20.0,
-                    radius = 10.0,
-                    r = 255,
-                    g = 255,
-                    b = 255,
-                    a = 22
+
+                New "TextLabel" {
+                    Position = UDim2.new(0, 9, 0, 2),
+                    Size = UDim2.new(1, 0, 1, 0),
+                    Text = state.currentProject,
+                    TextSize = 11,
+                    TextColor3 = Color3.fromHex("#cbd5e1"),
+                    BackgroundTransparency = 1
+                }
+            },
+
+            -- 3. Center Info: Monospace Timer & Subtitle Task
+            New "TextLabel" {
+                Position = UDim2.new(0, 98, 0, 12),
+                Size = UDim2.new(0, 120, 0, 22),
+                Text = displayTime,
+                TextSize = 18,
+                Font = Enum.Font.Code,
+                TextColor3 = textColor,
+                BackgroundTransparency = 1
+            },
+            New "TextLabel" {
+                Position = UDim2.new(0, 99, 0, 33),
+                Size = UDim2.new(0, 120, 0, 16),
+                Text = state.currentTask,
+                TextSize = 10.5,
+                TextColor3 = Color3.fromHex("#94a3b8"),
+                BackgroundTransparency = 1
+            },
+
+            -- 4. Card Separator
+            New "Frame" {
+                Position = UDim2.new(0, 268, 0, 16),
+                Size = UDim2.new(0, 1, 0, 24),
+                BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+                BackgroundTransparency = 0.88
+            },
+
+            -- 5. Quick Action Button Pill
+            New "TextButton" {
+                Position = UDim2.new(0, 282, 0, 14),
+                Size = UDim2.new(0, 76, 0, 28),
+                BackgroundColor3 = if state.isRunning then Color3.fromHex("#10b981") else Color3.fromRGB(255, 255, 255),
+                BackgroundTransparency = if state.isRunning then 0.8 else 0.9,
+
+                New "UICorner" {
+                    CornerRadius = UDim.new(0, 14)
                 },
-                {
-                    kind = "text",
-                    text = state.currentProject,
-                    x = 45.0,
-                    y = 20.0,
-                    stroke_width = 11.0, -- font size
-                    radius = 0.0, -- sans font
-                    r = 203,
-                    g = 213,
-                    b = 225,
-                    a = 255
-                },
-                -- 3. Center Info: Timer & Task
-                {
-                    kind = "text",
-                    text = displayTime,
-                    x = 98.0,
-                    y = 12.0,
-                    stroke_width = 18.0, -- font size
-                    radius = 1.0, -- mono font
-                    r = if state.isRunning then 16 else 248,
-                    g = if state.isRunning then 185 else 250,
-                    b = if state.isRunning then 129 else 252,
-                    a = 255
-                },
-                {
-                    kind = "text",
-                    text = state.currentTask,
-                    x = 99.0,
-                    y = 33.0,
-                    stroke_width = 10.5,
-                    radius = 0.0,
-                    r = 148,
-                    g = 163,
-                    b = 184,
-                    a = 255
-                },
-                -- 4. Card Separator
-                {
-                    kind = "rounded_rect",
-                    x = 268.0,
-                    y = 16.0,
-                    w = 1.0,
-                    h = 24.0,
-                    radius = 0.0,
-                    r = 255,
-                    g = 255,
-                    b = 255,
-                    a = 30
-                },
-                -- 5. Quick Action Button Pill
-                {
-                    kind = "rounded_rect",
-                    x = 282.0,
-                    y = 14.0,
-                    w = 76.0,
-                    h = 28.0,
-                    radius = 14.0,
-                    r = if state.isRunning then 16 else 255,
-                    g = if state.isRunning then 185 else 255,
-                    b = if state.isRunning then 129 else 255,
-                    a = if state.isRunning then 45 else 20
-                },
-                {
-                    kind = "text",
-                    text = if state.isRunning then "PAUSE" else "START",
-                    x = if state.isRunning then 302.0 else 304.0,
-                    y = 20.0,
-                    stroke_width = 11.0,
-                    radius = 0.0,
-                    r = if state.isRunning then 16 else 248,
-                    g = if state.isRunning then 185 else 250,
-                    b = if state.isRunning then 129 else 252,
-                    a = 255
+
+                New "TextLabel" {
+                    Position = UDim2.new(0, if state.isRunning then 20 else 22, 0, 6),
+                    Size = UDim2.new(1, 0, 1, 0),
+                    Text = if state.isRunning then "PAUSE" else "START",
+                    TextSize = 11,
+                    TextColor3 = textColor,
+                    BackgroundTransparency = 1
                 }
             }
         }
