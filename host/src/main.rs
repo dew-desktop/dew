@@ -143,6 +143,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         cmd.color_a,
                     );
                 }
+                "text" => {
+                    if let Some(ref text) = cmd.text {
+                        let is_mono = cmd.radius > 0.0;
+                        presenter.draw_text(
+                            text,
+                            cmd.x,
+                            cmd.y,
+                            cmd.stroke_width.max(11.0),
+                            is_mono,
+                            cmd.color_r,
+                            cmd.color_g,
+                            cmd.color_b,
+                            cmd.color_a,
+                        );
+                    }
+                }
                 _ => {}
             }
         }

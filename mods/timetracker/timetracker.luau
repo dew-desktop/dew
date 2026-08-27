@@ -70,8 +70,8 @@ dew.hud.registerComponent({
                 -- 1. Glowing Indicator Dot
                 {
                     kind = "rounded_rect",
-                    x = 24.0,
-                    y = 28.0,
+                    x = 20.0,
+                    y = 24.0,
                     w = 8.0,
                     h = 8.0,
                     radius = 4.0,
@@ -83,41 +83,90 @@ dew.hud.registerComponent({
                 -- 2. Project Badge Pill
                 {
                     kind = "rounded_rect",
-                    x = 42.0,
-                    y = 23.0,
-                    w = 48.0,
-                    h = 18.0,
-                    radius = 9.0,
+                    x = 36.0,
+                    y = 18.0,
+                    w = 46.0,
+                    h = 20.0,
+                    radius = 10.0,
                     r = 255,
                     g = 255,
                     b = 255,
-                    a = 20
+                    a = 22
                 },
-                -- 3. Card Separator
+                {
+                    kind = "text",
+                    text = state.currentProject,
+                    x = 45.0,
+                    y = 20.0,
+                    stroke_width = 11.0, -- font size
+                    radius = 0.0, -- sans font
+                    r = 203,
+                    g = 213,
+                    b = 225,
+                    a = 255
+                },
+                -- 3. Center Info: Timer & Task
+                {
+                    kind = "text",
+                    text = displayTime,
+                    x = 98.0,
+                    y = 12.0,
+                    stroke_width = 18.0, -- font size
+                    radius = 1.0, -- mono font
+                    r = if state.isRunning then 16 else 248,
+                    g = if state.isRunning then 185 else 250,
+                    b = if state.isRunning then 129 else 252,
+                    a = 255
+                },
+                {
+                    kind = "text",
+                    text = state.currentTask,
+                    x = 99.0,
+                    y = 33.0,
+                    stroke_width = 10.5,
+                    radius = 0.0,
+                    r = 148,
+                    g = 163,
+                    b = 184,
+                    a = 255
+                },
+                -- 4. Card Separator
                 {
                     kind = "rounded_rect",
-                    x = 260.0,
-                    y = 18.0,
+                    x = 268.0,
+                    y = 16.0,
                     w = 1.0,
-                    h = 28.0,
+                    h = 24.0,
                     radius = 0.0,
                     r = 255,
                     g = 255,
                     b = 255,
-                    a = 25
+                    a = 30
                 },
-                -- 4. Quick Action Button Pill
+                -- 5. Quick Action Button Pill
                 {
                     kind = "rounded_rect",
-                    x = 276.0,
-                    y = 18.0,
-                    w = 78.0,
+                    x = 282.0,
+                    y = 14.0,
+                    w = 76.0,
                     h = 28.0,
                     radius = 14.0,
                     r = if state.isRunning then 16 else 255,
                     g = if state.isRunning then 185 else 255,
                     b = if state.isRunning then 129 else 255,
-                    a = if state.isRunning then 40 else 20
+                    a = if state.isRunning then 45 else 20
+                },
+                {
+                    kind = "text",
+                    text = if state.isRunning then "PAUSE" else "START",
+                    x = if state.isRunning then 302.0 else 304.0,
+                    y = 20.0,
+                    stroke_width = 11.0,
+                    radius = 0.0,
+                    r = if state.isRunning then 16 else 248,
+                    g = if state.isRunning then 185 else 250,
+                    b = if state.isRunning then 129 else 252,
+                    a = 255
                 }
             }
         }
