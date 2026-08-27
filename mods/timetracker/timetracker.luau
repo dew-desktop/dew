@@ -1,16 +1,6 @@
 ﻿--!strict
--- Flagship Dew Mod: Time Tracker & Pomodoro HUD
+-- Flagship Dew Native Mod: Time Tracker HUD (Aether Vello GPU Presentation)
 local dew = (_G.dew or require("@dew/core")) :: any
-
-type TimeEntry = {
-    id: string,
-    task: string,
-    project: string?,
-    tag: string?,
-    startTime: number,
-    endTime: number?,
-    duration: number
-}
 
 type TrackerState = {
     isRunning: boolean,
@@ -19,12 +9,8 @@ type TrackerState = {
     pomodoroRemaining: number,
     currentTask: string,
     currentProject: string,
-    currentTag: string,
     elapsedSeconds: number,
-    startTime: number,
-    lastTickTime: number,
-    todayTotalSeconds: number,
-    entries: {TimeEntry}
+    lastTickTime: number
 }
 
 local state: TrackerState = {
@@ -33,13 +19,9 @@ local state: TrackerState = {
     pomodoroPhase = "work",
     pomodoroRemaining = 25 * 60,
     currentTask = "Deep Focus",
-    currentProject = "General",
-    currentTag = "work",
+    currentProject = "DEV",
     elapsedSeconds = 0,
-    startTime = 0,
-    lastTickTime = 0,
-    todayTotalSeconds = 0,
-    entries = {}
+    lastTickTime = 0
 }
 
 local function formatTimer(seconds: number): string
@@ -58,7 +40,6 @@ local function toggleTimer()
     state.isRunning = not state.isRunning
     local now = dew.time.now()
     if state.isRunning then
-        state.startTime = now
         state.lastTickTime = now
         dew.audio.playChime("tick")
         dew.notifications.show(`⏱️ Started: {state.currentTask}`)
@@ -69,11 +50,8 @@ local function toggleTimer()
     dew.hud.refresh()
 end
 
--- Primary HUD Pill Widget
-dew.hud.registerWidget({
-    id = "timetracker-main",
-    title = "Time Tracker",
-    priority = 100,
+dew.hud.registerComponent({
+    id = "timetracker",
     render = function()
         local now = dew.time.now()
         if state.isRunning and state.lastTickTime > 0 then
@@ -81,49 +59,70 @@ dew.hud.registerWidget({
             if dt > 0 then
                 state.elapsedSeconds += dt
                 state.lastTickTime = now
-                if state.isPomodoro then
-                    state.pomodoroRemaining -= dt
-                    if state.pomodoroRemaining <= 0 then
-                        state.pomodoroPhase = if state.pomodoroPhase == "work" then "break" else "work"
-                        state.pomodoroRemaining = if state.pomodoroPhase == "work" then 25 * 60 else 5 * 60
-                        dew.audio.playChime("complete")
-                        dew.notifications.show(`🍅 Pomodoro: {string.upper(state.pomodoroPhase)} interval started!`)
-                    end
-                end
             end
         end
 
-        local displayText = ""
-        local color = "#22c55e" -- vibrant emerald green
-        local progress = nil
-
-        if state.isPomodoro then
-            displayText = `{formatTimer(state.pomodoroRemaining)}`
-            color = if state.pomodoroPhase == "work" then "#ef4444" else "#3b82f6"
-            progress = 1.0 - (state.pomodoroRemaining / (25 * 60))
-        else
-            displayText = formatTimer(state.elapsedSeconds)
-            color = if state.isRunning then "#22c55e" else "#94a3b8"
-        end
+        local displayTime = formatTimer(state.elapsedSeconds)
+        local dotColor = if state.isRunning then { r = 16, g = 185, b = 129, a = 255 } else { r = 100, g = 116, b = 139, a = 255 }
 
         return {
-            text = displayText,
-            subtext = state.currentTask,
-            icon = if state.isRunning then "play" else "pause",
-            color = color,
-            glow = state.isRunning,
-            badge = state.currentProject,
-            progress = progress
+            commands = {
+                -- 1. Glowing Indicator Dot
+                {
+                    kind = "rounded_rect",
+                    x = 24.0,
+                    y = 28.0,
+                    w = 8.0,
+                    h = 8.0,
+                    radius = 4.0,
+                    r = dotColor.r,
+                    g = dotColor.g,
+                    b = dotColor.b,
+                    a = dotColor.a
+                },
+                -- 2. Project Badge Pill
+                {
+                    kind = "rounded_rect",
+                    x = 42.0,
+                    y = 23.0,
+                    w = 48.0,
+                    h = 18.0,
+                    radius = 9.0,
+                    r = 255,
+                    g = 255,
+                    b = 255,
+                    a = 20
+                },
+                -- 3. Card Separator
+                {
+                    kind = "rounded_rect",
+                    x = 260.0,
+                    y = 18.0,
+                    w = 1.0,
+                    h = 28.0,
+                    radius = 0.0,
+                    r = 255,
+                    g = 255,
+                    b = 255,
+                    a = 25
+                },
+                -- 4. Quick Action Button Pill
+                {
+                    kind = "rounded_rect",
+                    x = 276.0,
+                    y = 18.0,
+                    w = 78.0,
+                    h = 28.0,
+                    radius = 14.0,
+                    r = if state.isRunning then 16 else 255,
+                    g = if state.isRunning then 185 else 255,
+                    b = if state.isRunning then 129 else 255,
+                    a = if state.isRunning then 40 else 20
+                }
+            }
         }
     end,
     onClick = function()
         toggleTimer()
-    end,
-    onSecondaryClick = function()
-        state.isPomodoro = not state.isPomodoro
-        state.pomodoroPhase = "work"
-        state.pomodoroRemaining = 25 * 60
-        dew.notifications.show(if state.isPomodoro then "🍅 Pomodoro Mode" else "⏱️ Stopwatch Mode")
-        dew.hud.refresh()
     end
 })
