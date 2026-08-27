@@ -1,9 +1,103 @@
 ﻿--!strict
--- @dew/aether: Pure Luau Roblox-Mirrored UI Construction Layer & Virtual Compiler
+-- @dew/aether: Pure Luau Roblox-Mirrored UI Construction Layer, Vide Reactive Hooks, & Virtual Compiler
 
 local Aether = {}
 
--- 1. Roblox Core Data Types
+-- ============================================================================
+-- 1. Pure Reactive Graph (Vide Parity: source, derive, effect, read, batch)
+-- ============================================================================
+type Subscriber = () -> ()
+
+local activeSubscriber: Subscriber? = nil
+
+export type Source<T> = (T?) -> T
+export type Derive<T> = () -> T
+
+local function source<T>(initialValue: T): Source<T>
+    local val = initialValue
+    local subscribers: { [Subscriber]: boolean } = {}
+
+    return function(newVal: T?): T
+        if newVal ~= nil then
+            if val ~= newVal then
+                val = newVal
+                for sub, _ in pairs(subscribers) do
+                    sub()
+                end
+            end
+        else
+            if activeSubscriber then
+                subscribers[activeSubscriber] = true
+            end
+        end
+        return val
+    end
+end
+
+local function derive<T>(computation: () -> T): Derive<T>
+    local cachedValue: T
+    local dirty = true
+    local subscribers: { [Subscriber]: boolean } = {}
+
+    local function rerun()
+        dirty = true
+        for sub, _ in pairs(subscribers) do
+            sub()
+        end
+    end
+
+    return function(): T
+        if activeSubscriber then
+            subscribers[activeSubscriber] = true
+        end
+
+        if dirty then
+            local prev = activeSubscriber
+            activeSubscriber = rerun
+            cachedValue = computation()
+            activeSubscriber = prev
+            dirty = false
+        end
+
+        return cachedValue
+    end
+end
+
+local function effect(callback: () -> ()): () -> ()
+    local function runner()
+        local prev = activeSubscriber
+        activeSubscriber = runner
+        callback()
+        activeSubscriber = prev
+    end
+    runner()
+    return function()
+        -- Cleanup
+    end
+end
+
+local function read<T>(v: T | (() -> T)): T
+    if type(v) == "function" then
+        return (v :: any)()
+    else
+        return v :: any
+    end
+end
+
+Aether.source = source
+Aether.derive = derive
+Aether.effect = effect
+Aether.read = read
+Aether.vide = {
+    source = source,
+    derive = derive,
+    effect = effect,
+    read = read,
+}
+
+-- ============================================================================
+-- 2. Roblox Core Data Types
+-- ============================================================================
 export type UDim = { Scale: number, Offset: number }
 export type UDim2 = { X: UDim, Y: UDim }
 export type Vector2 = { X: number, Y: number }
@@ -51,7 +145,9 @@ Aether.Enum = {
     }
 }
 
--- 2. Virtual Instance Constructor (New "Frame" { ... })
+-- ============================================================================
+-- 3. Virtual Instance Constructor (New "Frame" { ... })
+-- ============================================================================
 export type VirtualInstance = {
     ClassName: string,
     Props: { [string]: any },
@@ -79,7 +175,9 @@ function Aether.New(className: string)
     end
 end
 
--- 3. Virtual Tree Compiler (Resolves Roblox UI Tree into GPU Draw Commands)
+-- ============================================================================
+-- 4. Virtual Tree Compiler (Resolves Reactive Roblox Trees -> GPU Draw Commands)
+-- ============================================================================
 export type CompiledDrawCommand = {
     kind: string,
     x: number,
@@ -99,15 +197,14 @@ function Aether.compileTree(root: VirtualInstance, parentBounds: { x: number, y:
     local commands: { CompiledDrawCommand } = {}
 
     local function traverse(node: VirtualInstance, parentX: number, parentY: number, parentW: number, parentH: number)
-        local props = node.Props
+        local rawProps = node.Props
 
-        -- Resolve Size
-        local size: UDim2 = props.Size or UDim2_new(0, parentW, 0, parentH)
+        -- 1. Read reactive or static properties via `read()`
+        local size: UDim2 = read(rawProps.Size) or UDim2_new(0, parentW, 0, parentH)
         local w = (parentW * size.X.Scale) + size.X.Offset
         local h = (parentH * size.Y.Scale) + size.Y.Offset
 
-        -- Resolve Position
-        local pos: UDim2 = props.Position or UDim2_new(0, 0, 0, 0)
+        local pos: UDim2 = read(rawProps.Position) or UDim2_new(0, 0, 0, 0)
         local x = parentX + (parentW * pos.X.Scale) + pos.X.Offset
         local y = parentY + (parentH * pos.Y.Scale) + pos.Y.Offset
 
@@ -119,20 +216,20 @@ function Aether.compileTree(root: VirtualInstance, parentBounds: { x: number, y:
 
         for _, child in ipairs(node.Children) do
             if child.ClassName == "UICorner" then
-                local radiusProp: UDim = child.Props.CornerRadius or UDim_new(0, 0)
+                local radiusProp: UDim = read(child.Props.CornerRadius) or UDim_new(0, 0)
                 cornerRadius = (math.min(w, h) * radiusProp.Scale) + radiusProp.Offset
             elseif child.ClassName == "UIStroke" then
-                strokeThickness = child.Props.Thickness or 1
-                strokeColor = child.Props.Color or Color3_fromRGB(255, 255, 255)
-                local trans = child.Props.Transparency or 0
+                strokeThickness = read(child.Props.Thickness) or 1
+                strokeColor = read(child.Props.Color) or Color3_fromRGB(255, 255, 255)
+                local trans = read(child.Props.Transparency) or 0
                 strokeAlpha = math.floor((1.0 - trans) * 255)
             end
         end
 
         -- Render Background
-        local bgTrans = props.BackgroundTransparency or 0
+        local bgTrans = read(rawProps.BackgroundTransparency) or 0
         if bgTrans < 1.0 and (node.ClassName == "Frame" or node.ClassName == "TextButton") then
-            local bgColor: Color3 = props.BackgroundColor3 or Color3_fromRGB(255, 255, 255)
+            local bgColor: Color3 = read(rawProps.BackgroundColor3) or Color3_fromRGB(255, 255, 255)
             local bgAlpha = math.floor((1.0 - bgTrans) * 255)
 
             table.insert(commands, {
@@ -170,10 +267,12 @@ function Aether.compileTree(root: VirtualInstance, parentBounds: { x: number, y:
         end
 
         -- Render Text
-        if (node.ClassName == "TextLabel" or node.ClassName == "TextButton") and props.Text then
-            local textColor: Color3 = props.TextColor3 or Color3_fromRGB(255, 255, 255)
-            local textSize: number = props.TextSize or 14
-            local isMono = (props.Font == Aether.Enum.Font.Code or props.Font == Aether.Enum.Font.Mono) and 1.0 or 0.0
+        local textVal = read(rawProps.Text)
+        if (node.ClassName == "TextLabel" or node.ClassName == "TextButton") and textVal then
+            local textColor: Color3 = read(rawProps.TextColor3) or Color3_fromRGB(255, 255, 255)
+            local textSize: number = read(rawProps.TextSize) or 14
+            local fontVal = read(rawProps.Font)
+            local isMono = (fontVal == Aether.Enum.Font.Code or fontVal == Aether.Enum.Font.Mono) and 1.0 or 0.0
 
             table.insert(commands, {
                 kind = "text",
@@ -187,7 +286,7 @@ function Aether.compileTree(root: VirtualInstance, parentBounds: { x: number, y:
                 g = math.floor(textColor.G * 255),
                 b = math.floor(textColor.B * 255),
                 a = 255,
-                text = tostring(props.Text)
+                text = tostring(textVal)
             })
         end
 

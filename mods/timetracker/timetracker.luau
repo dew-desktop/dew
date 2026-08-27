@@ -1,5 +1,5 @@
 ﻿--!strict
--- Flagship Dew Native Mod: Time Tracker HUD (Aether Roblox UI Parity DSL)
+-- Flagship Dew Native Mod: Time Tracker HUD (Vide Reactivity + Aether Roblox UI Parity)
 local dew = (_G.dew or require("@dew/core")) :: any
 local Aether = (_G.Aether or require("@dew/aether")) :: any
 
@@ -8,28 +8,15 @@ local UDim2 = Aether.UDim2
 local UDim = Aether.UDim
 local Color3 = Aether.Color3
 local Enum = Aether.Enum
+local source = Aether.source
+local derive = Aether.derive
 
-type TrackerState = {
-    isRunning: boolean,
-    isPomodoro: boolean,
-    pomodoroPhase: "work" | "break",
-    pomodoroRemaining: number,
-    currentTask: string,
-    currentProject: string,
-    elapsedSeconds: number,
-    lastTickTime: number
-}
-
-local state: TrackerState = {
-    isRunning = false,
-    isPomodoro = false,
-    pomodoroPhase = "work",
-    pomodoroRemaining = 25 * 60,
-    currentTask = "Deep Focus",
-    currentProject = "DEV",
-    elapsedSeconds = 0,
-    lastTickTime = 0
-}
+-- 1. Pure Vide Reactive State (Zero Framework Leakage)
+local isRunning = source(false)
+local elapsedSeconds = source(0)
+local currentTask = source("Deep Focus")
+local currentProject = source("DEV")
+local lastTickTime = 0
 
 local function formatTimer(seconds: number): string
     local total = math.max(0, math.floor(seconds))
@@ -43,37 +30,60 @@ local function formatTimer(seconds: number): string
     end
 end
 
+-- 2. Derived Reactive Computations
+local displayTime = derive(function()
+    return formatTimer(elapsedSeconds())
+end)
+
+local statusColor = derive(function()
+    return if isRunning() then Color3.fromHex("#10b981") else Color3.fromHex("#64748b")
+end)
+
+local textColor = derive(function()
+    return if isRunning() then Color3.fromHex("#10b981") else Color3.fromHex("#f8fafc")
+end)
+
+local buttonLabel = derive(function()
+    return if isRunning() then "PAUSE" else "START"
+end)
+
+local buttonBg = derive(function()
+    return if isRunning() then Color3.fromHex("#10b981") else Color3.fromRGB(255, 255, 255)
+end)
+
+local buttonTrans = derive(function()
+    return if isRunning() then 0.8 else 0.9
+end)
+
 local function toggleTimer()
-    state.isRunning = not state.isRunning
+    local running = not isRunning()
+    isRunning(running)
+
     local now = dew.time.now()
-    if state.isRunning then
-        state.lastTickTime = now
+    if running then
+        lastTickTime = now
         dew.audio.playChime("tick")
-        dew.notifications.show(`⏱️ Started: {state.currentTask}`)
+        dew.notifications.show(`⏱️ Started: {currentTask()}`)
     else
         dew.audio.playChime("subtle")
-        dew.notifications.show(`⏸️ Paused: {state.currentTask} ({formatTimer(state.elapsedSeconds)})`)
+        dew.notifications.show(`⏸️ Paused: {currentTask()} ({displayTime()})`)
     end
     dew.hud.refresh()
 end
 
+-- 3. Component Declaration using pure Roblox UI Tree + Vide bindings
 dew.hud.registerComponent({
     id = "timetracker",
     render = function()
         local now = dew.time.now()
-        if state.isRunning and state.lastTickTime > 0 then
-            local dt = now - state.lastTickTime
+        if isRunning() and lastTickTime > 0 then
+            local dt = now - lastTickTime
             if dt > 0 then
-                state.elapsedSeconds += dt
-                state.lastTickTime = now
+                elapsedSeconds(elapsedSeconds() + dt)
+                lastTickTime = now
             end
         end
 
-        local displayTime = formatTimer(state.elapsedSeconds)
-        local statusColor = if state.isRunning then Color3.fromHex("#10b981") else Color3.fromHex("#64748b")
-        local textColor = if state.isRunning then Color3.fromHex("#10b981") else Color3.fromHex("#f8fafc")
-
-        -- Pure Roblox UI Tree Construction
         return New "Frame" {
             Size = UDim2.new(1, 0, 1, 0),
             BackgroundTransparency = 1,
@@ -104,7 +114,7 @@ dew.hud.registerComponent({
                 New "TextLabel" {
                     Position = UDim2.new(0, 9, 0, 2),
                     Size = UDim2.new(1, 0, 1, 0),
-                    Text = state.currentProject,
+                    Text = currentProject,
                     TextSize = 11,
                     TextColor3 = Color3.fromHex("#cbd5e1"),
                     BackgroundTransparency = 1
@@ -124,7 +134,7 @@ dew.hud.registerComponent({
             New "TextLabel" {
                 Position = UDim2.new(0, 99, 0, 33),
                 Size = UDim2.new(0, 120, 0, 16),
-                Text = state.currentTask,
+                Text = currentTask,
                 TextSize = 10.5,
                 TextColor3 = Color3.fromHex("#94a3b8"),
                 BackgroundTransparency = 1
@@ -142,17 +152,19 @@ dew.hud.registerComponent({
             New "TextButton" {
                 Position = UDim2.new(0, 282, 0, 14),
                 Size = UDim2.new(0, 76, 0, 28),
-                BackgroundColor3 = if state.isRunning then Color3.fromHex("#10b981") else Color3.fromRGB(255, 255, 255),
-                BackgroundTransparency = if state.isRunning then 0.8 else 0.9,
+                BackgroundColor3 = buttonBg,
+                BackgroundTransparency = buttonTrans,
 
                 New "UICorner" {
                     CornerRadius = UDim.new(0, 14)
                 },
 
                 New "TextLabel" {
-                    Position = UDim2.new(0, if state.isRunning then 20 else 22, 0, 6),
+                    Position = function()
+                        return UDim2.new(0, if isRunning() then 20 else 22, 0, 6)
+                    end,
                     Size = UDim2.new(1, 0, 1, 0),
-                    Text = if state.isRunning then "PAUSE" else "START",
+                    Text = buttonLabel,
                     TextSize = 11,
                     TextColor3 = textColor,
                     BackgroundTransparency = 1
