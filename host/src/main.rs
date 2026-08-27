@@ -43,7 +43,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let height = 56;
 
     // 1. Create Native Borderless Window with Hardware Rounded Pill Clipping
-    let window = NativeWindow::new("Dew HUD", width, height)?;
+    let mut window = NativeWindow::new("Dew HUD", width, height)?;
     println!("[Dew Host] Created native Win32 window (HWND: {:?})", window.hwnd.0);
 
     // 2. Attach aether_raster Vello GPU swapchain
@@ -80,6 +80,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let _ = TranslateMessage(&msg);
                 DispatchMessageW(&msg);
             }
+        }
+
+        // Process Clicks
+        let clicks = window.drain_clicks();
+        for (click_x, click_y) in clicks {
+            println!("[Dew Host] Click detected at ({}, {}) -> Triggering mod click", click_x, click_y);
+            let _ = runtime.handle_click("timetracker");
         }
 
         // 1. Clear background surface (Deep OLED Obsidian)
