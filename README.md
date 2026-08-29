@@ -10,6 +10,24 @@ Dew is an open-source, keyboard-driven desktop HUD powered by an embedded Luau r
 
 ---
 
+## Running it
+
+```sh
+cargo run --manifest-path host/Cargo.toml -- --mod timetracker
+```
+
+`--mod <id>` picks a widget; without it, Dew lists what it found and runs the
+first alphabetically. `--snapshot <path>` renders one frame to a PNG and exits,
+needing no window — which is how a widget gets diffed in CI, and the only way to
+see one from a terminal.
+
+Mods live in [`mods/`](mods/); each is a directory with a `mod.json` and a
+`<id>.luau`. See [docs/mod_contract.md](docs/mod_contract.md) for what a mod
+returns and how its permissions are granted.
+
+Aether is expected as a sibling checkout (`../aether`), by both `host/Cargo.toml`
+and `.luaurc`.
+
 ## Repository Structure (Dev)
 
 - [`types/`](types/): Luau type definitions (`@dew/core.d.luau`) for mod SDK interfaces.

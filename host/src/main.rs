@@ -77,8 +77,28 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let Some(active) = loaded.into_iter().next() else {
+    if loaded.is_empty() {
         return Err(format!("no mods loaded from {}", mods_dir.display()));
+    }
+
+    // WHICH MOD, CHOSEN RATHER THAN STUMBLED INTO. Without `--mod` this took
+    // whatever `read_dir` happened to return first — which is not alphabetical,
+    // not declared anywhere, and changes with the filesystem. A default that
+    // cannot be predicted is worse than no default, so the available ids are
+    // listed when the requested one is not among them.
+    let wanted = flag("--mod");
+    let active = match &wanted {
+        Some(id) => loaded
+            .into_iter()
+            .find(|m| &m.manifest.id == id)
+            .ok_or_else(|| format!("no mod with id {id:?}"))?,
+        None => {
+            let mut sorted = loaded;
+            sorted.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+            let ids: Vec<&str> = sorted.iter().map(|m| m.manifest.id.as_str()).collect();
+            println!("[dew] mods: {} (pick one with --mod <id>)", ids.join(", "));
+            sorted.into_iter().next().expect("non-empty")
+        }
     };
 
     // DESTRUCTURED, to move the session out by value. `Mod` implements no `Drop`,
@@ -97,7 +117,7 @@ fn run() -> Result<(), String> {
     // see what a mod actually renders. It is also the only way to inspect a
     // widget's appearance from a terminal, which is where most of this gets
     // written.
-    if let Some(path) = snapshot_path() {
+    if let Some(path) = flag("--snapshot") {
         driver.frame(1.0 / 60.0).map_err(|e| e.to_string())?;
         driver
             .painter_mut()
@@ -160,10 +180,11 @@ fn run() -> Result<(), String> {
     Ok(())
 }
 
-fn snapshot_path() -> Option<String> {
+/// `--name value`, or None.
+fn flag(name: &str) -> Option<String> {
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--snapshot" {
+        if arg == name {
             return args.next();
         }
     }

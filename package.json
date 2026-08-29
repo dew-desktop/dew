@@ -1,13 +1,13 @@
-﻿{
+{
   "name": "dew",
   "version": "0.0.1",
-  "description": "Minimalist Desktop HUD & Luau Tooling Platform",
+  "description": "Minimalist Desktop HUD & Luau Applet Platform",
   "private": true,
   "scripts": {
-    "dev": "tauri dev",
-    "build": "tauri build"
-  },
-  "devDependencies": {
-    "@tauri-apps/cli": "^2.0.0"
+    "dev": "cargo run --manifest-path host/Cargo.toml --",
+    "build": "cargo build --release --manifest-path host/Cargo.toml",
+    "timetracker": "cargo run --manifest-path host/Cargo.toml -- --mod timetracker",
+    "calculator": "cargo run --manifest-path host/Cargo.toml -- --mod calculator",
+    "snapshot": "cargo run --manifest-path host/Cargo.toml -- --snapshot dew.png"
   }
 }
