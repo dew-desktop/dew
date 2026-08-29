@@ -1,11 +1,1 @@
-﻿{
-  "id": "calculator",
-  "name": "Specialized Workflow Calculator",
-  "version": "1.0.0",
-  "author": "Dew Core Team",
-  "description": "Quick math, time arithmetic, and unit conversion from HUD",
-  "permissions": ["clipboard"],
-  "hotkeys": {
-    "openCalculator": "Alt+Shift+K"
-  }
-}
+{"id":"calculator","name":"Calculator","permissions":[],"description":"Quick math widget"}

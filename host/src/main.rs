@@ -1,183 +1,196 @@
-﻿pub mod luau;
-pub mod presenter;
-pub mod window;
+//! 💧 Dew — a desktop applet platform.
+//!
+//! WHAT IS NOT IN THIS CRATE, and deliberately: layout, hit testing, pointer
+//! arbitration, text measurement, rasterisation, the Luau VM, and the frame
+//! loop. All of it comes from Aether, which is also what the Roblox host uses —
+//! so a widget's visual half behaves the same in both places, and a rendering
+//! fix reaches both at once.
+//!
+//! What IS Dew's: mod discovery, manifests, capabilities, and putting widgets on
+//! a desktop. That is the whole remit.
 
-use luau::LuauRuntime;
-use presenter::GpuPresenter;
-use std::path::PathBuf;
+mod capabilities;
+mod manifest;
+mod mods;
+
+use aether_raster::{Backend, Font};
+use aether_runtime::{Driver, Painter, RasterPainter, Rgb};
+use aether_window::{Button, Event, Window};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use window::NativeWindow;
-use windows::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE, WM_QUIT,
-};
 
-fn find_mods_dir() -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from("mods"),
-        PathBuf::from("../mods"),
-        PathBuf::from("../../mods"),
-        PathBuf::from("../../../mods"),
-    ];
-    for c in &candidates {
-        if c.exists() {
-            return Some(c.clone());
+/// Deep obsidian, behind every widget.
+const BACKGROUND: Rgb = Rgb(13, 17, 23);
+
+fn find_dir(name: &str) -> Option<PathBuf> {
+    let mut cur = std::env::current_dir().ok()?;
+    loop {
+        let candidate = cur.join(name);
+        if candidate.is_dir() {
+            return Some(candidate);
+        }
+        if !cur.pop() {
+            return None;
         }
     }
-    if let Ok(exe_path) = std::env::current_exe() {
-        let mut cur = exe_path.parent();
-        while let Some(parent) = cur {
-            let candidate = parent.join("mods");
-            if candidate.exists() {
-                return Some(candidate);
+}
+
+fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
+    // VELLO, NOT TINY-SKIA: tiny-skia has no text, so every label in every widget
+    // would silently vanish.
+    let mut painter = RasterPainter::new(width, height, Backend::VelloCpu)
+        .ok_or("could not create a drawing surface")?;
+    if let Some(path) = aether_runtime::font::system_font() {
+        if let Some(font) = Font::load(&path.to_string_lossy(), 0) {
+            painter = painter.with_font(font);
+        }
+    }
+    Ok(painter)
+}
+
+fn run() -> Result<(), String> {
+    println!("💧 Dew starting");
+
+    let mods_dir = find_dir("mods").ok_or("could not find a `mods` directory")?;
+    let aether_root = find_aether()?;
+
+    let state = Arc::new(Mutex::new(capabilities::HostState::default()));
+
+    // ONE MOD FOR NOW, and the loop below drives one window. Multi-window
+    // placement is the next piece of Dew's own remit; everything under it is
+    // already per-mod, so adding windows does not reach back into any of it.
+    let entries = std::fs::read_dir(&mods_dir).map_err(|e| e.to_string())?;
+    let mut loaded = Vec::new();
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        match mods::load(&dir, &aether_root, &state) {
+            Ok(m) => loaded.push(m),
+            // ONE BAD MOD MUST NOT TAKE THE HOST DOWN. It is reported and
+            // skipped, which is the behaviour a platform running third-party
+            // code has to have.
+            Err(message) => eprintln!("[dew] skipping mod: {message}"),
+        }
+    }
+
+    let Some(active) = loaded.into_iter().next() else {
+        return Err(format!("no mods loaded from {}", mods_dir.display()));
+    };
+
+    // DESTRUCTURED, to move the session out by value. `Mod` implements no `Drop`,
+    // so Rust permits this directly — and the alternative that suggests itself,
+    // swapping in a placeholder, has no valid placeholder to swap: a `Session` is
+    // Lua handles, and a zeroed one is undefined behaviour the moment it is
+    // dropped rather than a temporarily invalid value.
+    let mods::Mod { manifest, width, height, session, vm } = active;
+
+    let mut driver = Driver::new(session, painter(width, height)?, Some(BACKGROUND));
+
+    // `--snapshot <path>`: draw one frame, write it, exit.
+    //
+    // NEEDS NO WINDOW, which is what makes it useful beyond debugging — it is how
+    // a widget gets diffed in CI, and how anyone without a desktop session can
+    // see what a mod actually renders. It is also the only way to inspect a
+    // widget's appearance from a terminal, which is where most of this gets
+    // written.
+    if let Some(path) = snapshot_path() {
+        driver.frame(1.0 / 60.0).map_err(|e| e.to_string())?;
+        driver
+            .painter_mut()
+            .write_png(&path)
+            .map_err(|code| format!("could not write {path}: rasteriser status {code}"))?;
+        println!("[dew] wrote {path} ({width}x{height}) for {}", manifest.id);
+        return Ok(());
+    }
+
+    let mut window = Window::new(&format!("Dew — {}", manifest.id), width, height)?;
+
+    // The VM outlives the driver that borrows its handles. Named rather than
+    // `_vm`, because "this binding exists to keep something alive" is a fact
+    // about the program, not an unused variable to silence.
+    let _keep_alive = vm;
+
+    let target = Duration::from_micros(16_667);
+    let mut last = Instant::now();
+
+    loop {
+        let Some(events) = window.poll() else {
+            break;
+        };
+
+        for event in events {
+            match event {
+                Event::PointerMove { x, y } => {
+                    driver.pointer(aether_runtime::Pointer::Move, x, y).map_err(|e| e.to_string())?;
+                }
+                Event::PointerDown { x, y, button: Button::Left } => {
+                    driver.pointer(aether_runtime::Pointer::Down, x, y).map_err(|e| e.to_string())?;
+                }
+                Event::PointerUp { x, y, button: Button::Left } => {
+                    driver.pointer(aether_runtime::Pointer::Up, x, y).map_err(|e| e.to_string())?;
+                }
+                Event::PointerDown { .. } | Event::PointerUp { .. } => {}
+                Event::Wheel { x, y, delta } => {
+                    driver.wheel(x, y, delta).map_err(|e| e.to_string())?;
+                }
+                Event::Resized { .. } | Event::Exposed => driver.invalidate(),
+                Event::CloseRequested => return Ok(()),
+                Event::Char(_) | Event::Key { .. } => {}
             }
-            cur = parent.parent();
+        }
+
+        let dt = last.elapsed().as_secs_f32();
+        last = Instant::now();
+
+        driver.frame(dt).map_err(|e| format!("while rendering: {e}"))?;
+        if let Some(bgra) = driver.painter_mut().canvas_mut().bgra() {
+            window.blit(bgra, width, height);
+        }
+
+        let elapsed = last.elapsed();
+        if elapsed < target {
+            std::thread::sleep(target - elapsed);
+        }
+    }
+
+    Ok(())
+}
+
+fn snapshot_path() -> Option<String> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--snapshot" {
+            return args.next();
         }
     }
     None
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("💧 Dew Native Host (Vello GPU + Luau Runtime) Starting...");
-
-    let width = 380;
-    let height = 56;
-
-    // 1. Create Native Borderless Window with Hardware Rounded Pill Clipping
-    let mut window = NativeWindow::new("Dew HUD", width, height)?;
-    println!("[Dew Host] Created native Win32 window (HWND: {:?})", window.hwnd.0);
-
-    // 2. Attach aether_raster Vello GPU swapchain
-    let mut presenter = GpuPresenter::attach(window.hwnd, width, height)?;
-    println!("[Dew Host] Attached aether_raster Vello GPU presenter");
-
-    // 3. Initialize Luau Runtime
-    let runtime = LuauRuntime::new()?;
-    println!("[Dew Host] Initialized embedded Luau VM");
-
-    // Discover & load mods
-    if let Some(mods_path) = find_mods_dir() {
-        println!("[Dew Host] Discovered mods directory at: {}", mods_path.display());
-        runtime.load_mods_from_dir(&mods_path);
-    } else {
-        println!("[Dew Host] Warning: mods directory not found");
+/// Aether's source root, for the mod VMs' require resolver.
+fn find_aether() -> Result<PathBuf, String> {
+    if let Some(dir) = find_dir("aether") {
+        let src = dir.join("src");
+        if src.is_dir() {
+            return Ok(dir);
+        }
     }
+    let sibling = Path::new("../aether");
+    if sibling.join("src").is_dir() {
+        return Ok(sibling.to_path_buf());
+    }
+    Err("could not find the aether checkout beside this repository".into())
+}
 
-    println!("[Dew Host] Entering 120 FPS GPU presentation loop...");
-
-    let frame_duration = Duration::from_micros(8333); // ~120 FPS
-    let mut last_frame = Instant::now();
-
-    // 4. Main Event & Render Loop
-    loop {
-        // Process Windows OS messages
-        unsafe {
-            let mut msg = MSG::default();
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_QUIT {
-                    println!("[Dew Host] Exiting cleanly.");
-                    return Ok(());
-                }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("dew: {message}");
+            ExitCode::FAILURE
         }
-
-        // Process Clicks
-        let clicks = window.drain_clicks();
-        for (click_x, click_y) in clicks {
-            println!("[Dew Host] Click detected at ({}, {}) -> Triggering mod click", click_x, click_y);
-            let _ = runtime.handle_click("timetracker");
-        }
-
-        // 1. Clear background surface (Deep OLED Obsidian)
-        presenter.begin_frame(13, 17, 23);
-
-        // 2. Draw Frosted HUD Pill Card
-        presenter.draw_rounded_rect(
-            0.0,
-            0.0,
-            width as f32,
-            height as f32,
-            28.0,
-            18,
-            24,
-            38,
-            245,
-        );
-
-        // 3. Draw Ambient Glow Border
-        presenter.stroke_rounded_rect(
-            0.5,
-            0.5,
-            (width - 1) as f32,
-            (height - 1) as f32,
-            27.5,
-            1.0,
-            56,
-            189,
-            248,
-            140, // Cyan Ambient Glow
-        );
-
-        // 4. Render dynamic commands emitted by Luau/Aether
-        let commands = runtime.render_frame();
-        for cmd in commands {
-            match cmd.kind.as_str() {
-                "rounded_rect" => {
-                    presenter.draw_rounded_rect(
-                        cmd.x,
-                        cmd.y,
-                        cmd.w,
-                        cmd.h,
-                        cmd.radius,
-                        cmd.color_r,
-                        cmd.color_g,
-                        cmd.color_b,
-                        cmd.color_a,
-                    );
-                }
-                "stroke" => {
-                    presenter.stroke_rounded_rect(
-                        cmd.x,
-                        cmd.y,
-                        cmd.w,
-                        cmd.h,
-                        cmd.radius,
-                        cmd.stroke_width,
-                        cmd.color_r,
-                        cmd.color_g,
-                        cmd.color_b,
-                        cmd.color_a,
-                    );
-                }
-                "text" => {
-                    if let Some(ref text) = cmd.text {
-                        let is_mono = cmd.radius > 0.0;
-                        presenter.draw_text(
-                            text,
-                            cmd.x,
-                            cmd.y,
-                            cmd.stroke_width.max(11.0),
-                            is_mono,
-                            cmd.color_r,
-                            cmd.color_g,
-                            cmd.color_b,
-                            cmd.color_a,
-                        );
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // 5. Present to Win32 Surface via Vello GPU Swapchain
-        presenter.end_frame();
-
-        // Frame rate pacing
-        let elapsed = last_frame.elapsed();
-        if elapsed < frame_duration {
-            std::thread::sleep(frame_duration - elapsed);
-        }
-        last_frame = Instant::now();
     }
 }

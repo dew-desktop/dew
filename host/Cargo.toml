@@ -1,24 +1,25 @@
-﻿[package]
+[package]
 name = "dew-host"
 version = "0.1.0"
-description = "Dew Native Luau Desktop Host with Aether Vello GPU Presentation"
+description = "Dew: the desktop applet platform — mods, capabilities, hotkeys and windows over Aether"
 authors = ["Dew Team"]
 edition = "2021"
 
+# EVERYTHING THAT DRAWS OR EXECUTES COMES FROM AETHER, and nothing here
+# reimplements it. Dew's own code is mod discovery, manifests, capabilities and
+# placement; when a rendering change is needed it belongs upstream, where the
+# Roblox host gets it too.
+#
+# PATH DEPENDENCIES, and this is bootstrap state. The intended form is a git pin
+# on a commit — see aether/docs/graduation_followups.md for the two things that
+# have to become true of that repository first. Swap these the day Aether has a
+# reachable remote.
 [dependencies]
-windows = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Dwm",
-    "Win32_System_LibraryLoader"
-] }
-raw-window-handle = "0.6"
+aether_runtime = { path = "../../aether/hosts/runtime", features = ["raster"] }
+aether_raster = { path = "../../aether/hosts/raster" }
+aether_window = { path = "../../aether/hosts/window" }
+
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6.0"
-chrono = "0.4"
-vello_cpu = "0.2.0"
-aether_raster = { path = "C:/Users/i0rig/Documents/Development/Roblox/Libraries/Incubator_Spektr/pkgs/ui/hosts/raster", features = ["gpu"] }

@@ -1,178 +1,149 @@
-﻿--!strict
--- Flagship Dew Native Mod: Time Tracker HUD (Vide Reactivity + Aether Roblox UI Parity)
-local dew = (_G.dew or require("@dew/core")) :: any
-local Aether = (_G.Aether or require("@dew/aether")) :: any
+--!strict
+--[[
+	Time Tracker — a Dew widget.
 
-local New = Aether.New
-local UDim2 = Aether.UDim2
-local UDim = Aether.UDim
-local Color3 = Aether.Color3
-local Enum = Aether.Enum
+	A DECLARATION. Requiring this file defines a table and does nothing else; the
+	host reads `id` and `size`, checks `mod.json`, builds the capability table,
+	and only then calls `mount`. See docs/mod_contract.md.
+
+	Everything below `mount` is ORDINARY AETHER — `create`, `source`, `derive`,
+	and Roblox's property names. There is no Dew dialect, which is what keeps the
+	tree liftable: it can be mounted in a Roblox place or rendered by
+	`aether snapshot` without a line changing.
+]]
+
+local Aether = require("@aether/api")
+
+local create = Aether.create
 local source = Aether.source
 local derive = Aether.derive
 
--- 1. Pure Vide Reactive State (Zero Framework Leakage)
-local isRunning = source(false)
-local elapsedSeconds = source(0)
-local currentTask = source("Deep Focus")
-local currentProject = source("DEV")
-local lastTickTime = 0
-
 local function formatTimer(seconds: number): string
-    local total = math.max(0, math.floor(seconds))
-    local h = math.floor(total / 3600)
-    local m = math.floor((total % 3600) / 60)
-    local s = total % 60
-    if h > 0 then
-        return string.format("%02d:%02d:%02d", h, m, s)
-    else
-        return string.format("%02d:%02d", m, s)
-    end
+	local total = math.max(0, math.floor(seconds))
+	local h = math.floor(total / 3600)
+	local m = math.floor((total % 3600) / 60)
+	local s = total % 60
+	if h > 0 then
+		return string.format("%02d:%02d:%02d", h, m, s)
+	end
+	return string.format("%02d:%02d", m, s)
 end
 
--- 2. Derived Reactive Computations
-local displayTime = derive(function()
-    return formatTimer(elapsedSeconds())
-end)
+return {
+	id = "timetracker",
+	size = { width = 380, height = 56 },
 
-local statusColor = derive(function()
-    return if isRunning() then Color3.fromHex("#10b981") else Color3.fromHex("#64748b")
-end)
+	--- `dew` carries exactly what mod.json declared: storage, audio,
+	--- notifications. Not a global, and not the whole host surface.
+	mount = function(dew: any)
+		local isRunning = source(false)
+		local elapsed = source(0)
+		local task = source("Deep Focus")
+		local project = source("DEV")
 
-local textColor = derive(function()
-    return if isRunning() then Color3.fromHex("#10b981") else Color3.fromHex("#f8fafc")
-end)
+		--- DERIVED, not recomputed by the host each frame. The old shape rebuilt
+		--- the whole tree from a `render` callback every frame, which made these
+		--- decorative — the rebuild did the work. Now a write to `elapsed` is
+		--- what reaches the screen, the same way it would in an engine.
+		local display = derive(function()
+			return formatTimer(elapsed())
+		end)
 
-local buttonLabel = derive(function()
-    return if isRunning() then "PAUSE" else "START"
-end)
+		local accent = derive(function()
+			return if isRunning() then Color3.fromHex("#10b981") else Color3.fromHex("#64748b")
+		end)
 
-local buttonBg = derive(function()
-    return if isRunning() then Color3.fromHex("#10b981") else Color3.fromRGB(255, 255, 255)
-end)
+		local buttonLabel = derive(function()
+			return if isRunning() then "PAUSE" else "START"
+		end)
 
-local buttonTrans = derive(function()
-    return if isRunning() then 0.8 else 0.9
-end)
+		local function toggle()
+			local running = not isRunning()
+			isRunning(running)
+			if dew.audio then
+				dew.audio.chime(if running then "tick" else "subtle")
+			end
+			if dew.notifications then
+				dew.notifications.show(
+					if running then `Started: {task()}` else `Paused: {task()} ({display()})`
+				)
+			end
+		end
 
-local function toggleTimer()
-    local running = not isRunning()
-    isRunning(running)
+		--- Advanced by the host's clock rather than read from a wall clock inside
+		--- a render pass. `dew.time` is ungated; what is gated is everything that
+		--- CHANGES something.
+		local lastTick = dew.time.now()
+		local function tick()
+			local now = dew.time.now()
+			if isRunning() then
+				elapsed(elapsed() + (now - lastTick))
+			end
+			lastTick = now
+		end
 
-    local now = dew.time.now()
-    if running then
-        lastTickTime = now
-        dew.audio.playChime("tick")
-        dew.notifications.show(`⏱️ Started: {currentTask()}`)
-    else
-        dew.audio.playChime("subtle")
-        dew.notifications.show(`⏸️ Paused: {currentTask()} ({displayTime()})`)
-    end
-    dew.hud.refresh()
-end
+		local tree = create "Frame" {
+			Name = "TimeTracker",
+			Size = UDim2.new(1, 0, 1, 0),
+			BackgroundColor3 = Color3.fromHex("#121722"),
 
--- 3. Component Declaration using pure Roblox UI Tree + Vide bindings
-dew.hud.registerComponent({
-    id = "timetracker",
-    render = function()
-        local now = dew.time.now()
-        if isRunning() and lastTickTime > 0 then
-            local dt = now - lastTickTime
-            if dt > 0 then
-                elapsedSeconds(elapsedSeconds() + dt)
-                lastTickTime = now
-            end
-        end
+			create "Frame" {
+				Name = "Status",
+				Position = UDim2.new(0, 20, 0, 24),
+				Size = UDim2.new(0, 8, 0, 8),
+				BackgroundColor3 = accent,
 
-        return New "Frame" {
-            Size = UDim2.new(1, 0, 1, 0),
-            BackgroundTransparency = 1,
+				create "UICorner" { CornerRadius = UDim.new(0, 4) },
+			},
 
-            -- 1. Glowing Indicator Dot
-            New "Frame" {
-                Position = UDim2.new(0, 20, 0, 24),
-                Size = UDim2.new(0, 8, 0, 8),
-                BackgroundColor3 = statusColor,
-                BackgroundTransparency = 0,
+			create "TextLabel" {
+				Name = "Project",
+				Position = UDim2.new(0, 36, 0, 18),
+				Size = UDim2.new(0, 46, 0, 20),
+				BackgroundColor3 = Color3.fromHex("#1e2635"),
+				Text = project,
+				TextSize = 11,
+				TextColor3 = Color3.fromHex("#cbd5e1"),
 
-                New "UICorner" {
-                    CornerRadius = UDim.new(0, 4)
-                }
-            },
+				create "UICorner" { CornerRadius = UDim.new(0, 10) },
+			},
 
-            -- 2. Project Badge Pill
-            New "Frame" {
-                Position = UDim2.new(0, 36, 0, 18),
-                Size = UDim2.new(0, 46, 0, 20),
-                BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-                BackgroundTransparency = 0.9,
+			create "TextLabel" {
+				Name = "Timer",
+				Position = UDim2.new(0, 98, 0, 12),
+				Size = UDim2.new(0, 120, 0, 22),
+				BackgroundTransparency = 1,
+				Text = display,
+				TextSize = 18,
+				TextColor3 = accent,
+			},
 
-                New "UICorner" {
-                    CornerRadius = UDim.new(0, 10)
-                },
+			create "TextLabel" {
+				Name = "Task",
+				Position = UDim2.new(0, 98, 0, 32),
+				Size = UDim2.new(0, 140, 0, 14),
+				BackgroundTransparency = 1,
+				Text = task,
+				TextSize = 11,
+				TextColor3 = Color3.fromHex("#94a3b8"),
+			},
 
-                New "TextLabel" {
-                    Position = UDim2.new(0, 9, 0, 2),
-                    Size = UDim2.new(1, 0, 1, 0),
-                    Text = currentProject,
-                    TextSize = 11,
-                    TextColor3 = Color3.fromHex("#cbd5e1"),
-                    BackgroundTransparency = 1
-                }
-            },
+			create "TextLabel" {
+				Name = "Toggle",
+				Position = UDim2.new(0, 286, 0, 16),
+				Size = UDim2.new(0, 74, 0, 24),
+				BackgroundColor3 = accent,
+				Text = buttonLabel,
+				TextSize = 12,
+				TextColor3 = Color3.fromHex("#0b0f16"),
 
-            -- 3. Center Info: Monospace Timer & Subtitle Task
-            New "TextLabel" {
-                Position = UDim2.new(0, 98, 0, 12),
-                Size = UDim2.new(0, 120, 0, 22),
-                Text = displayTime,
-                TextSize = 18,
-                Font = Enum.Font.Code,
-                TextColor3 = textColor,
-                BackgroundTransparency = 1
-            },
-            New "TextLabel" {
-                Position = UDim2.new(0, 99, 0, 33),
-                Size = UDim2.new(0, 120, 0, 16),
-                Text = currentTask,
-                TextSize = 10.5,
-                TextColor3 = Color3.fromHex("#94a3b8"),
-                BackgroundTransparency = 1
-            },
+				create "UICorner" { CornerRadius = UDim.new(0, 12) },
+			},
+		}
 
-            -- 4. Card Separator
-            New "Frame" {
-                Position = UDim2.new(0, 268, 0, 16),
-                Size = UDim2.new(0, 1, 0, 24),
-                BackgroundColor3 = Color3.fromRGB(255, 255, 255),
-                BackgroundTransparency = 0.88
-            },
-
-            -- 5. Quick Action Button Pill
-            New "TextButton" {
-                Position = UDim2.new(0, 282, 0, 14),
-                Size = UDim2.new(0, 76, 0, 28),
-                BackgroundColor3 = buttonBg,
-                BackgroundTransparency = buttonTrans,
-
-                New "UICorner" {
-                    CornerRadius = UDim.new(0, 14)
-                },
-
-                New "TextLabel" {
-                    Position = function()
-                        return UDim2.new(0, if isRunning() then 20 else 22, 0, 6)
-                    end,
-                    Size = UDim2.new(1, 0, 1, 0),
-                    Text = buttonLabel,
-                    TextSize = 11,
-                    TextColor3 = textColor,
-                    BackgroundTransparency = 1
-                }
-            }
-        }
-    end,
-    onClick = function()
-        toggleTimer()
-    end
-})
+		--- Handed back beside the tree, the way the counter example does it: the
+		--- widget owns its state and exposes the transitions, and the host owns
+		--- what CAUSES them — a hotkey, a click, a frame.
+		return tree, { toggle = toggle, tick = tick }
+	end,
+}
