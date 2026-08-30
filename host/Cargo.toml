@@ -10,14 +10,22 @@ edition = "2021"
 # placement; when a rendering change is needed it belongs upstream, where the
 # Roblox host gets it too.
 #
-# PATH DEPENDENCIES, and this is bootstrap state. The intended form is a git pin
-# on a commit — see aether/docs/graduation_followups.md for the two things that
-# have to become true of that repository first. Swap these the day Aether has a
-# reachable remote.
+# PINNED BY COMMIT. A path dependency is "whatever is on that disk right now" --
+# it changes under you when the other checkout moves, and neither a teammate nor
+# this machine tomorrow can reproduce it. A revision is a fact.
+#
+# The URL is the REMOTE, never a local path. A file:// pin looks like pinning and
+# is not: the revision it names exists on exactly one machine, so a lockfile
+# built from it is unusable to everyone else and the dependency is still, in
+# practice, a directory on this disk.
+#
+# Bump these deliberately, as their own `chore(deps)` commit, when a change in
+# Aether is wanted here. That is the whole point of the split -- Dew upgrades
+# when Dew chooses.
 [dependencies]
-aether_runtime = { path = "../../aether/hosts/runtime", features = ["raster"] }
-aether_raster = { path = "../../aether/hosts/raster" }
-aether_window = { path = "../../aether/hosts/window" }
+aether_runtime = { git = "https://github.com/SpektrLabs/aether", rev = "33cf3305cd70a64e853535c9862ec088d8c1b159", features = ["raster"] }
+aether_raster = { git = "https://github.com/SpektrLabs/aether", rev = "33cf3305cd70a64e853535c9862ec088d8c1b159" }
+aether_window = { git = "https://github.com/SpektrLabs/aether", rev = "33cf3305cd70a64e853535c9862ec088d8c1b159" }
 
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }

@@ -44,7 +44,12 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
     }
 }
 
-pub fn load(dir: &Path, aether_root: &Path, state: &Shared) -> Result<Mod, String> {
+pub fn load(
+    dir: &Path,
+    aether_root: &Path,
+    aliases: &std::collections::HashMap<String, PathBuf>,
+    state: &Shared,
+) -> Result<Mod, String> {
     // 1 ── the manifest, before anything of the mod's runs.
     let manifest = Manifest::load(dir)?;
     let entry = manifest
@@ -60,6 +65,8 @@ pub fn load(dir: &Path, aether_root: &Path, state: &Shared) -> Result<Mod, Strin
         // A mod's `print` is the author's own debugging and goes to the console
         // the host was launched from.
         print: true,
+        // Aether, and the dependencies Aether declares that this host installs.
+        aliases: aliases.clone(),
     };
     let vm = Vm::new(caps.clone()).map_err(|e| format!("{}: {e}", manifest.id))?;
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;

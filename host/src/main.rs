@@ -16,7 +16,8 @@ mod mods;
 use aether_raster::{Backend, Font};
 use aether_runtime::{Driver, Painter, RasterPainter, Rgb};
 use aether_window::{Button, Event, Window};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -54,7 +55,7 @@ fn run() -> Result<(), String> {
     println!("💧 Dew starting");
 
     let mods_dir = find_dir("mods").ok_or("could not find a `mods` directory")?;
-    let aether_root = find_aether()?;
+    let (aether_root, aliases) = aether_aliases()?;
 
     let state = Arc::new(Mutex::new(capabilities::HostState::default()));
 
@@ -68,7 +69,7 @@ fn run() -> Result<(), String> {
         if !dir.is_dir() {
             continue;
         }
-        match mods::load(&dir, &aether_root, &state) {
+        match mods::load(&dir, &aether_root, &aliases, &state) {
             Ok(m) => loaded.push(m),
             // ONE BAD MOD MUST NOT TAKE THE HOST DOWN. It is reported and
             // skipped, which is the behaviour a platform running third-party
@@ -191,20 +192,57 @@ fn flag(name: &str) -> Option<String> {
     None
 }
 
-/// Aether's source root, for the mod VMs' require resolver.
-fn find_aether() -> Result<PathBuf, String> {
-    if let Some(dir) = find_dir("aether") {
-        let src = dir.join("src");
-        if src.is_dir() {
-            return Ok(dir);
+/// The installed vide's `src`, whatever version pesde resolved.
+///
+/// GLOBBED rather than spelled out: pesde writes the version into the path, so
+/// naming one here would go stale on the next resolve and report itself as "no
+/// vide" rather than as "a different vide".
+fn find_vide() -> Option<PathBuf> {
+    for entry in std::fs::read_dir("roblox_packages/.pesde").ok()?.flatten() {
+        if entry.file_name().to_string_lossy().contains("vide") {
+            let src = entry.path().join("vide").join("src");
+            if src.is_dir() {
+                return Some(src);
+            }
         }
     }
-    let sibling = Path::new("../aether");
-    if sibling.join("src").is_dir() {
-        return Ok(sibling.to_path_buf());
-    }
-    Err("could not find the aether checkout beside this repository".into())
+    None
 }
+
+/// What every mod VM is given: Aether's source, and the aliases that name it.
+///
+/// NOTHING IS WRITTEN TO DISK. An earlier version generated a `.luaurc`, and it
+/// could not work: aliases resolve by walking up from the requiring FILE, and
+/// Aether's source lives in Cargo's package cache — a config file in this
+/// repository is never on that path. `Capabilities.aliases` reaches the resolver
+/// directly instead, so it applies wherever the requiring module happens to be.
+///
+/// BOTH PATHS COME FROM THE PIN. `luau_source_root()` reports the checkout Cargo
+/// made for the revision in host/Cargo.toml, so the Luau a mod requires is the
+/// same commit as the Rust driving it.
+fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
+    let root = aether_runtime::luau_source_root().ok_or(
+        "aether_runtime could not locate Aether's Luau source beside itself —          a vendoring layout this does not understand",
+    )?;
+
+    let mut aliases = HashMap::new();
+    aliases.insert("aether".to_string(), root.join("src"));
+
+    // AETHER'S OWN DEPENDENCY, SUPPLIED BY US. A pinned checkout carries the
+    // framework's source and NOT its `roblox_packages`, which is generated — so
+    // vide is installed here by pesde and handed over through the `@vide` seam
+    // VideCore exposes. Without it the framework loads and then reports "no
+    // installed vide reachable" from a checkout that is otherwise perfect.
+    match find_vide() {
+        Some(vide) => {
+            aliases.insert("vide".to_string(), vide);
+        }
+        None => eprintln!("[dew] no vide installed — run `pesde install`; widgets will not mount"),
+    }
+
+    Ok((root, aliases))
+}
+
 
 fn main() -> ExitCode {
     match run() {

@@ -3,11 +3,21 @@ version = "0.0.1"
 description = "Dew Native Luau Desktop HUD & Applet Ecosystem"
 
 [target]
-environment = "luau"
+environment = "roblox"
 lib = "scripts/init.luau"
 
+# WHAT DEW SUPPLIES TO AETHER, not what Dew builds with.
+#
+# Aether is reached through Cargo (host/Cargo.toml), pinned by commit, and its
+# Luau source travels in that same checkout. What does NOT travel is Aether's own
+# `roblox_packages` -- it is generated, so a pinned checkout carries the framework
+# and none of its dependencies.
+#
+# vide is that dependency. Dew installs it here and points `@vide` at it, which
+# is the seam VideCore exposes for exactly this. The version is Aether's declared
+# range; when Aether widens it, this widens with it.
 [dependencies]
-aether = { name = "spektr/aether", version = "^0.1.0-alpha.5" }
+vide = { wally = "centau/vide", version = "^0.4.0" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"
