@@ -118,6 +118,26 @@ let a mod set either and have it silently ignored, which is exactly how
 Omitting `surface` gets a widget. Dew is a desktop applet platform; a default of
 "ordinary window" would make every author opt in to the thing they came for.
 
+### An overlay is a widget the size of the desktop
+
+```luau
+surface = { kind = "overlay" }   -- topmost = true, clickThrough = false
+```
+
+The screen supplies the size, so `size` in the declaration is ignored — a mod
+cannot know the display it will land on, and one that guessed would be wrong on
+every machine but the author's.
+
+**Clicks fall through wherever nothing was painted**, and that is a property of
+layered windows rather than a trick on top of them: Windows hit-tests one against
+its alpha channel, so a transparent pixel passes the click to whatever is behind.
+An overlay that paints three cards is click-through everywhere except those three
+cards, with no region and no hit-test hook.
+
+Which makes one rule absolute: **the root frame must be
+`BackgroundTransparency = 1`.** A filled backdrop turns the overlay into a
+screen-sized sheet of glass that swallows every click on the machine.
+
 ### A widget's shape is its own alpha
 
 On a widget surface the frame is cleared to NOTHING, so a pixel the tree did not

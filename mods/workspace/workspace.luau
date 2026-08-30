@@ -159,11 +159,23 @@ return {
 	id = "workspace",
 	size = { width = 720, height = 440 },
 
-	--- AN ORDINARY WINDOW, not a floating widget, and this is the one mod for
-	--- which that is right: it is a desktop, so it wants to be a thing on the
-	--- desktop rather than a thing floating over it. It is also the first
-	--- exercise of the window surface from Dew's side.
-	surface = { kind = "window", title = "Dew Workspace" },
+	--- AN OVERLAY: a widget the size of the desktop.
+	---
+	--- The virtual windows below then appear to sit directly on the desktop with
+	--- nothing around them, and the surface is indistinguishable from a host that
+	--- owns three real windows — while the tree stays exactly the tree a Roblox
+	--- place would mount.
+	---
+	--- CLICKS FALL THROUGH WHERE NOTHING IS PAINTED, which is why the ScreenSpace
+	--- below must NOT have a background. Windows hit-tests a layered window
+	--- against its alpha, so a transparent pixel passes the click to the desktop;
+	--- a filled backdrop would make this a full-screen wall that swallows every
+	--- click on the machine.
+	surface = { kind = "overlay" },
+
+	--- `size` is ignored for an overlay -- the screen supplies it -- and is kept
+	--- only as the size this was designed against.
+	designedFor = { width = 720, height = 440 },
 
 	mount = function(_dew: any)
 		--- `ScreenSpace` in the Studio package's sense: the full-bleed container
@@ -172,7 +184,11 @@ return {
 		return create "Frame" {
 			Name = "ScreenSpace",
 			Size = UDim2.new(1, 0, 1, 0),
-			BackgroundColor3 = Color3.fromHex("#0d1117"),
+			--- FULLY TRANSPARENT, and this is load-bearing rather than cosmetic.
+			--- Every pixel this does not paint is a pixel the window does not
+			--- occupy and does not receive clicks on. Give it a background and the
+			--- overlay becomes a screen-sized sheet of glass over the desktop.
+			BackgroundTransparency = 1,
 
 			VirtualWindow({
 				title = "Editor",

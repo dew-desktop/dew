@@ -109,7 +109,13 @@ fn run() -> Result<(), String> {
     // swapping in a placeholder, has no valid placeholder to swap: a `Session` is
     // Lua handles, and a zeroed one is undefined behaviour the moment it is
     // dropped rather than a temporarily invalid value.
-    let mods::Mod { manifest, width, height, surface, session, vm } = active;
+    let mods::Mod { manifest, mut width, mut height, surface, session, vm } = active;
+
+    let screen = aether_window::screen_size();
+    if surface.fills_screen() {
+        width = screen.0.max(1) as u32;
+        height = screen.1.max(1) as u32;
+    }
 
     // A WIDGET IS CLEARED TO NOTHING, a window to the platform's own background.
     //
@@ -137,7 +143,6 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let screen = aether_window::screen_size();
     let resolved = surface.resolve(screen, (width, height));
     let mut window = Window::new(&resolved, width, height)?;
 

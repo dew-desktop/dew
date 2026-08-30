@@ -74,6 +74,10 @@ pub enum Declared {
         offset: (i32, i32),
         click_through: bool,
     },
+    Overlay {
+        topmost: bool,
+        click_through: bool,
+    },
 }
 
 impl Declared {
@@ -89,6 +93,12 @@ impl Declared {
 
         let kind: String = surface.get("kind").unwrap_or_else(|_| "widget".to_string());
         match kind.as_str() {
+            "overlay" => Declared::Overlay {
+                //--- ON TOP BY DEFAULT, because an overlay behind everything is one
+                //--- you never see.
+                topmost: surface.get("topmost").unwrap_or(true),
+                click_through: surface.get("clickThrough").unwrap_or(false),
+            },
             "window" => Declared::Window {
                 title: surface
                     .get::<String>("title")
@@ -129,6 +139,13 @@ impl Declared {
             Declared::Window { title } => Surface::Window {
                 title: title.clone(),
             },
+            Declared::Overlay {
+                topmost,
+                click_through,
+            } => Surface::Overlay {
+                topmost: *topmost,
+                click_through: *click_through,
+            },
             Declared::Widget {
                 anchor,
                 offset,
@@ -151,12 +168,25 @@ impl Declared {
     /// a widget cleared opaque is a rectangle, and a window cleared transparent
     /// is a hole.
     pub fn is_transparent(&self) -> bool {
-        matches!(self, Declared::Widget { .. })
+        matches!(self, Declared::Widget { .. } | Declared::Overlay { .. })
+    }
+
+    /// An overlay is sized by the SCREEN, not by the mod.
+    ///
+    /// A mod cannot know the display it will land on, and one that guessed would
+    /// be wrong on every machine but the author's. So `size` in the declaration
+    /// is ignored for this kind rather than being a value nobody can supply
+    /// correctly.
+    pub fn fills_screen(&self) -> bool {
+        matches!(self, Declared::Overlay { .. })
     }
 
     pub fn describe(&self) -> String {
         match self {
             Declared::Window { .. } => "window".to_string(),
+            Declared::Overlay { topmost, .. } => {
+                format!("overlay{}", if *topmost { ", topmost" } else { "" })
+            }
             Declared::Widget { anchor, click_through, .. } => format!(
                 "widget {:?}{}",
                 anchor,
