@@ -21,6 +21,11 @@ first alphabetically. `--snapshot <path>` renders one frame to a PNG and exits,
 needing no window — which is how a widget gets diffed in CI, and the only way to
 see one from a terminal.
 
+Dew sits in the tray while it runs. The menu offers a max-FPS cap — **uncapped by
+default**, with 30 / 60 / 120 / 144 / 240 — and Exit. Uncapped means the loop does
+not sleep, so an idle widget will spin a core; pick a cap if that matters more
+than latency.
+
 Mods live in [`mods/`](mods/); each is a directory with a `mod.json` and a
 `<id>.luau`. See [docs/mod_contract.md](docs/mod_contract.md) for what a mod
 returns and how its permissions are granted.

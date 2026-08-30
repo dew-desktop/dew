@@ -13,6 +13,7 @@ mod capabilities;
 mod manifest;
 mod mods;
 mod surface;
+mod tray;
 
 use aether_raster::{Backend, Font};
 use aether_runtime::{Driver, Painter, RasterPainter, Rgb};
@@ -21,7 +22,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Deep obsidian, behind every widget.
 const BACKGROUND: Rgb = Rgb(13, 17, 23);
@@ -145,7 +146,18 @@ fn run() -> Result<(), String> {
     // about the program, not an unused variable to silence.
     let _keep_alive = vm;
 
-    let target = Duration::from_micros(16_667);
+    // THE TRAY OUTLIVES THE LOOP. Dropping it removes the icon, and Windows
+    // leaves a dead one on screen until something repaints — so it is bound here
+    // rather than created inline and dropped immediately.
+    let _tray = match tray::Tray::new(icon_path().as_deref()) {
+        Ok(tray) => Some(tray),
+        // A missing tray is not a reason to refuse to run.
+        Err(message) => {
+            eprintln!("[dew] no tray icon: {message}");
+            None
+        }
+    };
+
     let mut last = Instant::now();
 
     loop {
@@ -182,13 +194,31 @@ fn run() -> Result<(), String> {
             window.present(bgra, width, height);
         }
 
-        let elapsed = last.elapsed();
-        if elapsed < target {
-            std::thread::sleep(target - elapsed);
+        if tray::exit_requested() {
+            return Ok(());
+        }
+
+        // READ EVERY FRAME, because the tray menu can change it between any two.
+        // `None` is uncapped and does not sleep at all.
+        if let Some(target) = tray::frame_budget() {
+            let elapsed = last.elapsed();
+            if elapsed < target {
+                std::thread::sleep(target - elapsed);
+            }
         }
     }
 
     Ok(())
+}
+
+/// Dew's tray icon, beside the executable or in the source tree.
+fn icon_path() -> Option<PathBuf> {
+    let candidates = [
+        PathBuf::from("host/assets/dew.ico"),
+        PathBuf::from("assets/dew.ico"),
+        PathBuf::from("../host/assets/dew.ico"),
+    ];
+    candidates.into_iter().find(|p| p.is_file())
 }
 
 /// `--name value`, or None.

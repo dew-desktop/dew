@@ -27,6 +27,18 @@ aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "e
 aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "ee149c73faf487c0b6379c7c3d833e0c2383f438" }
 aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "ee149c73faf487c0b6379c7c3d833e0c2383f438" }
 
+# WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
+# from a platform -- surfaces and input -- and a tray icon is neither. It presents
+# nothing of Aether and the CLI will never want one, so the mechanism lives here
+# with the product that needs it.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_LibraryLoader",
+] }
+
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
