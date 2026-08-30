@@ -85,17 +85,25 @@ return {
 			end
 		end
 
-		--- Advanced by the host's clock rather than read from a wall clock inside
-		--- a render pass. `dew.time` is ungated; what is gated is everything that
-		--- CHANGES something.
+		--- SUBSCRIBED TO FRAMES, rather than handed back for the host to call.
+		---
+		--- `tick` used to be returned beside the tree with `toggle`, on the theory
+		--- that the widget owns state and the host owns what causes a transition.
+		--- That is right for a HOTKEY and wrong for a clock: nothing in Dew was
+		--- calling it, so the timer sat at 00:00 forever.
+		---
+		--- `Clock.OnFrame` is the same seam Roblox's Heartbeat fills, and
+		--- `Live.Session` already steps it once per frame — so this is the engine's
+		--- own frame signal on both hosts rather than a Dew convention.
+		local clock = Aether.Host.detect().Clock
 		local lastTick = dew.time.now()
-		local function tick()
+		clock.OnFrame(function()
 			local now = dew.time.now()
 			if isRunning() then
 				elapsed(elapsed() + (now - lastTick))
 			end
 			lastTick = now
-		end
+		end)
 
 		local tree = create "Frame" {
 			Name = "TimeTracker",
@@ -148,22 +156,45 @@ return {
 				TextColor3 = Color3.fromHex("#94a3b8"),
 			},
 
-			create "TextLabel" {
+			--- A PRESSABLE, not a TextLabel that looks like one.
+			---
+			--- This was a plain label for its whole life: it rendered as a button,
+			--- `toggle` was defined and returned beside the tree, and nothing ever
+			--- called it. Which is a perfectly convincing button until you click
+			--- it, and looks exactly like an input bug in the host.
+			Aether.Pressable({
 				Name = "Toggle",
 				Position = UDim2.new(0, 286, 0, 16),
 				Size = UDim2.new(0, 74, 0, 24),
 				BackgroundColor3 = accent,
-				Text = buttonLabel,
-				TextSize = 12,
-				TextColor3 = Color3.fromHex("#0b0f16"),
+				--- A Pressable is a hit area and defaults to invisible; anything
+				--- that should be seen opts in.
+				BackgroundTransparency = 0,
+
+				--- ACTIVATED, not Pressed: a press that leaves the button before
+				--- releasing should not count, which is what every other button on
+				--- the desktop does.
+				OnActivated = toggle,
 
 				create "UICorner" { CornerRadius = UDim.new(0, 12) },
-			},
+
+				create "TextLabel" {
+					Name = "Label",
+					Size = UDim2.new(1, 0, 1, 0),
+					BackgroundTransparency = 1,
+					Text = buttonLabel,
+					TextSize = 12,
+					TextColor3 = Color3.fromHex("#0b0f16"),
+				},
+			}),
 		}
 
 		--- Handed back beside the tree, the way the counter example does it: the
 		--- widget owns its state and exposes the transitions, and the host owns
 		--- what CAUSES them — a hotkey, a click, a frame.
-		return tree, { toggle = toggle, tick = tick }
+		--- `toggle` is still exposed: a hotkey should be able to start the
+		--- timer without the pointer, and that genuinely is the host's to
+		--- cause. `tick` is gone — it drives itself.
+		return tree, { toggle = toggle }
 	end,
 }
