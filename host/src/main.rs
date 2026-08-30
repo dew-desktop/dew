@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// Deep obsidian, behind every widget.
 const BACKGROUND: Rgb = Rgb(13, 17, 23);
@@ -160,6 +160,12 @@ fn run() -> Result<(), String> {
 
     let mut last = Instant::now();
 
+    let stats = std::env::args().any(|a| a == "--stats");
+    let bench = std::env::args().any(|a| a == "--bench");
+    let (mut frames, mut painted_frames) = (0u32, 0u32);
+    let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
+    let mut last_report = Instant::now();
+
     loop {
         let Some(events) = window.poll() else {
             break;
@@ -189,9 +195,50 @@ fn run() -> Result<(), String> {
         let dt = last.elapsed().as_secs_f32();
         last = Instant::now();
 
-        driver.frame(dt).map_err(|e| format!("while rendering: {e}"))?;
+        // `--bench`: repaint every frame whether or not anything changed, which
+        // is the load a drag produces. Without it `--stats` measures an idle
+        // screen, where the interesting number is always zero.
+        if bench {
+            driver.invalidate();
+        }
+
+        let t0 = Instant::now();
+        let painted = driver.frame(dt).map_err(|e| format!("while rendering: {e}"))?;
+        let t_frame = t0.elapsed();
+
+        // RASTERISE **AND** PRESENT. vello records during paint and rasterises on
+        // demand inside `bgra()`, so this is not the blit — it is most of the
+        // drawing. Timing it as "present" made the blit look like the bottleneck
+        // when the blit is a memcpy.
+        let t1 = Instant::now();
         if let Some(bgra) = driver.painter_mut().canvas_mut().bgra() {
             window.present(bgra, width, height);
+        }
+        let t_raster = t1.elapsed();
+
+        // `--stats`: where the frame time actually goes. Reported as a rolling
+        // average rather than per frame, because a per-frame print costs more
+        // than the frame it is measuring.
+        if stats {
+            frames += 1;
+            if painted {
+                sum_frame += t_frame;
+                sum_present += t_raster;
+                painted_frames += 1;
+            }
+            if last_report.elapsed() >= Duration::from_secs(1) {
+                let n = painted_frames.max(1) as u32;
+                println!(
+                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
+                    sum_frame / n,
+                    sum_present / n
+                );
+                frames = 0;
+                painted_frames = 0;
+                sum_frame = Duration::ZERO;
+                sum_present = Duration::ZERO;
+                last_report = Instant::now();
+            }
         }
 
         if tray::exit_requested() {

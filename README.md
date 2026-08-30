@@ -21,6 +21,11 @@ first alphabetically. `--snapshot <path>` renders one frame to a PNG and exits,
 needing no window — which is how a widget gets diffed in CI, and the only way to
 see one from a terminal.
 
+`--stats` reports where frame time goes; `--bench` repaints every frame, which is
+the load a drag produces. Dependencies are built optimised even in a debug
+profile — without that, `cargo run` renders at about 18fps and it reads as a Dew
+problem rather than a build one.
+
 Dew sits in the tray while it runs. The menu offers a max-FPS cap — **uncapped by
 default**, with 30 / 60 / 120 / 144 / 240 — and Exit. Uncapped means the loop does
 not sleep, so an idle widget will spin a core; pick a cap if that matters more

@@ -43,3 +43,18 @@ mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6.0"
+
+# OPTIMISE THE DEPENDENCIES EVEN IN A DEBUG BUILD.
+#
+# `cargo run` was unusable and it read as a Dew problem: dragging a window in the
+# workspace mod felt sluggish, and the frame budget looked like the suspect.
+# Measured, a debug frame cost 54ms against release's 1.7ms — 18fps versus 575 —
+# and every microsecond of the difference was in dependencies.
+#
+# vello_cpu rasterises per pixel and mlua interprets per opcode; both are
+# pathological unoptimised, and `aether_raster` only asks for opt-level 3 in its
+# RELEASE profile. Dew's own code stays at opt-level 0, so it is still debuggable
+# and still rebuilds fast — it is thousands of lines against their hundreds of
+# thousands, and it is not where the time goes.
+[profile.dev.package."*"]
+opt-level = 3
