@@ -25,8 +25,13 @@ Mods live in [`mods/`](mods/); each is a directory with a `mod.json` and a
 `<id>.luau`. See [docs/mod_contract.md](docs/mod_contract.md) for what a mod
 returns and how its permissions are granted.
 
-Aether is expected as a sibling checkout (`../aether`), by both `host/Cargo.toml`
-and `.luaurc`.
+Aether is pinned by commit in [`host/Cargo.toml`](host/Cargo.toml), from
+[project-aether-ui/aether](https://github.com/project-aether-ui/aether). Both the
+Rust crates and the Luau source come from that one revision, so no sibling
+checkout is needed and nothing can drift between the two.
+
+`pesde install` once, for vide — Aether declares it and a pinned checkout does
+not carry it, so this host supplies it.
 
 ## Repository Structure (Dev)
 
