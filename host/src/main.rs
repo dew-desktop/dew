@@ -12,6 +12,7 @@
 mod capabilities;
 mod manifest;
 mod mods;
+mod surface;
 
 use aether_raster::{Backend, Font};
 use aether_runtime::{Driver, Painter, RasterPainter, Rgb};
@@ -107,9 +108,16 @@ fn run() -> Result<(), String> {
     // swapping in a placeholder, has no valid placeholder to swap: a `Session` is
     // Lua handles, and a zeroed one is undefined behaviour the moment it is
     // dropped rather than a temporarily invalid value.
-    let mods::Mod { manifest, width, height, session, vm } = active;
+    let mods::Mod { manifest, width, height, surface, session, vm } = active;
 
-    let mut driver = Driver::new(session, painter(width, height)?, Some(BACKGROUND));
+    // A WIDGET IS CLEARED TO NOTHING, a window to the platform's own background.
+    //
+    // `None` here means the painter clears transparent, so a pixel the tree did
+    // not paint is a pixel the window does not occupy — which is what turns a
+    // rounded card into a rounded WINDOW rather than a rounded shape on a dark
+    // rectangle.
+    let background = if surface.is_transparent() { None } else { Some(BACKGROUND) };
+    let mut driver = Driver::new(session, painter(width, height)?, background);
 
     // `--snapshot <path>`: draw one frame, write it, exit.
     //
@@ -128,7 +136,9 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let mut window = Window::new(&format!("Dew — {}", manifest.id), width, height)?;
+    let screen = aether_window::screen_size();
+    let resolved = surface.resolve(screen, (width, height));
+    let mut window = Window::new(&resolved, width, height)?;
 
     // The VM outlives the driver that borrows its handles. Named rather than
     // `_vm`, because "this binding exists to keep something alive" is a fact
@@ -169,7 +179,7 @@ fn run() -> Result<(), String> {
 
         driver.frame(dt).map_err(|e| format!("while rendering: {e}"))?;
         if let Some(bgra) = driver.painter_mut().canvas_mut().bgra() {
-            window.blit(bgra, width, height);
+            window.present(bgra, width, height);
         }
 
         let elapsed = last.elapsed();

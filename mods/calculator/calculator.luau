@@ -29,6 +29,14 @@ return {
 	id = "calculator",
 	size = { width = 260, height = 56 },
 
+	--- ANCHORED LOWER, so both reference widgets can be on screen at once and
+	--- neither has to be moved to see the other.
+	surface = {
+		kind = "widget",
+		anchor = "top-right",
+		offset = { x = 24, y = 104 },
+	},
+
 	mount = function(_dew: any)
 		local expression = source("")
 		local result = source("")
@@ -87,6 +95,8 @@ return {
 			Name = "Calculator",
 			Size = UDim2.new(1, 0, 1, 0),
 			BackgroundColor3 = Color3.fromHex("#121722"),
+
+			create "UICorner" { CornerRadius = UDim.new(0, 14) },
 
 			create "TextLabel" {
 				Name = "Badge",

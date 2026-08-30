@@ -33,6 +33,21 @@ return {
 	id = "timetracker",
 	size = { width = 380, height = 56 },
 
+	--- A FLOATING WIDGET. No chrome, always on top, out of the taskbar, and
+	--- shaped by its own alpha — so the rounded card below is the window's real
+	--- silhouette rather than a shape drawn on a dark rectangle.
+	---
+	--- Omitting `surface` entirely gets this too; it is spelled out here because
+	--- this is the reference mod and the fields should be visible somewhere.
+	surface = {
+		kind = "widget",
+		anchor = "top-right",
+		offset = { x = 24, y = 24 },
+		--- False, because the START button is a control. A monitor that only
+		--- displays would set this true and let clicks reach the desktop.
+		clickThrough = false,
+	},
+
 	--- `dew` carries exactly what mod.json declared: storage, audio,
 	--- notifications. Not a global, and not the whole host surface.
 	mount = function(dew: any)
@@ -86,6 +101,11 @@ return {
 			Name = "TimeTracker",
 			Size = UDim2.new(1, 0, 1, 0),
 			BackgroundColor3 = Color3.fromHex("#121722"),
+
+			--- THE WINDOW'S SHAPE, not a decoration on it. On a transparent
+			--- surface the corners outside this radius are pixels the window does
+			--- not occupy: the desktop shows through them and receives the click.
+			create "UICorner" { CornerRadius = UDim.new(0, 14) },
 
 			create "Frame" {
 				Name = "Status",

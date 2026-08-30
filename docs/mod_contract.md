@@ -86,6 +86,49 @@ they must not be two paths through the renderer. `dew.hud.card { … }` is a Lua
 helper that BUILDS an Aether tree, so the shorthand is a library function and the
 engine has one path to keep correct.
 
+## Widgets and windows are one API, not two
+
+A mod declares the surface it wants beside its size:
+
+```luau
+surface = {
+    kind = "widget",              -- floating, no chrome, on the desktop
+    anchor = "top-right",
+    offset = { x = 24, y = 24 },
+    clickThrough = false,
+}
+```
+
+```luau
+surface = { kind = "window", title = "Time Tracker Settings" }
+```
+
+**One `mount`, because the mod builds the same tree either way.** Chrome or none,
+in the taskbar or not, blitted into a rectangle or composited from its own alpha
+— every one of those is a property of the WINDOW, not of the widget. Two entry
+points would mean two paths through the loader for a difference that is entirely
+window-creation flags, and would force a mod wanting both a HUD and a settings
+panel to be two mods.
+
+**A tagged union, though, not a bag of optional fields.** `title` means nothing
+to a floating widget and `anchor` means nothing to a window. A flat table would
+let a mod set either and have it silently ignored, which is exactly how
+`permissions` was decoration before it was enforced.
+
+Omitting `surface` gets a widget. Dew is a desktop applet platform; a default of
+"ordinary window" would make every author opt in to the thing they came for.
+
+### A widget's shape is its own alpha
+
+On a widget surface the frame is cleared to NOTHING, so a pixel the tree did not
+paint is a pixel the window does not occupy — the desktop shows through it and
+receives the click. A `UICorner` on the root frame is therefore the window's real
+silhouette, not a rounded shape drawn on a dark rectangle.
+
+`anchor` rather than raw coordinates because a desktop is not one size: a clock
+pinned 24px from the top-right stays in the corner when the display changes; one
+at `x = 1872` is in the corner of the display it was written on.
+
 ## What Dew owns, and what it does not
 
 | | |

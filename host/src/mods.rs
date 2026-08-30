@@ -14,6 +14,7 @@
 
 use crate::capabilities::{self, Shared};
 use crate::manifest::Manifest;
+use crate::surface::Declared;
 use aether_runtime::{modules, Session, Vm};
 use mlua::prelude::*;
 use std::path::{Path, PathBuf};
@@ -22,6 +23,7 @@ pub struct Mod {
     pub manifest: Manifest,
     pub width: u32,
     pub height: u32,
+    pub surface: Declared,
     pub session: Session,
     /// The VM this mod lives in. Held because dropping it takes the session's
     /// Lua handles with it — a mod is exactly as alive as its VM.
@@ -87,6 +89,7 @@ pub fn load(
         .map_err(|e| format!("{}: {e}", manifest.id))?;
 
     let (width, height) = size_from(&declaration);
+    let surface = Declared::from_declaration(&declaration, &manifest.id);
 
     let mount: LuaFunction = declaration.get("mount").map_err(|_| {
         format!(
@@ -110,10 +113,11 @@ pub fn load(
         Session::from_lua(vm.lua(), &session_tbl).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     println!(
-        "[dew] loaded {} ({}x{}) — granted: {}",
+        "[dew] loaded {} ({}x{}) — {} — granted: {}",
         manifest.id,
         width,
         height,
+        surface.describe(),
         capabilities::describe(&manifest.permissions)
     );
 
@@ -121,6 +125,7 @@ pub fn load(
         manifest,
         width,
         height,
+        surface,
         session,
         vm,
     })
