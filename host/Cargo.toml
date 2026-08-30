@@ -23,9 +23,9 @@ edition = "2021"
 # Aether is wanted here. That is the whole point of the split -- Dew upgrades
 # when Dew chooses.
 [dependencies]
-aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "24e52e449845efddbe9c02b882c996632db6ddee", features = ["raster"] }
-aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "24e52e449845efddbe9c02b882c996632db6ddee" }
-aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "24e52e449845efddbe9c02b882c996632db6ddee" }
+aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "ee149c73faf487c0b6379c7c3d833e0c2383f438", features = ["raster"] }
+aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "ee149c73faf487c0b6379c7c3d833e0c2383f438" }
+aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "ee149c73faf487c0b6379c7c3d833e0c2383f438" }
 
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
