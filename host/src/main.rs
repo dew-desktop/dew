@@ -290,7 +290,12 @@ fn flag(name: &str) -> Option<String> {
 /// naming one here would go stale on the next resolve and report itself as "no
 /// vide" rather than as "a different vide".
 fn find_vide() -> Option<PathBuf> {
-    for entry in std::fs::read_dir("roblox_packages/.pesde").ok()?.flatten() {
+    //--- WALKS UP, like `mods` does. `cargo run` from `host/` finds the mods
+    //--- directory and then failed here, because this looked only in the current
+    //--- one -- so the host reported "no mods loaded" from a directory it had
+    //--- just found, which points at everything except the actual cause.
+    let base = find_dir("roblox_packages")?.join(".pesde");
+    for entry in std::fs::read_dir(base).ok()?.flatten() {
         if entry.file_name().to_string_lossy().contains("vide") {
             let src = entry.path().join("vide").join("src");
             if src.is_dir() {

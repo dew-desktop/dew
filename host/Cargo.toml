@@ -6,6 +6,11 @@ authors = ["Dew Team"]
 edition = "2021"
 license = "GPL-3.0-only"
 
+# `cargo run` with no --bin runs the host. Adding a second binary made that
+# ambiguous and cargo refused, which is correct of cargo and surprising for
+# anyone who had been running the command for weeks.
+default-run = "dew-host"
+
 # EVERYTHING THAT DRAWS OR EXECUTES COMES FROM AETHER, and nothing here
 # reimplements it. Dew's own code is mod discovery, manifests, capabilities and
 # placement; when a rendering change is needed it belongs upstream, where the
@@ -23,6 +28,17 @@ license = "GPL-3.0-only"
 # Bump these deliberately, as their own `chore(deps)` commit, when a change in
 # Aether is wanted here. That is the whole point of the split -- Dew upgrades
 # when Dew chooses.
+[[bin]]
+name = "dew-host"
+path = "src/main.rs"
+
+# Hyphenated to match, rather than inheriting datamodel_surface from the file
+# name. It is a developer tool: it prints what the DataModel Standard has to
+# cover and what this stack implements of it.
+[[bin]]
+name = "datamodel-surface"
+path = "src/bin/datamodel_surface.rs"
+
 [dependencies]
 aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "8c844f57a440438267929245de7f587bc0484a51", features = ["raster"] }
 aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "8c844f57a440438267929245de7f587bc0484a51" }

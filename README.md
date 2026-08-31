@@ -10,6 +10,9 @@ would run on inside Roblox.
 cargo run --manifest-path host/Cargo.toml -- --mod timetracker
 ```
 
+From inside `host/`, plain `cargo run -- --mod timetracker` works too: the host
+walks up for `mods/` and for the installed vide, so either directory is fine.
+
 `--mod <id>` picks a widget. Without it, Dew lists what it found and runs the
 first alphabetically.
 
