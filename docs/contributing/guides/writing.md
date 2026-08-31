@@ -38,9 +38,14 @@ Emoji in a running program's output is fine. It is product, not prose.
 <why this approach, and what it costs>
 ```
 
-Type and scope follow the conventional-commit scopes mapped to directories in
-the repo hygiene notes. The subject is imperative and lowercase: "fix the layer
-root", not "fixed" or "Fixes".
+Type and scope follow the conventional-commit scopes, mapped to directories.
+`scripts/commitlint.luau` holds the list and
+`scripts/commitlint_check.luau` runs it. The subject is imperative and
+lowercase: "fix the layer root", not "fixed" or "Fixes".
+
+Scope is required, except for `docs` and `chore`. Those routinely span the whole
+repository, and `docs(docs)` is not information; a `feat` or a `fix` always
+happened somewhere, so it always says where.
 
 **The body's job is the WHY.**
 The diff already says what changed and nobody needs it restated. What the diff

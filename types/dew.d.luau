@@ -1,82 +1,106 @@
-﻿--!strict
--- Dew Modding SDK Type Definitions (@dew/core)
+--!strict
+--[[
+	Type declarations for what a Dew mod is handed.
 
-export type WidgetRenderOutput = {
-    text: string,
-    subtext: string?,
-    icon: string?,
-    color: string?,
-    glow: boolean?,
-    badge: string?,
-    progress: number? -- 0.0 to 1.0
+	Kept beside the host that produces it: `host/src/capabilities.rs` builds the
+	table this describes, and `host/src/mods.rs` reads the declaration. If those
+	two and this file disagree, they are wrong and this is stale.
+]]
+
+--- What a mod's module returns.
+---
+--- A DECLARATION, not a registration. Requiring the module defines this table
+--- and does nothing else, so the host can read `id` and `size`, check them
+--- against `mod.json`, and refuse the mod before a line of its logic runs.
+export type Mod = {
+	id: string,
+	--- Ignored for an overlay surface, which is sized by the screen.
+	size: { width: number, height: number }?,
+	surface: Surface?,
+
+	--- Called ONCE, inside a reactive scope. Returns the tree, and optionally a
+	--- table of transitions the host may drive from a hotkey.
+	mount: (dew: Dew) -> (any, Actions?),
 }
 
-export type WidgetDef = {
-    id: string,
-    title: string,
-    priority: number?,
-    render: () => WidgetRenderOutput,
-    onClick: (() => ())?,
-    onSecondaryClick: (() => ())?
+export type Actions = { [string]: () -> () }
+
+--- Where the widget goes.
+---
+--- A tagged union rather than a bag of optional fields: `title` means nothing to
+--- a floating widget and `anchor` means nothing to a window. Omitting `surface`
+--- entirely gets a widget.
+export type Surface = WidgetSurface | WindowSurface | OverlaySurface
+
+export type Anchor = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center"
+
+export type WidgetSurface = {
+	kind: "widget",
+	--- Defaults to "top-right". An anchor rather than coordinates, because a
+	--- desktop is not one size.
+	anchor: Anchor?,
+	--- Pixels from the anchored corner. Defaults to 24, 24.
+	offset: { x: number, y: number }?,
+	--- Let clicks reach whatever is behind, everywhere. A widget with a control
+	--- wants this false, which is the default.
+	clickThrough: boolean?,
 }
 
-export type PaletteOption = {
-    id: string,
-    title: string,
-    subtitle: string?,
-    icon: string?,
-    action: () => ()
+export type WindowSurface = {
+	kind: "window",
+	--- Defaults to the mod's id.
+	title: string?,
 }
 
-export type PaletteOptions = {
-    placeholder: string?,
-    options: {PaletteOption}?,
-    onSubmit: ((query: string) -> ())?
+--- A widget the size of the desktop.
+---
+--- Clicks fall through wherever nothing was painted, so the root frame must set
+--- `BackgroundTransparency = 1` or the overlay becomes a screen-sized sheet of
+--- glass that swallows every click on the machine.
+export type OverlaySurface = {
+	kind: "overlay",
+	--- Above every other window. Defaults to true.
+	topmost: boolean?,
+	clickThrough: boolean?,
 }
 
-export type NotificationOptions = {
-    title: string?,
-    body: string,
-    icon: string?,
-    sound: boolean?
+--- The capability table `mount` receives.
+---
+--- EVERY FIELD BUT `time` IS OPTIONAL, and present only if `mod.json` declared
+--- the matching permission. That is the point: what a mod cannot name it cannot
+--- reach, and a mod declaring nothing gets a table carrying only the clock.
+export type Dew = {
+	--- Ungated. Reading a clock discloses nothing a mod could not get by counting
+	--- frames, and gating it would put a permission in every manifest that exists
+	--- to say "this mod is allowed to know what time it is".
+	time: {
+		--- Seconds since the epoch, as a float.
+		now: () -> number,
+	},
+
+	--- Requires "storage". Persists for the life of the host process; not yet
+	--- written to disk.
+	storage: {
+		get: (key: string) -> string?,
+		set: (key: string, value: string) -> (),
+	}?,
+
+	--- Requires "clipboard".
+	clipboard: {
+		read: () -> string,
+		write: (text: string) -> (),
+	}?,
+
+	--- Requires "notifications". Prints to the host's console until there is a
+	--- tray to raise these through.
+	notifications: {
+		show: (message: string) -> (),
+	}?,
+
+	--- Requires "audio".
+	audio: {
+		chime: (name: string) -> (),
+	}?,
 }
 
-export type DewCore = {
-    hud: {
-        registerWidget: (def: WidgetDef) -> (),
-        unregisterWidget: (id: string) -> (),
-        refresh: () -> (),
-        expand: () -> (),
-        collapse: () -> ()
-    },
-    hotkeys: {
-        register: (hotkey: string, callback: () -> ()) -> (),
-        unregister: (hotkey: string) -> ()
-    },
-    commandPalette: {
-        open: (opts: PaletteOptions) -> (),
-        close: () -> ()
-    },
-    notifications: {
-        show: (textOrOpts: string | NotificationOptions) -> ()
-    },
-    storage: {
-        get: (key: string) -> any?,
-        set: (key: string, value: any) -> (),
-        delete: (key: string) -> ()
-    },
-    clipboard: {
-        readText: () -> string?,
-        writeText: (text: string) -> ()
-    },
-    audio: {
-        playChime: (chimeType: "complete" | "tick" | "alert" | "subtle") -> ()
-    },
-    time: {
-        now: () -> number, -- Unix timestamp in seconds
-        formatDuration: (seconds: number) -> string -- "01:23:45"
-    }
-}
-
-declare local dew: DewCore
-return dew
+return nil

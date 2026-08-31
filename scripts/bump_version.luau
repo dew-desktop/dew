@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- Dew Version Bumper & Release Calculator (@dew/bump-version)
 -- Calculates SemVer bumps, changelog entries, and release tags
 

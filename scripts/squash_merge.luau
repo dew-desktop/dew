@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- Dew Squash-Merge Helper (@dew/squash-merge)
 -- Generates clean git squash-merge execution plans with commit validation
 

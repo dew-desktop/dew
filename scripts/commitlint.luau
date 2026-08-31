@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- Dew Luau Commitlint Configuration & Validator (@dew/commitlint)
 -- Strictly mapped to directories that physically exist in the repository
 
@@ -23,6 +23,16 @@ export type ValidationResult = {
 }
 
 local config: CommitLintConfig = {
+    --- Types that may omit a scope.
+    ---
+    --- A documentation or housekeeping change routinely spans the whole
+    --- repository, and `docs(docs)` is not information. A `feat` or a `fix`
+    --- always has somewhere it happened, so it always has to say where.
+    scopeOptionalFor = {
+        docs = true,
+        chore = true,
+    },
+
     types = {
         "feat",
         "fix",
@@ -34,12 +44,14 @@ local config: CommitLintConfig = {
         "ci"
     },
     allowedScopes = {
-        "host",      -- host/
-        "luau",      -- host/src/luau/
-        "types",     -- types/
-        "scripts",   -- scripts/
+        "core",      -- host/src, the platform itself
+        "host",      -- host/, build and wiring
         "mods",      -- mods/
-        "deps"       -- VERSION / root configs
+        "types",     -- types/
+        "docs",      -- docs/, CONTRIBUTING, README
+        "scripts",   -- scripts/
+        "assets",    -- host/assets/
+        "deps"       -- VERSION, manifests, pins
     },
     maxHeaderLength = 100,
     enforceLowerCaseScope = true
@@ -103,8 +115,8 @@ local function validateCommit(message: string): ValidationResult
         if config.enforceLowerCaseScope and string.lower(parsed.scope) ~= parsed.scope then
             table.insert(errors, `Scope '{parsed.scope}' must be lower-case`)
         end
-    else
-        table.insert(errors, "Scope is required for all Dew commits (e.g. feat(host): ...)")
+    elseif not config.scopeOptionalFor[parsed.type] then
+        table.insert(errors, `Scope is required for '{parsed.type}' (e.g. feat(host): ...)`)
     end
 
     -- 3. Header Length

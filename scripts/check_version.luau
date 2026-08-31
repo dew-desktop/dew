@@ -1,4 +1,4 @@
-﻿--!strict
+--!strict
 -- Dew Version Consistency Checker (@dew/check-version)
 -- Validates SemVer 2.0.0 compliance and manifest synchronization
 
