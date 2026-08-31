@@ -1,0 +1,71 @@
+# Dew builds and every mod mounts.
+#
+# `--snapshot` needs no display, which is what makes a mod loading a testable
+# fact rather than something someone notices later. It exercises the whole
+# chain: manifest, VM, capabilities, the mod's own Luau, Aether's layout, and the
+# rasteriser.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build and mount every mod
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # AETHER IS A PRIVATE GIT DEPENDENCY. Cargo fetches it over HTTPS, and the
+      # default token cannot read another repository in the organisation -- so
+      # this needs a token that can, and the build fails at `cargo fetch` without
+      # one rather than anywhere informative.
+      - name: Authenticate for the private Aether pin
+        run: git config --global url."https://${{ secrets.AETHER_READ_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+
+      - uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Aether declares vide and a pinned checkout does not carry it, so the host
+      # supplies it. Without this every mod fails to mount with "no installed
+      # vide reachable".
+      - run: pesde install
+
+      - run: cargo build --manifest-path host/Cargo.toml
+
+      # EVERY MOD, not the first one. A mod that fails to load is skipped with a
+      # message and the host carries on, which is right at runtime and would hide
+      # a broken mod here.
+      - name: Mount each mod
+        shell: bash
+        run: |
+          for m in mods/*/; do
+            id=$(basename "$m")
+            echo "--- $id"
+            cargo run --quiet --manifest-path host/Cargo.toml -- --mod "$id" --snapshot "/tmp/$id.png"
+          done
+
+      - run: lune run scripts/commitlint_check.luau
+
+  format:
+    name: fmt
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --manifest-path host/Cargo.toml --all --check
