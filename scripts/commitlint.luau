@@ -31,6 +31,12 @@ local config: CommitLintConfig = {
     scopeOptionalFor = {
         docs = true,
         chore = true,
+        --- `ci` and `style` span the repository the same way. A workflow is not
+        --- in a directory the scopes name, and `cargo fmt` touches whatever
+        --- needed formatting; `ci(ci)` and `style(host)` are both worse than the
+        --- bare type.
+        ci = true,
+        style = true,
     },
 
     types = {
