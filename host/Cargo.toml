@@ -40,6 +40,23 @@ windows = { version = "0.59", features = [
     "Win32_System_LibraryLoader",
 ] }
 
+# THE DATAMODEL SURFACE, from Roblox's own API dump.
+#
+# rbx_reflection_database is generated from the dump and versioned against a
+# Roblox build, so the class hierarchy, the property list and every default come
+# from Roblox rather than from a hand-written list that drifts. It is what lets
+# the host reject a property that does not exist on a class before the value
+# reaches layout, which is the security argument for a host-owned datamodel made
+# concrete.
+#
+# rbx_types carries UDim2, Color3, Vector2, Rect, Font and the rest with Roblox's
+# own semantics. It is the part that would be embarrassing to write again and the
+# part where being subtly wrong produces exactly the cross-host divergence the
+# standard exists to prevent.
+rbx_types = "3"
+rbx_reflection = "7"
+rbx_reflection_database = "3"
+
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
