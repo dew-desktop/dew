@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo build *)",
+      "Bash(cargo test *)",
+      "Bash(cargo check *)",
+      "Bash(stylua --check *)",
+      "Bash(luau-lsp analyze *)",
+      "Bash(npm test)",
+      "Bash(lune run scripts/commitlint_check.luau *)",
+      "Bash(lune run scripts/check_version.luau)"
+    ]
+  }
+}
