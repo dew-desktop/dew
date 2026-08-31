@@ -23,9 +23,9 @@ edition = "2021"
 # Aether is wanted here. That is the whole point of the split -- Dew upgrades
 # when Dew chooses.
 [dependencies]
-aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "33c68ce1f4a69ad80e40e3201009c63a43984f9a", features = ["raster"] }
-aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "33c68ce1f4a69ad80e40e3201009c63a43984f9a" }
-aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "33c68ce1f4a69ad80e40e3201009c63a43984f9a" }
+aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "2a9a61d8887831834cc83f1f7fcd2481d4d07e00", features = ["raster"] }
+aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "2a9a61d8887831834cc83f1f7fcd2481d4d07e00" }
+aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "2a9a61d8887831834cc83f1f7fcd2481d4d07e00" }
 
 # WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
 # from a platform -- surfaces and input -- and a tray icon is neither. It presents

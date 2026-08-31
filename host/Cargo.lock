@@ -11,7 +11,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 [[package]]
 name = "aether_raster"
 version = "0.0.1"
-source = "git+https://github.com/project-aether-ui/aether?rev=33c68ce1f4a69ad80e40e3201009c63a43984f9a#33c68ce1f4a69ad80e40e3201009c63a43984f9a"
+source = "git+https://github.com/project-aether-ui/aether?rev=2a9a61d8887831834cc83f1f7fcd2481d4d07e00#2a9a61d8887831834cc83f1f7fcd2481d4d07e00"
 dependencies = [
  "image",
  "skrifa",
@@ -22,7 +22,7 @@ dependencies = [
 [[package]]
 name = "aether_runtime"
 version = "0.0.1"
-source = "git+https://github.com/project-aether-ui/aether?rev=33c68ce1f4a69ad80e40e3201009c63a43984f9a#33c68ce1f4a69ad80e40e3201009c63a43984f9a"
+source = "git+https://github.com/project-aether-ui/aether?rev=2a9a61d8887831834cc83f1f7fcd2481d4d07e00#2a9a61d8887831834cc83f1f7fcd2481d4d07e00"
 dependencies = [
  "aether_raster",
  "mlua",
@@ -31,7 +31,7 @@ dependencies = [
 [[package]]
 name = "aether_window"
 version = "0.0.1"
-source = "git+https://github.com/project-aether-ui/aether?rev=33c68ce1f4a69ad80e40e3201009c63a43984f9a#33c68ce1f4a69ad80e40e3201009c63a43984f9a"
+source = "git+https://github.com/project-aether-ui/aether?rev=2a9a61d8887831834cc83f1f7fcd2481d4d07e00#2a9a61d8887831834cc83f1f7fcd2481d4d07e00"
 dependencies = [
  "windows",
 ]
