@@ -73,11 +73,13 @@ pub fn load(
     let vm = Vm::new(caps.clone()).map_err(|e| format!("{}: {e}", manifest.id))?;
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
-    // 3 ── the mount prelude: vocabulary installed, Session ready to build.
-    let prelude_path = prelude_path()?;
-    let prelude: LuaTable = modules::load_entry(&vm, &prelude_path)
+    // 3 ── the framework's own desktop ceremony. Dew ships no Luau of its own:
+    //      resolving the host, installing the vocabulary, opening a reactive
+    //      scope and opening a session are identical for every off-engine host,
+    //      so they live in Aether where the CLI gets them too.
+    let desktop: LuaTable = modules::load_entry(&vm, &aether_root.join("src/host/Desktop.luau"))
         .and_then(|f| f.call(()))
-        .map_err(|e| format!("{}: loading the mount prelude: {e}", manifest.id))?;
+        .map_err(|e| format!("{}: loading Aether's desktop host: {e}", manifest.id))?;
 
     // 4 ── the capability table, from the granted permissions ONLY.
     let dew = capabilities::build(vm.lua(), &manifest.permissions, state)
@@ -103,9 +105,11 @@ pub fn load(
     //      The mount function is handed OVER rather than called here: `derive`
     //      and `effect` refuse to run outside a stable scope, and calling it from
     //      Rust would run it outside one.
-    let mount_fn: LuaFunction = prelude.get("Mount").map_err(|e| e.to_string())?;
+    //      `dew` is forwarded to the mod's `mount` through Desktop.Mount's
+    //      varargs, so the framework never learns what a capability table is.
+    let mount_fn: LuaFunction = desktop.get("Mount").map_err(|e| e.to_string())?;
     let mounted: LuaTable = mount_fn
-        .call((mount, dew, width, height))
+        .call((mount, width, height, dew))
         .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
 
     let session_tbl: LuaTable = mounted.get("Session").map_err(|e| e.to_string())?;
@@ -129,20 +133,4 @@ pub fn load(
         session,
         vm,
     })
-}
-
-/// Where `mount.luau` lives, relative to the running executable or the source
-/// tree. Looked up rather than embedded so it can be read and edited like the
-/// Luau it is.
-fn prelude_path() -> Result<PathBuf, String> {
-    let candidates = [
-        PathBuf::from("host/runtime/mount.luau"),
-        PathBuf::from("runtime/mount.luau"),
-        PathBuf::from("../host/runtime/mount.luau"),
-        PathBuf::from("../../host/runtime/mount.luau"),
-    ];
-    candidates
-        .into_iter()
-        .find(|p| p.is_file())
-        .ok_or_else(|| "could not find host/runtime/mount.luau".to_string())
 }
