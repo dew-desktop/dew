@@ -39,6 +39,16 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
+      # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
+      # them. Pinned here to the version this repository is developed against.
+      - name: Install pesde
+        shell: bash
+        run: |
+          curl -fsSL -o pesde.zip https://github.com/pesde-pkg/pesde/releases/download/v0.7.3%2Bregistry.0.2.3/pesde-0.7.3-windows-x86_64.zip
+          unzip -q pesde.zip -d "$HOME/.pesde-bin"
+          echo "$HOME/.pesde-bin" >> "$GITHUB_PATH"
+
       # Aether declares vide and a pinned checkout does not carry it, so the host
       # supplies it. Without this every mod fails to mount with "no installed
       # vide reachable".
