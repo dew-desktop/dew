@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Dew: the desktop applet platform — mods, capabilities, hotkeys and windows over Aether"
 authors = ["Dew Team"]
 edition = "2021"
+license = "GPL-3.0-only"
 
 # EVERYTHING THAT DRAWS OR EXECUTES COMES FROM AETHER, and nothing here
 # reimplements it. Dew's own code is mod discovery, manifests, capabilities and

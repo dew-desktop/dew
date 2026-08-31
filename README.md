@@ -63,4 +63,13 @@ is branched, written and landed.
 
 ## License
 
-[MIT](LICENSE)
+[GPL-3.0](LICENSE).
+
+Widgets are not covered by it. A widget is an interpreted Luau file loaded at
+runtime into its own sandboxed VM, given a table of host functions and nothing
+else; it never links against Dew and never touches Dew's own code. Roblox does
+the same thing at far greater scale, shipping CorePackages into every game's
+runtime beside the game's own scripts.
+
+Widgets build on [Aether](https://github.com/project-aether-ui/aether), which is
+MIT, and stay entirely their authors' own.
