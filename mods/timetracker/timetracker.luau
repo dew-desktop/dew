@@ -136,10 +136,14 @@ return {
 				create "UICorner" { CornerRadius = UDim.new(0, 10) },
 			},
 
+			--- HEIGHTS FOLLOW THE LINE HEIGHT, which is 1.5 x TextSize. These were
+			--- 22 and 14, sized when Aether's constant was 1.2 and wrong: an 18pt
+			--- line needs 27, not 22, so the timer and the task beneath it
+			--- overlapped by five pixels.
 			create "TextLabel" {
 				Name = "Timer",
-				Position = UDim2.new(0, 98, 0, 12),
-				Size = UDim2.new(0, 120, 0, 22),
+				Position = UDim2.new(0, 98, 0, 6),
+				Size = UDim2.new(0, 120, 0, 27),
 				BackgroundTransparency = 1,
 				Text = display,
 				TextSize = 18,
@@ -148,8 +152,8 @@ return {
 
 			create "TextLabel" {
 				Name = "Task",
-				Position = UDim2.new(0, 98, 0, 32),
-				Size = UDim2.new(0, 140, 0, 14),
+				Position = UDim2.new(0, 98, 0, 33),
+				Size = UDim2.new(0, 140, 0, 17),
 				BackgroundTransparency = 1,
 				Text = task,
 				TextSize = 11,

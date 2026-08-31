@@ -111,9 +111,10 @@ return {
 			},
 
 			create "TextLabel" {
+				--- 27, not 24: an 18pt line is 1.5 x TextSize tall.
 				Name = "Display",
-				Position = UDim2.new(0, 76, 0, 16),
-				Size = UDim2.new(0, 166, 0, 24),
+				Position = UDim2.new(0, 76, 0, 15),
+				Size = UDim2.new(0, 166, 0, 27),
 				BackgroundTransparency = 1,
 				Text = display,
 				TextSize = 18,
