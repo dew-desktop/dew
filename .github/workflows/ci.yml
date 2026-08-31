@@ -43,11 +43,16 @@ jobs:
       # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
       # them. Pinned here to the version this repository is developed against.
       - name: Install pesde
-        shell: bash
+        shell: pwsh
         run: |
-          curl -fsSL -o pesde.zip https://github.com/pesde-pkg/pesde/releases/download/v0.7.3%2Bregistry.0.2.3/pesde-0.7.3-windows-x86_64.zip
-          unzip -q pesde.zip -d "$HOME/.pesde-bin"
-          echo "$HOME/.pesde-bin" >> "$GITHUB_PATH"
+          # PWSH, NOT BASH. A bash step writing $HOME/.pesde-bin into
+          # GITHUB_PATH writes a POSIX path, which later pwsh steps cannot
+          # resolve -- so pesde installed correctly and was still "not
+          # recognized" one step later.
+          $url = "https://github.com/pesde-pkg/pesde/releases/download/v0.7.3%2Bregistry.0.2.3/pesde-0.7.3-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile pesde.zip
+          Expand-Archive -Path pesde.zip -DestinationPath "$env:RUNNER_TEMP/pesde" -Force
+          "$env:RUNNER_TEMP/pesde" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       # Aether declares vide and a pinned checkout does not carry it, so the host
       # supplies it. Without this every mod fails to mount with "no installed
