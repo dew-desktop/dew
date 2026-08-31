@@ -54,8 +54,10 @@ not carry it, so this host supplies it.
 
 ## Contributing
 
-[docs/contributing/writing.md](docs/contributing/writing.md) — how commits, pull
-requests and release notes are written here, and who each is written for.
+- [writing.md](docs/contributing/writing.md) - how commits, pull requests and
+  release notes are written, and who each is written for.
+- [merging.md](docs/contributing/merging.md) - which merge strategy a branch
+  gets, and why the branch prefix decides it.
 
 ## License
 
