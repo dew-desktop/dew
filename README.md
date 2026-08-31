@@ -52,6 +52,11 @@ not carry it, so this host supplies it.
 
 ---
 
+## Contributing
+
+[docs/contributing/writing.md](docs/contributing/writing.md) — how commits, pull
+requests and release notes are written here, and who each is written for.
+
 ## License
 
 [MIT](LICENSE)
