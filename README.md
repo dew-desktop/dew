@@ -1,4 +1,4 @@
-﻿# 💧 Dew
+﻿# 💧 Dew (Development Branch)
 
 Minimalist desktop HUD and Luau tooling platform.
 
@@ -10,14 +10,54 @@ Dew is an open-source, keyboard-driven desktop HUD powered by an embedded Luau r
 
 ---
 
-## Repository Structure
+## Running it
 
+```sh
+cargo run --manifest-path host/Cargo.toml -- --mod timetracker
+```
+
+`--mod <id>` picks a widget; without it, Dew lists what it found and runs the
+first alphabetically. `--snapshot <path>` renders one frame to a PNG and exits,
+needing no window — which is how a widget gets diffed in CI, and the only way to
+see one from a terminal.
+
+`--stats` reports where frame time goes; `--bench` repaints every frame, which is
+the load a drag produces. Dependencies are built optimised even in a debug
+profile — without that, `cargo run` renders at about 18fps and it reads as a Dew
+problem rather than a build one.
+
+Dew sits in the tray while it runs. The menu offers a max-FPS cap — **uncapped by
+default**, with 30 / 60 / 120 / 144 / 240 — and Exit. Uncapped means the loop does
+not sleep, so an idle widget will spin a core; pick a cap if that matters more
+than latency.
+
+Mods live in [`mods/`](mods/); each is a directory with a `mod.json` and a
+`<id>.luau`. See [docs/mod_contract.md](docs/mod_contract.md) for what a mod
+returns and how its permissions are granted.
+
+Aether is pinned by commit in [`host/Cargo.toml`](host/Cargo.toml), from
+[project-aether-ui/aether](https://github.com/project-aether-ui/aether). Both the
+Rust crates and the Luau source come from that one revision, so no sibling
+checkout is needed and nothing can drift between the two.
+
+`pesde install` once, for vide — Aether declares it and a pinned checkout does
+not carry it, so this host supplies it.
+
+## Repository Structure (Dev)
+
+- [`types/`](types/): Luau type definitions (`@dew/core.d.luau`) for mod SDK interfaces.
+- [`mods/`](mods/): Reference Luau mod implementations.
 - [`scripts/`](scripts/): Repository automation, versioning, and commit validation scripts written in Luau.
 - [`VERSION`](VERSION): Current development version.
 
-Active feature development and experimental modules reside on the `dev` branch.
-
 ---
+
+## Contributing
+
+- [writing.md](docs/contributing/writing.md) - how commits, pull requests and
+  release notes are written, and who each is written for.
+- [merging.md](docs/contributing/merging.md) - which merge strategy a branch
+  gets, and why the branch prefix decides it.
 
 ## License
 

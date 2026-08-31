@@ -22,7 +22,6 @@ export type ValidationResult = {
     parsed: ParsedCommit?
 }
 
--- Scopes strictly corresponding to existing repository directories:
 local config: CommitLintConfig = {
     types = {
         "feat",
@@ -35,7 +34,11 @@ local config: CommitLintConfig = {
         "ci"
     },
     allowedScopes = {
+        "host",      -- host/
+        "luau",      -- host/src/luau/
+        "types",     -- types/
         "scripts",   -- scripts/
+        "mods",      -- mods/
         "deps"       -- VERSION / root configs
     },
     maxHeaderLength = 100,
@@ -101,7 +104,7 @@ local function validateCommit(message: string): ValidationResult
             table.insert(errors, `Scope '{parsed.scope}' must be lower-case`)
         end
     else
-        table.insert(errors, "Scope is required for all Dew commits (e.g. chore(scripts): ...)")
+        table.insert(errors, "Scope is required for all Dew commits (e.g. feat(host): ...)")
     end
 
     -- 3. Header Length

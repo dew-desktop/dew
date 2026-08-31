@@ -1,5 +1,9 @@
 ﻿const activeScopes = [
+  'host',      // host/
+  'luau',      // host/src/luau/
+  'types',     // types/
   'scripts',   // scripts/
+  'mods',      // mods/
   'deps',      // VERSION, root config files
 ];
 

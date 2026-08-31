@@ -1,0 +1,60 @@
+[package]
+name = "dew-host"
+version = "0.1.0"
+description = "Dew: the desktop applet platform — mods, capabilities, hotkeys and windows over Aether"
+authors = ["Dew Team"]
+edition = "2021"
+
+# EVERYTHING THAT DRAWS OR EXECUTES COMES FROM AETHER, and nothing here
+# reimplements it. Dew's own code is mod discovery, manifests, capabilities and
+# placement; when a rendering change is needed it belongs upstream, where the
+# Roblox host gets it too.
+#
+# PINNED BY COMMIT. A path dependency is "whatever is on that disk right now" --
+# it changes under you when the other checkout moves, and neither a teammate nor
+# this machine tomorrow can reproduce it. A revision is a fact.
+#
+# The URL is the REMOTE, never a local path. A file:// pin looks like pinning and
+# is not: the revision it names exists on exactly one machine, so a lockfile
+# built from it is unusable to everyone else and the dependency is still, in
+# practice, a directory on this disk.
+#
+# Bump these deliberately, as their own `chore(deps)` commit, when a change in
+# Aether is wanted here. That is the whole point of the split -- Dew upgrades
+# when Dew chooses.
+[dependencies]
+aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "2a9a61d8887831834cc83f1f7fcd2481d4d07e00", features = ["raster"] }
+aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "2a9a61d8887831834cc83f1f7fcd2481d4d07e00" }
+aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "2a9a61d8887831834cc83f1f7fcd2481d4d07e00" }
+
+# WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
+# from a platform -- surfaces and input -- and a tray icon is neither. It presents
+# nothing of Aether and the CLI will never want one, so the mechanism lives here
+# with the product that needs it.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_LibraryLoader",
+] }
+
+mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6.0"
+
+# OPTIMISE THE DEPENDENCIES EVEN IN A DEBUG BUILD.
+#
+# `cargo run` was unusable and it read as a Dew problem: dragging a window in the
+# workspace mod felt sluggish, and the frame budget looked like the suspect.
+# Measured, a debug frame cost 54ms against release's 1.7ms — 18fps versus 575 —
+# and every microsecond of the difference was in dependencies.
+#
+# vello_cpu rasterises per pixel and mlua interprets per opcode; both are
+# pathological unoptimised, and `aether_raster` only asks for opt-level 3 in its
+# RELEASE profile. Dew's own code stays at opt-level 0, so it is still debuggable
+# and still rebuilds fast — it is thousands of lines against their hundreds of
+# thousands, and it is not where the time goes.
+[profile.dev.package."*"]
+opt-level = 3

@@ -1,16 +1,31 @@
 ﻿# Rust / Cargo
-/target
-Cargo.lock
+target/
+**/target/
+# Cargo.lock IS TRACKED. Dew is an application, not a library: the lockfile is
+# what makes a build reproducible, and ignoring it undoes most of what pinning
+# Aether by commit buys. The `rev` fixes Aether; the lockfile fixes everything
+# Aether and Dew pull in behind it.
 
 # Node / Web
-node_modules
-dist
+node_modules/
+**/node_modules/
+dist/
+**/dist/
 .env
 .env.local
 
 # IDE / OS
-.vscode
-.idea
+.vscode/
+.idea/
 *.log
 Thumbs.db
 [Dd]esktop.ini
+
+# rendered widget snapshots
+*.png
+
+
+# pesde install output
+roblox_packages/
+luau_packages/
+.pesde/
