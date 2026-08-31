@@ -187,10 +187,18 @@ impl Declared {
             Declared::Overlay { topmost, .. } => {
                 format!("overlay{}", if *topmost { ", topmost" } else { "" })
             }
-            Declared::Widget { anchor, click_through, .. } => format!(
+            Declared::Widget {
+                anchor,
+                click_through,
+                ..
+            } => format!(
                 "widget {:?}{}",
                 anchor,
-                if *click_through { ", click-through" } else { "" }
+                if *click_through {
+                    ", click-through"
+                } else {
+                    ""
+                }
             ),
         }
     }

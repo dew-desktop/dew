@@ -14,16 +14,45 @@ use std::collections::{BTreeMap, BTreeSet};
 /// `Layout.Inputs`. Kept here rather than parsed: a hand-copied list that drifts
 /// is visible in a diff, and a parser that silently matches nothing is not.
 const IMPLEMENTED: &[&str] = &[
-    "AnchorPoint", "AutomaticSize", "CanvasPosition", "FillDirection", "LayoutOrder", "Padding",
-    "PaddingBottom", "PaddingLeft", "PaddingRight", "PaddingTop", "Position", "Scale", "Size",
-    "Text", "TextSize", "Visible",
+    "AnchorPoint",
+    "AutomaticSize",
+    "CanvasPosition",
+    "FillDirection",
+    "LayoutOrder",
+    "Padding",
+    "PaddingBottom",
+    "PaddingLeft",
+    "PaddingRight",
+    "PaddingTop",
+    "Position",
+    "Scale",
+    "Size",
+    "Text",
+    "TextSize",
+    "Visible",
     // Read through accessors rather than by name, so absent from Layout.Inputs'
     // Properties list but no less implemented.
-    "ClipsDescendants", "ZIndex", "Parent", "Name", "ClassName",
+    "ClipsDescendants",
+    "ZIndex",
+    "Parent",
+    "Name",
+    "ClassName",
     // Carried by the display list rather than by layout.
-    "BackgroundColor3", "BackgroundTransparency", "TextColor3", "TextTransparency",
-    "TextXAlignment", "TextYAlignment", "CornerRadius", "Image", "ImageColor3",
-    "ImageTransparency", "Color", "Thickness", "Transparency", "Rotation", "Offset",
+    "BackgroundColor3",
+    "BackgroundTransparency",
+    "TextColor3",
+    "TextTransparency",
+    "TextXAlignment",
+    "TextYAlignment",
+    "CornerRadius",
+    "Image",
+    "ImageColor3",
+    "ImageTransparency",
+    "Color",
+    "Thickness",
+    "Transparency",
+    "Rotation",
+    "Offset",
 ];
 
 /// Properties a UI host is not expected to implement, and why.
@@ -36,9 +65,22 @@ const IMPLEMENTED: &[&str] = &[
 /// Engine bookkeeping: replication, localisation, studio and asset plumbing.
 /// None of it affects what is drawn or where.
 const NOT_UI: &[&str] = &[
-    "Archivable", "RobloxLocked", "AutoLocalize", "RootLocalizationTable", "Attributes",
-    "AttributesReplicate", "AttributesSerialize", "SourceAssetId", "Sandboxed", "Capabilities",
-    "Name", "Parent", "ClassName", "UniqueId", "HistoryId", "ActiveQueryNames",
+    "Archivable",
+    "RobloxLocked",
+    "AutoLocalize",
+    "RootLocalizationTable",
+    "Attributes",
+    "AttributesReplicate",
+    "AttributesSerialize",
+    "SourceAssetId",
+    "Sandboxed",
+    "Capabilities",
+    "Name",
+    "Parent",
+    "ClassName",
+    "UniqueId",
+    "HistoryId",
+    "ActiveQueryNames",
 ];
 
 /// Input devices this host does not have. A desktop widget is driven by a
@@ -49,12 +91,24 @@ const NOT_UI: &[&str] = &[
 /// these stop being out of scope and become backlog, which is exactly why they
 /// are listed separately rather than lumped in above.
 const INPUT_DEVICE: &[&str] = &[
-    "NextSelectionUp", "NextSelectionDown", "NextSelectionLeft", "NextSelectionRight",
-    "Selectable", "SelectionImageObject", "SelectionOrder", "SelectionGroup",
-    "SelectionBehaviorUp", "SelectionBehaviorDown", "SelectionBehaviorLeft",
-    "SelectionBehaviorRight", "GamepadInputEnabled", "HoverHapticEffect", "PressHapticEffect",
+    "NextSelectionUp",
+    "NextSelectionDown",
+    "NextSelectionLeft",
+    "NextSelectionRight",
+    "Selectable",
+    "SelectionImageObject",
+    "SelectionOrder",
+    "SelectionGroup",
+    "SelectionBehaviorUp",
+    "SelectionBehaviorDown",
+    "SelectionBehaviorLeft",
+    "SelectionBehaviorRight",
+    "GamepadInputEnabled",
+    "HoverHapticEffect",
+    "PressHapticEffect",
     // Touch and the on-screen keyboard: devices, not decisions.
-    "TouchInputEnabled", "ShowNativeInput",
+    "TouchInputEnabled",
+    "ShowNativeInput",
 ];
 
 /// Classes that exist under GuiObject and are not UI a host has to draw.
@@ -64,16 +118,30 @@ const INPUT_DEVICE: &[&str] = &[
 /// describing a UI. Named explicitly so the exclusion is a decision in a diff
 /// rather than a silent filter.
 const OUT_OF_SCOPE: &[&str] = &[
-    "VideoFrame", "VideoDisplay", "ViewportFrame", "TextChannelWindow", "RelativeGui",
+    "VideoFrame",
+    "VideoDisplay",
+    "ViewportFrame",
+    "TextChannelWindow",
+    "RelativeGui",
 ];
 
 /// The classes a UI actually uses. `GuiObject` descendants come from the
 /// hierarchy; these are the modifiers, which are `UIComponent` rather than
 /// `GuiObject` and so are not found by walking superclasses.
 const MODIFIERS: &[&str] = &[
-    "UICorner", "UIPadding", "UIListLayout", "UIGridLayout", "UIPageLayout", "UITableLayout",
-    "UIGradient", "UIStroke", "UIScale", "UIAspectRatioConstraint", "UISizeConstraint",
-    "UITextSizeConstraint", "UIFlexItem",
+    "UICorner",
+    "UIPadding",
+    "UIListLayout",
+    "UIGridLayout",
+    "UIPageLayout",
+    "UITableLayout",
+    "UIGradient",
+    "UIStroke",
+    "UIScale",
+    "UIAspectRatioConstraint",
+    "UISizeConstraint",
+    "UITextSizeConstraint",
+    "UIFlexItem",
 ];
 
 fn main() {
@@ -125,7 +193,10 @@ fn main() {
                 if !matches!(p.data_type, DataType::Value(_) | DataType::Enum(_)) {
                     continue;
                 }
-                if !matches!(p.scriptability, Scriptability::ReadWrite | Scriptability::Write) {
+                if !matches!(
+                    p.scriptability,
+                    Scriptability::ReadWrite | Scriptability::Write
+                ) {
                     continue;
                 }
                 props.push(pname.as_ref());
@@ -145,7 +216,10 @@ fn main() {
     let not_ui: BTreeSet<&str> = NOT_UI.iter().copied().collect();
     let input_device: BTreeSet<&str> = INPUT_DEVICE.iter().copied().collect();
 
-    let covered_total = all_props.iter().filter(|p| implemented.contains(*p)).count();
+    let covered_total = all_props
+        .iter()
+        .filter(|p| implemented.contains(*p))
+        .count();
     let excluded: Vec<&str> = all_props
         .iter()
         .copied()
@@ -164,19 +238,31 @@ fn main() {
 
     if markdown {
         emit_markdown(
-            &db.version, &ui_classes, &per_class, covered_total, in_scope_total,
-            &excluded, &backlog,
+            &db.version,
+            &ui_classes,
+            &per_class,
+            covered_total,
+            in_scope_total,
+            &excluded,
+            &backlog,
         );
         return;
     }
 
     let in_scope = ui_classes.len()
-        - OUT_OF_SCOPE.iter().filter(|c| ui_classes.contains_key(*c)).count();
+        - OUT_OF_SCOPE
+            .iter()
+            .filter(|c| ui_classes.contains_key(*c))
+            .count();
 
     println!(
         "DataModel surface, from Roblox {}
 ",
-        db.version.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".")
+        db.version
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(".")
     );
     println!(
         "{in_scope} classes in scope of {} under GuiObject, {} writable properties
@@ -199,7 +285,10 @@ IN SCOPE:  {covered_total} of {in_scope_total} ({:.0}%)",
         "EXCLUDED:  {} ({} engine bookkeeping, {} input devices this host lacks)",
         excluded.len(),
         excluded.iter().filter(|p| not_ui.contains(*p)).count(),
-        excluded.iter().filter(|p| input_device.contains(*p)).count()
+        excluded
+            .iter()
+            .filter(|p| input_device.contains(*p))
+            .count()
     );
 
     println!(
@@ -221,46 +310,95 @@ fn emit_markdown(
     excluded: &[&str],
     backlog: &[&str],
 ) {
-    let v = version.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(".");
-    println!("# DataModel Standard: scope
-");
+    let v = version
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(".");
+    println!(
+        "# DataModel Standard: scope
+"
+    );
     println!("<!-- GENERATED. Regenerate with:");
-    println!("       cargo run --manifest-path host/Cargo.toml --bin datamodel_surface -- --markdown");
-    println!("     Do not edit by hand; edit the classification lists in the tool. -->
-");
+    println!(
+        "       cargo run --manifest-path host/Cargo.toml --bin datamodel_surface -- --markdown"
+    );
+    println!(
+        "     Do not edit by hand; edit the classification lists in the tool. -->
+"
+    );
     println!("Measured against Roblox **{v}**, from the reflection database that ships");
     println!("with `rbx_reflection_database`. It tracks Roblox releases, so re-running this");
-    println!("after an update is how the standard notices the platform moved.
-");
-    println!("**{covered} of {in_scope} in-scope properties implemented.** {} more are excluded by", excluded.len());
-    println!("decision, and {} classes under `GuiObject` are in scope.
-", ui_classes.len() - OUT_OF_SCOPE.len());
+    println!(
+        "after an update is how the standard notices the platform moved.
+"
+    );
+    println!(
+        "**{covered} of {in_scope} in-scope properties implemented.** {} more are excluded by",
+        excluded.len()
+    );
+    println!(
+        "decision, and {} classes under `GuiObject` are in scope.
+",
+        ui_classes.len() - OUT_OF_SCOPE.len()
+    );
 
-    println!("## Coverage by class
-");
+    println!(
+        "## Coverage by class
+"
+    );
     println!("| Class | Implemented | In the class |");
     println!("| :--- | ---: | ---: |");
     for (name, c, t) in per_class.iter().take(20) {
         println!("| `{name}` | {c} | {t} |");
     }
 
-    println!("
+    println!(
+        "
 ## Out of scope
-");
+"
+    );
     println!("Excluded by decision rather than by oversight. Each is a claim that a");
-    println!("conformant implementation may ignore it.
-");
+    println!(
+        "conformant implementation may ignore it.
+"
+    );
     println!("**Classes.** Video, viewports and chat windows are engine features rather than");
-    println!("layout: {}.
-", OUT_OF_SCOPE.iter().map(|c| format!("`{c}`")).collect::<Vec<_>>().join(", "));
-    println!("**Properties.** {}
-", excluded.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", "));
+    println!(
+        "layout: {}.
+",
+        OUT_OF_SCOPE
+            .iter()
+            .map(|c| format!("`{c}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "**Properties.** {}
+",
+        excluded
+            .iter()
+            .map(|p| format!("`{p}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
 
-    println!("## Backlog
-");
-    println!("What conformance actually requires, and nothing else.
-");
+    println!(
+        "## Backlog
+"
+    );
+    println!(
+        "What conformance actually requires, and nothing else.
+"
+    );
     for chunk in backlog.chunks(8) {
-        println!("- {}", chunk.iter().map(|p| format!("`{p}`")).collect::<Vec<_>>().join(", "));
+        println!(
+            "- {}",
+            chunk
+                .iter()
+                .map(|p| format!("`{p}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 }

@@ -57,8 +57,7 @@ pub struct Manifest {
 impl Manifest {
     pub fn load(dir: &Path) -> Result<Manifest, String> {
         let path = dir.join("mod.json");
-        let raw = std::fs::read_to_string(&path)
-            .map_err(|e| format!("{}: {e}", path.display()))?;
+        let raw = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         // A BOM survives `read_to_string` and serde_json rejects it as a value.
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(&raw);
         serde_json::from_str(raw).map_err(|e| format!("{}: {e}", path.display()))

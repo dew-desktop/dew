@@ -109,7 +109,14 @@ fn run() -> Result<(), String> {
     // swapping in a placeholder, has no valid placeholder to swap: a `Session` is
     // Lua handles, and a zeroed one is undefined behaviour the moment it is
     // dropped rather than a temporarily invalid value.
-    let mods::Mod { manifest, mut width, mut height, surface, session, vm } = active;
+    let mods::Mod {
+        manifest,
+        mut width,
+        mut height,
+        surface,
+        session,
+        vm,
+    } = active;
 
     let screen = aether_window::screen_size();
     if surface.fills_screen() {
@@ -123,7 +130,11 @@ fn run() -> Result<(), String> {
     // not paint is a pixel the window does not occupy — which is what turns a
     // rounded card into a rounded WINDOW rather than a rounded shape on a dark
     // rectangle.
-    let background = if surface.is_transparent() { None } else { Some(BACKGROUND) };
+    let background = if surface.is_transparent() {
+        None
+    } else {
+        Some(BACKGROUND)
+    };
     let mut driver = Driver::new(session, painter(width, height)?, background);
 
     // `--snapshot <path>`: draw one frame, write it, exit.
@@ -179,13 +190,27 @@ fn run() -> Result<(), String> {
         for event in events {
             match event {
                 Event::PointerMove { x, y } => {
-                    driver.pointer(aether_runtime::Pointer::Move, x, y).map_err(|e| e.to_string())?;
+                    driver
+                        .pointer(aether_runtime::Pointer::Move, x, y)
+                        .map_err(|e| e.to_string())?;
                 }
-                Event::PointerDown { x, y, button: Button::Left } => {
-                    driver.pointer(aether_runtime::Pointer::Down, x, y).map_err(|e| e.to_string())?;
+                Event::PointerDown {
+                    x,
+                    y,
+                    button: Button::Left,
+                } => {
+                    driver
+                        .pointer(aether_runtime::Pointer::Down, x, y)
+                        .map_err(|e| e.to_string())?;
                 }
-                Event::PointerUp { x, y, button: Button::Left } => {
-                    driver.pointer(aether_runtime::Pointer::Up, x, y).map_err(|e| e.to_string())?;
+                Event::PointerUp {
+                    x,
+                    y,
+                    button: Button::Left,
+                } => {
+                    driver
+                        .pointer(aether_runtime::Pointer::Up, x, y)
+                        .map_err(|e| e.to_string())?;
                 }
                 Event::PointerDown { .. } | Event::PointerUp { .. } => {}
                 Event::Wheel { x, y, delta } => {
@@ -208,7 +233,9 @@ fn run() -> Result<(), String> {
         }
 
         let t0 = Instant::now();
-        let painted = driver.frame(dt).map_err(|e| format!("while rendering: {e}"))?;
+        let painted = driver
+            .frame(dt)
+            .map_err(|e| format!("while rendering: {e}"))?;
         let t_frame = t0.elapsed();
 
         // RASTERISE **AND** PRESENT. vello records during paint and rasterises on
@@ -339,7 +366,6 @@ fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
 
     Ok((root, aliases))
 }
-
 
 fn main() -> ExitCode {
     match run() {
