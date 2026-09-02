@@ -17,10 +17,10 @@ DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or
 without Aether**.
 
-**0 of 136 in-scope properties accepted by the host.** 24 more are
+**0 of 138 in-scope properties accepted by the host.** 22 more are
 excluded by decision, and 24 classes under `GuiObject` are in scope.
 
-Of those 136, **35 are already honoured by Aether's
+Of those 138, **35 are already honoured by Aether's
 renderer**. That is not a conformance figure; it splits the backlog by cost.
 
 ## Coverage by class
@@ -59,22 +59,22 @@ conformant implementation may ignore it.
 **Classes.** Video, viewports and chat windows are engine features rather than
 layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `RelativeGui`.
 
-**Properties.** `Archivable`, `AutoLocalize`, `GamepadInputEnabled`, `HoverHapticEffect`, `Name`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `Parent`, `PressHapticEffect`, `RobloxLocked`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
+**Properties.** `Archivable`, `AutoLocalize`, `GamepadInputEnabled`, `HoverHapticEffect`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `PressHapticEffect`, `RobloxLocked`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
 
 ## Property backlog
 
-What conformance actually requires, split by what it costs. 136 properties.
+What conformance actually requires, split by what it costs. 138 properties.
 
-### Host work only (33)
+### Host work only (35)
 
 Aether's renderer already honours these, so the host has to accept, validate and
 store them and nothing else has to change.
 
 - `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `CanvasPosition`, `ClipsDescendants`, `Color`, `CornerRadius`
-- `FillDirection`, `Image`, `ImageColor3`, `ImageTransparency`, `LayoutOrder`, `Offset`, `Padding`, `PaddingBottom`
-- `PaddingLeft`, `PaddingRight`, `PaddingTop`, `Position`, `Rotation`, `Scale`, `Size`, `Text`
-- `TextColor3`, `TextSize`, `TextTransparency`, `TextXAlignment`, `TextYAlignment`, `Thickness`, `Transparency`, `Visible`
-- `ZIndex`
+- `FillDirection`, `Image`, `ImageColor3`, `ImageTransparency`, `LayoutOrder`, `Name`, `Offset`, `Padding`
+- `PaddingBottom`, `PaddingLeft`, `PaddingRight`, `PaddingTop`, `Parent`, `Position`, `Rotation`, `Scale`
+- `Size`, `Text`, `TextColor3`, `TextSize`, `TextTransparency`, `TextXAlignment`, `TextYAlignment`, `Thickness`
+- `Transparency`, `Visible`, `ZIndex`
 
 ### Host and rendering (103)
 

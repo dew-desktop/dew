@@ -169,9 +169,6 @@ const AETHER_PIPELINE: &[&str] = &[
     // Properties list but no less implemented.
     "ClipsDescendants",
     "ZIndex",
-    "Parent",
-    "Name",
-    "ClassName",
     // Carried by the display list rather than by layout.
     "BackgroundColor3",
     "BackgroundTransparency",
@@ -188,6 +185,11 @@ const AETHER_PIPELINE: &[&str] = &[
     "Transparency",
     "Rotation",
     "Offset",
+    // Read through accessors rather than by name, so absent from Layout.Inputs'
+    // Properties list but no less honoured by the pipeline.
+    "Parent",
+    "Name",
+    "ClassName",
 ];
 
 /// Properties a UI host is not expected to implement, and why.
@@ -200,14 +202,20 @@ const AETHER_PIPELINE: &[&str] = &[
 /// Engine bookkeeping: replication, localisation, studio and asset plumbing.
 /// None of it affects what is drawn or where.
 ///
-/// DRAWN FOR THE OLD SUBJECT, AND DUE A REVIEW. "Does not affect what is drawn"
-/// was the right test while this document measured a layout pipeline. The
-/// subject is now what a GUEST CAN REACH, and by that test `Parent`, `Name` and
-/// `ClassName` are not bookkeeping at all -- `Parent` is how a tree is built, and
-/// an application cannot construct anything without it. They are left here rather
-/// than moved quietly, because reclassifying them changes the denominator and
-/// that should be a commit someone can argue with rather than a number that
-/// shifted.
+/// REDRAWN FOR THE CURRENT SUBJECT. "Does not affect what is drawn" was the right
+/// test while this document measured a layout pipeline. The subject is now what a
+/// GUEST CAN REACH, and by that test `Parent` and `Name` were never bookkeeping:
+/// `Parent` is how a tree is built and an application cannot construct anything
+/// without it, and `Name` is what `FindFirstChild` searches on. Both moved out of
+/// this list and into the backlog, where they are the first two things a
+/// DataModel needs rather than things a conformant host may ignore.
+///
+/// `ClassName` never reached this list either way -- it is read-only, and the
+/// walk above keeps only writable properties, because a standard describes what
+/// an implementation must ACCEPT.
+///
+/// What remains is bookkeeping under both tests: replication, localisation,
+/// studio and asset plumbing, and the attribute system.
 const NOT_UI: &[&str] = &[
     "Archivable",
     "RobloxLocked",
@@ -219,9 +227,6 @@ const NOT_UI: &[&str] = &[
     "SourceAssetId",
     "Sandboxed",
     "Capabilities",
-    "Name",
-    "Parent",
-    "ClassName",
     "UniqueId",
     "HistoryId",
     "ActiveQueryNames",
