@@ -11,12 +11,24 @@ Measured against Roblox **0.728.0.7280895**, from the reflection database that s
 with `rbx_reflection_database`. It tracks Roblox releases, so re-running this
 after an update is how the standard notices the platform moved.
 
-**35 of 138 in-scope properties implemented.** 22 more are excluded by
-decision, and 24 classes under `GuiObject` are in scope.
+**THE SUBJECT IS THE DEW HOST**, measured against the Roblox engine. Aether is a
+headless framework that runs on top of a host, the way Ark UI runs on top of a
+DOM; it is a consumer of this surface, never an implementation of it, and is not
+required to conform. What must match is what a Luau application sees, **with or
+without Aether**.
+
+**0 of 136 in-scope properties accepted by the host.** 24 more are
+excluded by decision, and 24 classes under `GuiObject` are in scope.
+
+Of those 136, **35 are already honoured by Aether's
+renderer**. That is not a conformance figure; it splits the backlog by cost.
 
 ## Coverage by class
 
-| Class | Implemented | In the class |
+The middle column is what AETHER'S RENDERER honours, not what the host accepts.
+The host accepts nothing, so a host column would be a table of zeroes.
+
+| Class | Renderable | In the class |
 | :--- | ---: | ---: |
 | `TextBox` | 20 | 64 |
 | `TextButton` | 20 | 62 |
@@ -47,11 +59,24 @@ conformant implementation may ignore it.
 **Classes.** Video, viewports and chat windows are engine features rather than
 layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `RelativeGui`.
 
-**Properties.** `Archivable`, `AutoLocalize`, `GamepadInputEnabled`, `HoverHapticEffect`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `PressHapticEffect`, `RobloxLocked`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
+**Properties.** `Archivable`, `AutoLocalize`, `GamepadInputEnabled`, `HoverHapticEffect`, `Name`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `Parent`, `PressHapticEffect`, `RobloxLocked`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
 
-## Backlog
+## Property backlog
 
-What conformance actually requires, and nothing else.
+What conformance actually requires, split by what it costs. 136 properties.
+
+### Host work only (33)
+
+Aether's renderer already honours these, so the host has to accept, validate and
+store them and nothing else has to change.
+
+- `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `CanvasPosition`, `ClipsDescendants`, `Color`, `CornerRadius`
+- `FillDirection`, `Image`, `ImageColor3`, `ImageTransparency`, `LayoutOrder`, `Offset`, `Padding`, `PaddingBottom`
+- `PaddingLeft`, `PaddingRight`, `PaddingTop`, `Position`, `Rotation`, `Scale`, `Size`, `Text`
+- `TextColor3`, `TextSize`, `TextTransparency`, `TextXAlignment`, `TextYAlignment`, `Thickness`, `Transparency`, `Visible`
+- `ZIndex`
+
+### Host and rendering (103)
 
 - `Active`, `Animated`, `ApplyStrokeMode`, `AspectRatio`, `AspectType`, `AutoButtonColor`, `AutomaticCanvasSize`, `BorderColor3`
 - `BorderMode`, `BorderOffset`, `BorderSizePixel`, `BorderStrokePosition`, `BottomImage`, `BottomImageContent`, `BottomLeftRadius`, `BottomRightRadius`

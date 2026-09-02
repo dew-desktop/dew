@@ -124,10 +124,31 @@ const INPUT_DEVICE_MEMBERS: &[&str] = &[
     "ReturnPressedFromOnScreenKeyboard",
 ];
 
+/// What DEW'S HOST accepts from a guest today.
+///
+/// THE SUBJECT OF THIS STANDARD, and the twin of `IMPLEMENTED_MEMBERS`. Both
+/// halves must measure the same thing or the document is two reports wearing one
+/// title: the members half measured the host from the day it was written, while
+/// this one measured Aether's `Layout.Inputs` and reported 35 of 138 for a
+/// component that is not an implementation of the standard at all.
+///
+/// EMPTY, for the same reason and with the same weight. Nothing in the host
+/// binary imports `rbx_reflection`; there is no `Instance`, so there is nothing
+/// to assign a property to. See `AETHER_PIPELINE` for the number that used to
+/// sit here and what it actually says.
+const HOST_ACCEPTS: &[&str] = &[];
+
 /// What `Aether/src/host/Layout.luau` declares it reads, verbatim from
 /// `Layout.Inputs`. Kept here rather than parsed: a hand-copied list that drifts
 /// is visible in a diff, and a parser that silently matches nothing is not.
-const IMPLEMENTED: &[&str] = &[
+///
+/// NOT A CONFORMANCE FIGURE. Aether is a headless framework that runs on top of
+/// a host, the way Ark UI runs on top of a DOM; it is not an implementation of
+/// this standard and is not required to conform. What this list is good for is
+/// splitting the backlog: a property the pipeline already honours needs host
+/// work only, and one it does not needs host work AND rendering work. That is a
+/// genuinely different cost, and it is the most useful thing this list can say.
+const AETHER_PIPELINE: &[&str] = &[
     "AnchorPoint",
     "AutomaticSize",
     "CanvasPosition",
@@ -178,6 +199,15 @@ const IMPLEMENTED: &[&str] = &[
 ///
 /// Engine bookkeeping: replication, localisation, studio and asset plumbing.
 /// None of it affects what is drawn or where.
+///
+/// DRAWN FOR THE OLD SUBJECT, AND DUE A REVIEW. "Does not affect what is drawn"
+/// was the right test while this document measured a layout pipeline. The
+/// subject is now what a GUEST CAN REACH, and by that test `Parent`, `Name` and
+/// `ClassName` are not bookkeeping at all -- `Parent` is how a tree is built, and
+/// an application cannot construct anything without it. They are left here rather
+/// than moved quietly, because reclassifying them changes the denominator and
+/// that should be a commit someone can argue with rather than a number that
+/// shifted.
 const NOT_UI: &[&str] = &[
     "Archivable",
     "RobloxLocked",
@@ -265,7 +295,8 @@ fn main() {
     // list of 160 properties would be wrong within one Roblox release.
     let markdown = std::env::args().any(|a| a == "--markdown");
     let db = rbx_reflection_database::get().expect("bundled reflection database");
-    let implemented: BTreeSet<&str> = IMPLEMENTED.iter().copied().collect();
+    let implemented: BTreeSet<&str> = HOST_ACCEPTS.iter().copied().collect();
+    let pipeline: BTreeSet<&str> = AETHER_PIPELINE.iter().copied().collect();
 
     // Everything that is, or descends from, GuiObject.
     let mut ui_classes: BTreeMap<&str, &rbx_reflection::ClassDescriptor> = BTreeMap::new();
@@ -319,7 +350,11 @@ fn main() {
         }
         props.sort_unstable();
         props.dedup();
-        let covered = props.iter().filter(|p| implemented.contains(*p)).count();
+        // The per-class column reports what AETHER'S PIPELINE honours, not what
+        // the host accepts -- the host accepts nothing, so a host column would be
+        // a table of zeroes. Labelled at every print site so the two are never
+        // read as one number.
+        let covered = props.iter().filter(|p| pipeline.contains(*p)).count();
         for p in &props {
             all_props.insert(p);
         }
@@ -344,6 +379,14 @@ fn main() {
         .copied()
         .filter(|p| !implemented.contains(p) && !not_ui.contains(p) && !input_device.contains(p))
         .collect();
+
+    // TWO COSTS, NOT ONE. A property Aether's pipeline already honours needs the
+    // host to accept and store it and nothing else; one it does not needs host
+    // work AND rendering work. Splitting the backlog this way is the whole reason
+    // to keep the Aether list in a document that does not measure Aether.
+    let (backlog_host_only, backlog_host_and_render): (Vec<&str>, Vec<&str>) =
+        backlog.iter().partition(|p| pipeline.contains(*p));
+    let pipeline_covered = all_props.iter().filter(|p| pipeline.contains(*p)).count();
 
     // ── The method and event surface, measured the same way ──────────────────
     //
@@ -448,6 +491,9 @@ fn main() {
             in_scope_total,
             &excluded,
             &backlog,
+            pipeline_covered,
+            &backlog_host_only,
+            &backlog_host_and_render,
             &api.version,
             member_methods,
             member_events,
@@ -482,16 +528,17 @@ fn main() {
         all_props.len()
     );
 
-    println!("{:<28} {:>9}  OF", "CLASS", "COVERED");
+    println!("{:<28} {:>10}  OF", "CLASS", "RENDERABLE");
     for (name, covered, total) in per_class.iter().take(18) {
         println!("{name:<28} {covered:>9}  {total}");
     }
 
+    println!();
     println!(
-        "
-IN SCOPE:  {covered_total} of {in_scope_total} ({:.0}%)",
+        "IN SCOPE:  {covered_total} of {in_scope_total} accepted by the Dew host ({:.0}%)",
         100.0 * covered_total as f64 / in_scope_total as f64
     );
+    println!("PIPELINE:  {pipeline_covered} of those are honoured by Aether's renderer already");
     println!(
         "EXCLUDED:  {} ({} engine bookkeeping, {} input devices this host lacks)",
         excluded.len(),
@@ -502,13 +549,23 @@ IN SCOPE:  {covered_total} of {in_scope_total} ({:.0}%)",
             .count()
     );
 
+    println!();
     println!(
-        "
-BACKLOG ({}) -- what conformance actually requires:",
+        "BACKLOG ({}) -- what conformance actually requires, split by cost:",
         backlog.len()
     );
-    for chunk in backlog.chunks(6) {
-        println!("  {}", chunk.join(", "));
+    println!();
+    println!(
+        "  HOST ONLY ({}) -- Aether's pipeline already honours these:",
+        backlog_host_only.len()
+    );
+    for chunk in backlog_host_only.chunks(6) {
+        println!("    {}", chunk.join(", "));
+    }
+    println!();
+    println!("  HOST AND RENDERING ({}):", backlog_host_and_render.len());
+    for chunk in backlog_host_and_render.chunks(6) {
+        println!("    {}", chunk.join(", "));
     }
 
     println!(
@@ -560,6 +617,9 @@ fn emit_markdown(
     in_scope: usize,
     excluded: &[&str],
     backlog: &[&str],
+    pipeline_covered: usize,
+    backlog_host_only: &[&str],
+    backlog_host_and_render: &[&str],
     api_version: &str,
     member_methods: usize,
     member_events: usize,
@@ -594,21 +654,33 @@ fn emit_markdown(
         "after an update is how the standard notices the platform moved.
 "
     );
+    println!("**THE SUBJECT IS THE DEW HOST**, measured against the Roblox engine. Aether is a");
+    println!("headless framework that runs on top of a host, the way Ark UI runs on top of a");
+    println!("DOM; it is a consumer of this surface, never an implementation of it, and is not");
+    println!("required to conform. What must match is what a Luau application sees, **with or");
+    println!("without Aether**.");
+    println!();
     println!(
-        "**{covered} of {in_scope} in-scope properties implemented.** {} more are excluded by",
+        "**{covered} of {in_scope} in-scope properties accepted by the host.** {} more are",
         excluded.len()
     );
     println!(
-        "decision, and {} classes under `GuiObject` are in scope.
-",
+        "excluded by decision, and {} classes under `GuiObject` are in scope.",
         ui_classes.len() - OUT_OF_SCOPE.len()
     );
+    println!();
+    println!("Of those {in_scope}, **{pipeline_covered} are already honoured by Aether's");
+    println!("renderer**. That is not a conformance figure; it splits the backlog by cost.");
+    println!();
 
     println!(
         "## Coverage by class
 "
     );
-    println!("| Class | Implemented | In the class |");
+    println!("The middle column is what AETHER'S RENDERER honours, not what the host accepts.");
+    println!("The host accepts nothing, so a host column would be a table of zeroes.");
+    println!();
+    println!("| Class | Renderable | In the class |");
     println!("| :--- | ---: | ---: |");
     for (name, c, t) in per_class.iter().take(20) {
         println!("| `{name}` | {c} | {t} |");
@@ -644,15 +716,32 @@ fn emit_markdown(
             .join(", ")
     );
 
+    println!("## Property backlog");
+    println!();
     println!(
-        "## Backlog
-"
+        "What conformance actually requires, split by what it costs. {} properties.",
+        backlog.len()
     );
-    println!(
-        "What conformance actually requires, and nothing else.
-"
-    );
-    for chunk in backlog.chunks(8) {
+    println!();
+    println!("### Host work only ({})", backlog_host_only.len());
+    println!();
+    println!("Aether's renderer already honours these, so the host has to accept, validate and");
+    println!("store them and nothing else has to change.");
+    println!();
+    for chunk in backlog_host_only.chunks(8) {
+        println!(
+            "- {}",
+            chunk
+                .iter()
+                .map(|p| format!("`{p}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    println!();
+    println!("### Host and rendering ({})", backlog_host_and_render.len());
+    println!();
+    for chunk in backlog_host_and_render.chunks(8) {
         println!(
             "- {}",
             chunk
