@@ -54,6 +54,15 @@ pub fn load(
 ) -> Result<Mod, String> {
     // 1 ── the manifest, before anything of the mod's runs.
     let manifest = Manifest::load(dir)?;
+
+    //      SAID OUT LOUD, BEFORE THE MOD RUNS. What the manifest asked for and
+    //      the host will not do is reported here rather than discovered by an
+    //      author wondering why their keybinding does nothing. Warnings, not
+    //      errors: a mod whose hotkeys are inert still renders, and refusing to
+    //      load it would be a worse answer than saying which half works.
+    for problem in manifest.unhonoured() {
+        eprintln!("[dew] {}: {problem}", manifest.id);
+    }
     let entry = manifest
         .entry(dir)
         .ok_or_else(|| format!("{}: no {}.luau or main.luau", dir.display(), manifest.id))?;
@@ -91,7 +100,10 @@ pub fn load(
         .map_err(|e| format!("{}: {e}", manifest.id))?;
 
     let (width, height) = size_from(&declaration);
-    let surface = Declared::from_declaration(&declaration, &manifest.id);
+    // The window caption a mod gets when it declares no `title` of its own is its
+    // manifest `name`, falling back to the id. An applet called "Time Tracker &
+    // Pomodoro HUD" in its manifest should not present itself as `timetracker`.
+    let surface = Declared::from_declaration(&declaration, manifest.display_name());
 
     let mount: LuaFunction = declaration.get("mount").map_err(|_| {
         format!(

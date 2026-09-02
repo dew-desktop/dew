@@ -149,6 +149,40 @@ silhouette, not a rounded shape drawn on a dark rectangle.
 pinned 24px from the top-right stays in the corner when the display changes; one
 at `x = 1872` is in the corner of the display it was written on.
 
+## Every `mod.json` field, and whether the host reads it
+
+A manifest field that is parsed and ignored is indistinguishable, from the
+author's side, from one that works. So the list is exhaustive and the host says
+the difference out loud at load.
+
+| field | read by |
+| :--- | :--- |
+| `id` | mod selection (`--mod`), and the entry module `<id>.luau` |
+| `permissions` | the capability table, and nothing outside this list is reachable |
+| `name` | the window caption when the declaration sets no `surface.title`, and the tray tooltip |
+| `description` | the tray tooltip |
+| `hotkeys` | **nothing yet.** Declared and inert; see below |
+
+`hotkeys` is the one field Dew accepts and does not act on. Nothing in the host
+registers a global hotkey, so a declared binding has never fired.
+`mods/timetracker` ships three. Rather than delete the field, which would make
+the format quietly narrower without deciding anything, the host reports each one
+by name at load:
+
+```
+[dew] timetracker: hotkey "togglePomodoro" (Alt+Shift+P) is declared and not bound: Dew registers no global hotkeys yet
+```
+
+**Unknown keys are reported, not refused.** `timetracker` also carries `version`,
+`author` and a `settings` block, and serde drops an unknown key without a word,
+so all three went nowhere for as long as they existed. Each now prints a line.
+They are not rejected because a manifest is a forward-compatible format: a host
+that refuses tomorrow's field cannot read tomorrow's mod.
+
+The list that closes this out is `Manifest::unhonoured` in `host/src/manifest.rs`.
+Empty is the goal, and a field that stops being read cannot be added without
+appearing in it.
+
 ## What Dew owns, and what it does not
 
 | | |

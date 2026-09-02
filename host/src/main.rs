@@ -165,7 +165,20 @@ fn run() -> Result<(), String> {
     // THE TRAY OUTLIVES THE LOOP. Dropping it removes the icon, and Windows
     // leaves a dead one on screen until something repaints — so it is bound here
     // rather than created inline and dropped immediately.
-    let _tray = match tray::Tray::new(icon_path().as_deref()) {
+    // THE TOOLTIP NAMES THE MOD, not the host. `name` and `description` are the
+    // two manifest fields that exist purely to be shown to a person, and this is
+    // where they are shown; a mod that declares neither falls back to its id.
+    let tooltip = if manifest.description.trim().is_empty() {
+        format!("Dew — {}", manifest.display_name())
+    } else {
+        format!(
+            "Dew — {}: {}",
+            manifest.display_name(),
+            manifest.description
+        )
+    };
+
+    let _tray = match tray::Tray::new(icon_path().as_deref(), &tooltip) {
         Ok(tray) => Some(tray),
         // A missing tray is not a reason to refuse to run.
         Err(message) => {

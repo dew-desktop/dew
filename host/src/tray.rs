@@ -149,7 +149,12 @@ pub struct Tray {
 impl Tray {
     /// Install the tray icon. `icon_path` is a `.ico`; a missing one falls back
     /// to the system's application icon rather than to nothing.
-    pub fn new(icon_path: Option<&std::path::Path>) -> Result<Tray, String> {
+    ///
+    /// `tooltip` is what hovering the icon says. It comes from the active mod's
+    /// manifest, which is the only place `description` is read -- before this the
+    /// tip was the literal string "Dew", so every mod's tray icon described the
+    /// host rather than the thing running in it.
+    pub fn new(icon_path: Option<&std::path::Path>, tooltip: &str) -> Result<Tray, String> {
         unsafe {
             let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
             let class = wide("DewTray");
@@ -196,8 +201,12 @@ impl Tray {
                 .or_else(|| LoadIconW(None, IDI_APPLICATION).ok())
                 .unwrap_or_default();
 
+            // 128 WIDE CHARS INCLUDING THE TERMINATOR, which is a Win32 limit
+            // and not a choice. `take(127)` leaves the trailing zero the array
+            // already has; a description longer than that is truncated rather
+            // than refused.
             let mut tip = [0u16; 128];
-            for (i, c) in wide("Dew").into_iter().take(127).enumerate() {
+            for (i, c) in wide(tooltip).into_iter().take(127).enumerate() {
                 tip[i] = c;
             }
 
