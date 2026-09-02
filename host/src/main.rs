@@ -182,11 +182,9 @@ fn run() -> Result<(), String> {
     let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
     let mut last_report = Instant::now();
 
-    loop {
-        let Some(events) = window.poll() else {
-            break;
-        };
-
+    // `poll` returning None is the window closing, which ends the loop -- the
+    // condition IS the shutdown signal rather than a check inside the body.
+    while let Some(events) = window.poll() {
         for event in events {
             match event {
                 Event::PointerMove { x, y } => {
