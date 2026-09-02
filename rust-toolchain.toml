@@ -1,0 +1,17 @@
+# The Rust toolchain for this repository.
+#
+# PINNED, NOT FLOATED, and for a reason this repo hit within one CI run. Adding
+# clippy with `-D warnings` on `@stable` means every Rust release is a chance for
+# CI to go red with no commit behind it: 1.98 turned `sort_by(|a, b| b.cmp(a))`
+# into an error that 1.92 never mentioned, so the failure was invisible locally
+# and unavoidable in CI.
+#
+# It also makes local match CI, which is the half that saves the time. A lint you
+# cannot reproduce on your own machine is a lint you fix by guessing and pushing.
+#
+# Bumping this is a deliberate commit: change the channel, run
+# `cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings`,
+# and fix what the newer lints found in the same change.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

@@ -23,7 +23,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      # THE TOOLCHAIN HAS ONE HOME, rust-toolchain.toml, and this reads it rather
+      # than naming a version twice. `@stable` floated six releases ahead of the
+      # machine this is developed on, which `-D warnings` turns into a red build
+      # nobody can reproduce locally.
+      - name: Resolve the toolchain pin
+        id: rust
+        shell: bash
+        run: |
+          channel=$(grep -m1 -oE 'channel = "[^"]+"' rust-toolchain.toml | cut -d'"' -f2)
+          test -n "$channel" || { echo "no channel in rust-toolchain.toml"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Rust pinned at $channel"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: host
@@ -73,8 +88,23 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      # THE TOOLCHAIN HAS ONE HOME, rust-toolchain.toml, and this reads it rather
+      # than naming a version twice. `@stable` floated six releases ahead of the
+      # machine this is developed on, which `-D warnings` turns into a red build
+      # nobody can reproduce locally.
+      - name: Resolve the toolchain pin
+        id: rust
+        shell: bash
+        run: |
+          channel=$(grep -m1 -oE 'channel = "[^"]+"' rust-toolchain.toml | cut -d'"' -f2)
+          test -n "$channel" || { echo "no channel in rust-toolchain.toml"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Rust pinned at $channel"
+
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:

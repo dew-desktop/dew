@@ -212,7 +212,7 @@ fn main() {
         per_class.push((name.to_string(), covered, props.len()));
     }
 
-    per_class.sort_by(|a, b| b.2.cmp(&a.2));
+    per_class.sort_by_key(|a| std::cmp::Reverse(a.2));
     let not_ui: BTreeSet<&str> = NOT_UI.iter().copied().collect();
     let input_device: BTreeSet<&str> = INPUT_DEVICE.iter().copied().collect();
 
