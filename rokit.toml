@@ -1,0 +1,20 @@
+# Toolchain for the Dew repository, managed by Rokit.
+#
+# THIS FILE DID NOT EXIST, and CI installed rokit anyway. `setup-rokit` puts
+# rokit on PATH and then installs what a manifest asks for; with no manifest it
+# asks for nothing, so `lune` was never there and commitlint failed with "the
+# term 'lune' is not recognized". That step is the last one in the build job and
+# the job had never reached it, so the gap read as green for as long as the job
+# failed earlier.
+#
+# Pinned, not floated, and pinned to the same version Aether uses: the two
+# repositories run the same scripts and a version that drifts between them turns
+# into a difference nobody chose.
+
+[tools]
+lune = "lune-org/lune@0.10.4"
+
+# PESDE IS NOT HERE, and cannot be. Its releases are tagged
+# `v0.7.3+registry.0.2.3`, and rokit cannot resolve a version carrying build
+# metadata. CI installs it from the release archive directly; if that version
+# moves, move it in .github/workflows/ci.yml too.
