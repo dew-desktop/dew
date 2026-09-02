@@ -23,13 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # AETHER IS A PRIVATE GIT DEPENDENCY. Cargo fetches it over HTTPS, and the
-      # default token cannot read another repository in the organisation -- so
-      # this needs a token that can, and the build fails at `cargo fetch` without
-      # one rather than anywhere informative.
-      - name: Authenticate for the private Aether pin
-        run: git config --global url."https://${{ secrets.AETHER_READ_TOKEN }}@github.com/".insteadOf "https://github.com/"
-
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
