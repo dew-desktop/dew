@@ -36,6 +36,7 @@
 
 mod content;
 mod enums;
+pub mod render;
 mod vocabulary;
 
 use content::{LuaContent, LuaFont};
@@ -70,7 +71,7 @@ pub struct Dom {
 pub type SharedDom = Arc<Mutex<Dom>>;
 
 impl Dom {
-    fn insert(&mut self, class: String, name: String) -> usize {
+    pub fn insert(&mut self, class: String, name: String) -> usize {
         self.slots.push(Some(Node {
             class,
             name,
@@ -99,6 +100,48 @@ impl Dom {
         }
         if let Some(node) = self.node_mut(id) {
             node.parent = None;
+        }
+    }
+
+    // ── What the renderer reads ──────────────────────────────────────────────
+    //
+    // The arena is private and stays private; these are the questions a display
+    // pass asks, answered without handing out a `&Node`. Keeping the struct
+    // sealed is what stops the renderer growing a second idea of what a property
+    // means -- it must go through the same default resolution a guest read does.
+
+    /// A property as stored, or the engine default when nothing assigned it.
+    pub fn property(&self, id: usize, key: &str) -> Option<Variant> {
+        let node = self.node(id)?;
+        if let Some(stored) = node.props.get(key) {
+            return Some(stored.clone());
+        }
+        default_for(&node.class, key)
+    }
+
+    pub fn children(&self, id: usize) -> Vec<usize> {
+        self.node(id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn class_of(&self, id: usize) -> Option<String> {
+        self.node(id).map(|n| n.class.clone())
+    }
+
+    pub fn name_of(&self, id: usize) -> Option<String> {
+        self.node(id).map(|n| n.name.clone())
+    }
+
+    /// Write a property the HOST computed, bypassing the guest's rules.
+    ///
+    /// `AbsolutePosition` and `AbsoluteSize` are read-only to a guest and written
+    /// by whatever laid out the tree. Going through the assignment path would
+    /// refuse them, correctly, so the host writes them here instead -- the one
+    /// door, named so it is greppable, rather than making the public path lenient.
+    pub fn set_internal(&mut self, id: usize, key: &str, value: Variant) {
+        if let Some(node) = self.node_mut(id) {
+            node.props.insert(key.to_string(), value);
         }
     }
 
@@ -328,6 +371,40 @@ pub fn accepts(class: &str, property: &str) -> bool {
     }
 }
 
+/// The value a property of this type reads before anything has set it.
+///
+/// THE REFLECTION DATABASE HAS NO DEFAULT FOR A COMPUTED PROPERTY.
+/// `AbsolutePosition` and `AbsoluteSize` are results of layout, so nothing
+/// serialises them and `default_properties` does not carry them -- which made a
+/// guest reading one before the first layout get NIL, and then fail at
+/// `.X` with a message about indexing nil rather than about layout.
+///
+/// The engine answers `(0, 0)` there. A zero is the honest reading of "nothing
+/// has laid this out yet", and it is the same number the engine gives, so this
+/// is parity rather than a convenience.
+fn zero_for(ty: VariantType) -> Option<Variant> {
+    Some(match ty {
+        VariantType::Bool => Variant::Bool(false),
+        VariantType::String => Variant::String(String::new()),
+        VariantType::Float32 => Variant::Float32(0.0),
+        VariantType::Float64 => Variant::Float64(0.0),
+        VariantType::Int32 => Variant::Int32(0),
+        VariantType::Int64 => Variant::Int64(0),
+        VariantType::UDim => Variant::UDim(rbx_types::UDim::new(0.0, 0)),
+        VariantType::UDim2 => Variant::UDim2(rbx_types::UDim2::new(
+            rbx_types::UDim::new(0.0, 0),
+            rbx_types::UDim::new(0.0, 0),
+        )),
+        VariantType::Vector2 => Variant::Vector2(rbx_types::Vector2::new(0.0, 0.0)),
+        VariantType::Color3 => Variant::Color3(rbx_types::Color3::new(0.0, 0.0, 0.0)),
+        VariantType::Content => Variant::Content(rbx_types::Content::none()),
+        VariantType::ContentId => Variant::ContentId(String::new().into()),
+        // Anything else keeps the old behaviour of reading nil. Inventing a value
+        // for a type this host cannot present would be worse than the nil.
+        _ => return None,
+    })
+}
+
 /// Turn a Lua value into an enum member of `ty`.
 ///
 /// ACCEPTS A NUMBER AS WELL AS AN `EnumItem`, because the engine does and a guest
@@ -512,9 +589,15 @@ impl UserData for InstanceRef {
                 return to_lua(lua, stored, enum_type);
             }
 
-            match default_for(&node.class, &key) {
-                Some(value) => to_lua(lua, &value, enum_type),
-                None => Ok(LuaValue::Nil),
+            if let Some(value) = default_for(&node.class, &key) {
+                return to_lua(lua, &value, enum_type);
+            }
+            match &descriptor.data_type {
+                DataType::Value(ty) => match zero_for(*ty) {
+                    Some(value) => to_lua(lua, &value, enum_type),
+                    None => Ok(LuaValue::Nil),
+                },
+                _ => Ok(LuaValue::Nil),
             }
         });
 
@@ -627,6 +710,18 @@ impl UserData for InstanceRef {
                 Ok(())
             },
         );
+    }
+}
+
+/// A guest-facing handle onto an instance the HOST made.
+///
+/// The renderer needs a root to lay out against and a guest needs something to
+/// parent into. Both want the same handle, and it is not `Instance.new`'s job to
+/// hand out one for a node the host created.
+pub fn handle(dom: &SharedDom, id: usize) -> InstanceRef {
+    InstanceRef {
+        dom: dom.clone(),
+        id,
     }
 }
 

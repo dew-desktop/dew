@@ -54,8 +54,88 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     Ok(painter)
 }
 
+/// `--script <path> --snapshot <png>`: run a Luau file against Dew's OWN
+/// DataModel and draw what it built. No Aether anywhere in the chain.
+///
+/// THIS IS THE STANDALONE STORY MADE CONCRETE. Everything else in this binary
+/// mounts an Aether component and paints Aether's display list; this path hands a
+/// guest `Instance`, the vocabulary and `Enum`, takes the tree it parents into a
+/// root, and turns that into the same `Frame` the same painter consumes. It is
+/// what the property surface has been measuring all along, finally reaching a
+/// pixel.
+///
+/// `DewRoot` RATHER THAN `game`, and the reason is not cosmetic. `game` would be
+/// the honest parity name and it is exactly what `Host.detect()` keys on:
+/// `typeof(game) == "Instance"` is Aether's whole test for whether it is on an
+/// engine. Installing one here without the services and the rest behind it would
+/// make every Aether mod in this same binary take the Roblox branch and fail. It
+/// arrives when there is enough behind it to be true.
+fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPainter), String> {
+    let script = PathBuf::from(path);
+    let dir = script
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    let caps = aether_runtime::Capabilities {
+        require_roots: vec![dir],
+        print: true,
+        aliases: HashMap::new(),
+    };
+    let vm = aether_runtime::Vm::new(caps).map_err(|e| e.to_string())?;
+
+    let dom = datamodel::SharedDom::default();
+    datamodel::install(vm.lua(), &dom).map_err(|e| e.to_string())?;
+    datamodel::install_vocabulary(vm.lua()).map_err(|e| e.to_string())?;
+
+    // The surface the guest parents into. A `ScreenGui` because that is what a
+    // Roblox application expects to find above its tree, so the same file has a
+    // chance of running in both places later.
+    let root = dom
+        .lock()
+        .expect("dom")
+        .insert("ScreenGui".into(), "DewRoot".into());
+    vm.lua()
+        .globals()
+        .set("DewRoot", datamodel::handle(&dom, root))
+        .map_err(|e| e.to_string())?;
+
+    let source =
+        std::fs::read_to_string(&script).map_err(|e| format!("{}: {e}", script.display()))?;
+    vm.lua()
+        .load(&source)
+        .set_name(script.display().to_string())
+        .exec()
+        .map_err(|e| format!("{}: {e}", script.display()))?;
+
+    let frame = datamodel::render::frame_of(&dom, root, width as f32, height as f32);
+    let drawn = frame.nodes.len();
+    let mut surface = painter(width, height)?;
+    aether_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
+    Ok((format!("{drawn} node(s)"), surface))
+}
+
 fn run() -> Result<(), String> {
     println!("💧 Dew starting");
+
+    // `--script` NEVER TOUCHES THE MOD DIRECTORY. A standalone run is a different
+    // product from the applet host and shares only the painter, so it returns
+    // before any of the discovery below.
+    if let Some(script) = flag("--script") {
+        let (width, height) = flag("--size")
+            .and_then(|s| {
+                let (w, h) = s.split_once('x')?;
+                Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
+            })
+            .unwrap_or((400, 300));
+        let (report, mut surface) = run_script(&script, width, height)?;
+        let out = flag("--snapshot").unwrap_or_else(|| "dew.png".to_string());
+        surface
+            .write_png(&out)
+            .map_err(|code| format!("could not write {out}: rasteriser status {code}"))?;
+        println!("[dew] {script}: {report} -> {out} ({width}x{height})");
+        return Ok(());
+    }
 
     let mods_dir = find_dir("mods").ok_or("could not find a `mods` directory")?;
     let (aether_root, aliases) = aether_aliases()?;
