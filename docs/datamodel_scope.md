@@ -17,7 +17,7 @@ DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or
 without Aether**.
 
-**87 of 138 in-scope properties accepted by the host.** 22 more are
+**125 of 138 in-scope properties accepted by the host.** 22 more are
 excluded by decision, and 24 classes under `GuiObject` are in scope.
 
 Of those 138, **35 are already honoured by Aether's
@@ -63,23 +63,19 @@ layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `Rel
 
 ## Property backlog
 
-What conformance actually requires, split by what it costs. 51 properties.
+What conformance actually requires, split by what it costs. 13 properties.
 
-### Host work only (5)
+### Host work only (1)
 
 Aether's renderer already honours these, so the host has to accept, validate and
 store them and nothing else has to change.
 
-- `AutomaticSize`, `FillDirection`, `Image`, `TextXAlignment`, `TextYAlignment`
+- `Image`
 
-### Host and rendering (46)
+### Host and rendering (12)
 
-- `ApplyStrokeMode`, `AspectType`, `AutomaticCanvasSize`, `BorderMode`, `BorderStrokePosition`, `BottomImage`, `BottomImageContent`, `DominantAxis`
-- `EasingDirection`, `EasingStyle`, `ElasticBehavior`, `FlexMode`, `Font`, `FontFace`, `HorizontalAlignment`, `HorizontalFlex`
-- `HorizontalScrollBarInset`, `HoverImage`, `HoverImageContent`, `ImageContent`, `InputSink`, `ItemLineAlignment`, `LineJoinMode`, `MajorAxis`
-- `MidImage`, `MidImageContent`, `PressedImage`, `PressedImageContent`, `ResampleMode`, `ScaleType`, `ScrollingDirection`, `SizeConstraint`
-- `SortOrder`, `StartCorner`, `StrokeSizingMode`, `Style`, `TextDirection`, `TextTruncate`, `TileMode`, `TopImage`
-- `TopImageContent`, `Type`, `VerticalAlignment`, `VerticalFlex`, `VerticalScrollBarInset`, `VerticalScrollBarPosition`
+- `BottomImage`, `BottomImageContent`, `FontFace`, `HoverImage`, `HoverImageContent`, `ImageContent`, `MidImage`, `MidImageContent`
+- `PressedImage`, `PressedImageContent`, `TopImage`, `TopImageContent`
 
 ## Methods and events
 

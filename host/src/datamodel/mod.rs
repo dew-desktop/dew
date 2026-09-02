@@ -34,8 +34,10 @@
 //! than reporting a rejection, because "this host has not built that yet" and
 //! "your program is wrong" must never arrive as the same message.
 
+mod enums;
 mod vocabulary;
 
+use enums::LuaEnumItem;
 use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 use rbx_reflection::{DataType, PropertyDescriptor, Scriptability};
@@ -296,12 +298,82 @@ pub fn accepts(class: &str, property: &str) -> bool {
     ) {
         return false;
     }
-    matches!(descriptor.data_type, DataType::Value(ty) if supported(ty))
+    match descriptor.data_type {
+        DataType::Value(ty) => supported(ty),
+        // Every enum in the reflection database is reachable, so a property typed
+        // by one is accepted whatever the enum is.
+        DataType::Enum(_) => true,
+        _ => false,
+    }
+}
+
+/// Turn a Lua value into an enum member of `ty`.
+///
+/// ACCEPTS A NUMBER AS WELL AS AN `EnumItem`, because the engine does and a guest
+/// written against it may pass either. A number is checked against the enum's own
+/// members rather than stored blindly: enum values are not a contiguous range, and
+/// storing an unnamed one produces a property that reads back as nothing.
+fn coerce_enum(
+    value: &LuaValue,
+    ty: &str,
+    class: &str,
+    property: &str,
+) -> LuaResult<rbx_types::Enum> {
+    if let LuaValue::UserData(ud) = value {
+        if let Ok(item) = ud.borrow::<LuaEnumItem>() {
+            // THE ENUM TYPE IS CHECKED, not just the shape. `Enum.FillDirection`
+            // and `Enum.AutomaticSize` both have a member numbered 1, so a
+            // mismatched item would otherwise be stored as a plausible wrong
+            // answer rather than refused.
+            if item.ty != ty {
+                return Err(LuaError::runtime(format!(
+                    "{class}.{property} expects an Enum.{ty}, got an Enum.{}",
+                    item.ty
+                )));
+            }
+            return Ok(rbx_types::Enum::from_u32(item.value));
+        }
+    }
+    if let Some(n) = number(value) {
+        let raw = whole_i32(n, &format!("{class}.{property}"))?;
+        let raw = u32::try_from(raw).map_err(|_| {
+            LuaError::runtime(format!(
+                "{class}.{property} has no Enum.{ty} numbered {raw}"
+            ))
+        })?;
+        if !enums::value_is_valid(ty, raw) {
+            return Err(LuaError::runtime(format!(
+                "{class}.{property} has no Enum.{ty} numbered {raw}"
+            )));
+        }
+        return Ok(rbx_types::Enum::from_u32(raw));
+    }
+    Err(LuaError::runtime(format!(
+        "{class}.{property} expects an Enum.{ty}, got {}",
+        value.type_name()
+    )))
 }
 
 /// Turn a stored `Variant` back into something a guest can read.
-fn to_lua(lua: &Lua, value: &Variant) -> LuaResult<LuaValue> {
+fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> LuaResult<LuaValue> {
     Ok(match value {
+        // `Variant::Enum` is a bare `u32` with no record of which enum it belongs
+        // to, so naming it needs the property's declared type. Without that a
+        // guest reads a number where the engine hands back an EnumItem.
+        Variant::Enum(raw) => {
+            let ty = enum_type.ok_or_else(|| {
+                LuaError::runtime("an enum value was stored without its declared type")
+            })?;
+            match enums::item_by_value(ty, raw.to_u32()) {
+                Some(item) => item.into_lua(lua)?,
+                None => {
+                    return Err(LuaError::runtime(format!(
+                        "Enum.{ty} has no member numbered {}",
+                        raw.to_u32()
+                    )))
+                }
+            }
+        }
         Variant::Bool(v) => LuaValue::Boolean(*v),
         Variant::String(v) => lua.create_string(v)?.into_lua(lua)?,
         Variant::Float32(v) => LuaValue::Number(*v as f64),
@@ -392,13 +464,14 @@ impl UserData for InstanceRef {
                 _ => {}
             }
 
-            if let Some(stored) = node.props.get(&key) {
-                return to_lua(lua, stored);
-            }
-
+            // THE DESCRIPTOR IS LOOKED UP FIRST, EVEN FOR A STORED VALUE, because
+            // an enum cannot name itself. `Variant::Enum` is a bare number, so
+            // presenting one needs the declared type from the reflection database
+            // whether the value was assigned or defaulted.
+            //
             // NOT FOUND IS AN ERROR, NOT NIL. Reading a misspelled property on
             // the engine is an error, and a host that answered nil would let a
-            // typo travel silently into layout -- which is the exact failure the
+            // typo travel silently into layout -- the exact failure the
             // reflection database was brought in to prevent.
             let Some(descriptor) = describe(&node.class, &key) else {
                 return Err(LuaError::runtime(format!(
@@ -406,10 +479,17 @@ impl UserData for InstanceRef {
                     key, node.class
                 )));
             };
-            let _ = descriptor;
+            let enum_type = match &descriptor.data_type {
+                DataType::Enum(name) => Some(*name),
+                _ => None,
+            };
+
+            if let Some(stored) = node.props.get(&key) {
+                return to_lua(lua, stored, enum_type);
+            }
 
             match default_for(&node.class, &key) {
-                Some(value) => to_lua(lua, &value),
+                Some(value) => to_lua(lua, &value, enum_type),
                 None => Ok(LuaValue::Nil),
             }
         });
@@ -500,11 +580,12 @@ impl UserData for InstanceRef {
                 let want = match &descriptor.data_type {
                     DataType::Value(ty) => *ty,
                     DataType::Enum(name) => {
-                        return Err(LuaError::runtime(format!(
-                            "{class}.{key} is the enum {name}, which this host cannot accept \
-                             yet. The property is real; Dew's DataModel implements enums in a \
-                             later slice. See docs/datamodel_scope.md."
-                        )))
+                        let stored = coerce_enum(&value, name, &class, &key)?;
+                        dom.node_mut(this.id)
+                            .expect("checked")
+                            .props
+                            .insert(key, Variant::Enum(stored));
+                        return Ok(());
                     }
                     other => {
                         return Err(LuaError::runtime(format!(
@@ -553,7 +634,8 @@ impl UserData for InstanceRef {
 /// vocabulary; on Dew it should be a no-op for the same reason, and that is the
 /// end state this is waiting for rather than working around.
 pub fn install_vocabulary(lua: &Lua) -> LuaResult<()> {
-    vocabulary::install(lua)
+    vocabulary::install(lua)?;
+    enums::install(lua)
 }
 
 pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
@@ -771,6 +853,57 @@ mod tests {
         )
         .expect("eval");
         assert_eq!(got, 1.0);
+    }
+
+    #[test]
+    fn an_enum_property_round_trips_as_an_enum_item() {
+        let got: String = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.AutomaticSize = Enum.AutomaticSize.Y
+            return f.AutomaticSize.Name
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, "Y");
+    }
+
+    #[test]
+    fn an_unset_enum_property_reads_its_default_as_an_enum_item() {
+        // Not a number. `Variant::Enum` is a bare u32, so this only works because
+        // the read path resolves the declared type before presenting the value.
+        let got: String =
+            eval(r#"return typeof(Instance.new("Frame").AutomaticSize)"#).expect("eval");
+        assert_eq!(got, "EnumItem");
+    }
+
+    #[test]
+    fn a_member_of_the_wrong_enum_is_refused() {
+        // Both are numbered 1 in their own enum, so a host that compared values
+        // and not types would store this as a plausible wrong answer.
+        let err = run(r#"Instance.new("Frame").AutomaticSize = Enum.FillDirection.Vertical"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expects an Enum.AutomaticSize"), "{err}");
+        assert!(err.contains("got an Enum.FillDirection"), "{err}");
+    }
+
+    #[test]
+    fn a_number_is_accepted_for_an_enum_only_when_the_enum_has_it() {
+        let got: String = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.AutomaticSize = Enum.AutomaticSize.XY.Value
+            return f.AutomaticSize.Name
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, "XY");
+
+        let err = run(r#"Instance.new("Frame").AutomaticSize = 99"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no Enum.AutomaticSize numbered 99"), "{err}");
     }
 
     #[test]
