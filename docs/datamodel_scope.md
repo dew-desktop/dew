@@ -17,7 +17,7 @@ DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or
 without Aether**.
 
-**125 of 138 in-scope properties accepted by the host.** 22 more are
+**136 of 138 in-scope properties accepted by the host.** 22 more are
 excluded by decision, and 24 classes under `GuiObject` are in scope.
 
 Of those 138, **35 are already honoured by Aether's
@@ -61,21 +61,32 @@ layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `Rel
 
 **Properties.** `Archivable`, `AutoLocalize`, `GamepadInputEnabled`, `HoverHapticEffect`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `PressHapticEffect`, `RobloxLocked`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
 
+## Names the host is split on
+
+Accepted on one class and refused on another, because the same property name
+is a different type on unrelated classes. `UIStroke.Color` is a `Color3` the
+host takes; `UIGradient.Color` is a `ColorSequence` it does not.
+
+These count as NOT accepted. Counting them the other way let one class mask
+another, and reported the surface as 100% complete while two properties were
+still unassignable.
+
+- `Color`
+- `Transparency`
+
 ## Property backlog
 
-What conformance actually requires, split by what it costs. 13 properties.
+What conformance actually requires, split by what it costs. 2 properties.
 
-### Host work only (1)
+### Host work only (2)
 
 Aether's renderer already honours these, so the host has to accept, validate and
 store them and nothing else has to change.
 
-- `Image`
+- `Color`, `Transparency`
 
-### Host and rendering (12)
+### Host and rendering (0)
 
-- `BottomImage`, `BottomImageContent`, `FontFace`, `HoverImage`, `HoverImageContent`, `ImageContent`, `MidImage`, `MidImageContent`
-- `PressedImage`, `PressedImageContent`, `TopImage`, `TopImageContent`
 
 ## Methods and events
 

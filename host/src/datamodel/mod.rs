@@ -34,9 +34,11 @@
 //! than reporting a rejection, because "this host has not built that yet" and
 //! "your program is wrong" must never arrive as the same message.
 
+mod content;
 mod enums;
 mod vocabulary;
 
+use content::{LuaContent, LuaFont};
 use enums::LuaEnumItem;
 use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
@@ -246,6 +248,22 @@ fn coerce(value: &LuaValue, want: VariantType, class: &str, property: &str) -> L
         VariantType::Rect => {
             Variant::Rect(LuaRect::from_value(value).ok_or_else(|| wrong("a Rect"))?)
         }
+        VariantType::Content => {
+            Variant::Content(LuaContent::from_value(value).ok_or_else(|| wrong("a Content"))?)
+        }
+        // THE LEGACY FORM IS A BARE STRING. `Image` is a `ContentId` and
+        // `ImageContent` is a `Content`; the same asset is named both ways
+        // depending on which generation of the property a guest reaches for.
+        VariantType::ContentId => Variant::ContentId(
+            value
+                .as_string()
+                .ok_or_else(|| wrong("a content string"))?
+                .to_string_lossy()
+                .into(),
+        ),
+        VariantType::Font => {
+            Variant::Font(LuaFont::from_value(value).ok_or_else(|| wrong("a Font"))?)
+        }
         // `supported` was checked before the match, so every remaining type has
         // an arm above. Written as unreachable rather than as a second copy of
         // the message, because two copies is how a predicate and its error drift
@@ -275,6 +293,9 @@ pub fn supported(ty: VariantType) -> bool {
             | VariantType::Vector2
             | VariantType::Color3
             | VariantType::Rect
+            | VariantType::Content
+            | VariantType::ContentId
+            | VariantType::Font
     )
 }
 
@@ -385,6 +406,9 @@ fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> LuaResult<LuaV
         Variant::Vector2(v) => LuaVector2(*v).into_lua(lua)?,
         Variant::Color3(v) => LuaColor3(*v).into_lua(lua)?,
         Variant::Rect(v) => LuaRect(*v).into_lua(lua)?,
+        Variant::Content(v) => LuaContent(v.clone()).into_lua(lua)?,
+        Variant::ContentId(v) => lua.create_string(v.as_str())?.into_lua(lua)?,
+        Variant::Font(v) => LuaFont(v.clone()).into_lua(lua)?,
         // The engine stores some colours as bytes. A guest reads a Color3 either
         // way; presenting two Luau types for one engine concept would make
         // `typeof` answer differently depending on which property was read.
@@ -635,7 +659,8 @@ impl UserData for InstanceRef {
 /// end state this is waiting for rather than working around.
 pub fn install_vocabulary(lua: &Lua) -> LuaResult<()> {
     vocabulary::install(lua)?;
-    enums::install(lua)
+    enums::install(lua)?;
+    content::install(lua)
 }
 
 pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
@@ -770,13 +795,14 @@ mod tests {
 
     #[test]
     fn an_unimplemented_type_says_so_rather_than_rejecting_the_program() {
-        // `FontFace` is a Font, which no slice has reached. The message must not
-        // read as "your program is wrong".
+        // `UIGradient.Color` is a `ColorSequence`, which no slice has reached.
+        // The message must not read as "your program is wrong".
         //
-        // This test named `Size` until the vocabulary landed and made it pass for
-        // the wrong reason -- a test for "unsupported" has to be repointed every
-        // time support arrives, which is the test doing its job.
-        let err = run(r#"Instance.new("TextLabel").FontFace = 1"#)
+        // NAMED `Size`, THEN `FontFace`, NOW THIS. A test for "unsupported" has
+        // to be repointed every time support arrives, which is the test doing its
+        // job rather than failing at it. When nothing in scope is unsupported it
+        // has no subject and should be deleted rather than weakened.
+        let err = run(r#"Instance.new("UIGradient").Color = 1"#)
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot accept yet"), "{err}");
@@ -904,6 +930,85 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("no Enum.AutomaticSize numbered 99"), "{err}");
+    }
+
+    #[test]
+    fn a_content_property_round_trips() {
+        let got: String = eval(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.ImageContent = Content.fromUri("rbxassetid://12345")
+            return i.ImageContent.Uri
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, "rbxassetid://12345");
+    }
+
+    #[test]
+    fn a_content_property_accepts_a_plain_string_like_the_engine() {
+        let got: String = eval(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.ImageContent = "rbxassetid://7"
+            return i.ImageContent.Uri
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, "rbxassetid://7");
+    }
+
+    #[test]
+    fn the_legacy_content_id_property_stays_a_string() {
+        // `Image` is a ContentId and `ImageContent` is a Content. The same asset
+        // is named both ways depending on which generation the guest reaches for,
+        // and each must read back as its own type.
+        let got: String = eval(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Image = "rbxassetid://9"
+            return typeof(i.Image) .. ":" .. i.Image
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, "string:rbxassetid://9");
+    }
+
+    #[test]
+    fn any_well_formed_uri_is_accepted_whatever_its_scheme() {
+        // ADR-003: an unresolvable Content is a rendering outcome, not a property
+        // error. A Roblox application moved here with a grant withheld is a
+        // correct application missing an image, and refusing the assignment would
+        // make it a broken one.
+        for uri in [
+            "rbxassetid://1",
+            "dew://icon.png",
+            "https://example.invalid/a.png",
+        ] {
+            let got: String = eval(&format!(
+                r#"
+                local i = Instance.new("ImageLabel")
+                i.ImageContent = Content.fromUri("{uri}")
+                return i.ImageContent.Uri
+            "#
+            ))
+            .expect("eval");
+            assert_eq!(got, uri);
+        }
+    }
+
+    #[test]
+    fn a_font_property_round_trips() {
+        let got: (String, u32) = eval(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.FontFace = Font.new("Inter", Enum.FontWeight.Bold)
+            return t.FontFace.Family, t.FontFace.Weight
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got.0, "Inter");
+        assert_eq!(got.1, 700);
     }
 
     #[test]

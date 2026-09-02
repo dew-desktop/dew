@@ -297,11 +297,22 @@ fn main() {
     let db = rbx_reflection_database::get().expect("bundled reflection database");
     let pipeline: BTreeSet<&str> = AETHER_PIPELINE.iter().copied().collect();
 
-    // ASKED OF THE HOST, one property at a time, for every class in scope. A name
-    // counts as accepted if the host would take it on any class that declares it;
-    // the same name can be a different type on two unrelated classes, and the
-    // per-class table below is what shows that when it happens.
-    let mut implemented: BTreeSet<&str> = BTreeSet::new();
+    // ASKED OF THE HOST, one property at a time, for every class in scope.
+    //
+    // A NAME COUNTS AS ACCEPTED ONLY IF IT IS ACCEPTED EVERYWHERE IT APPEARS, and
+    // getting that backwards produced a 100% that was not true. The census is by
+    // NAME, and the same name is a different type on unrelated classes:
+    // `UIStroke.Color` is a `Color3` the host takes, `UIGradient.Color` is a
+    // `ColorSequence` it does not. Counting a name as accepted when ANY class
+    // accepted it let the first mask the second, and `Color`, `Transparency` and
+    // anything else split that way vanished from the backlog while still being
+    // unassignable.
+    //
+    // `disagreed` is kept and reported rather than silently resolved, because a
+    // name the host takes on one class and refuses on another is a fact about the
+    // surface worth seeing.
+    let mut accepted_somewhere: BTreeSet<&str> = BTreeSet::new();
+    let mut refused_somewhere: BTreeSet<&str> = BTreeSet::new();
 
     // Everything that is, or descends from, GuiObject.
     let mut ui_classes: BTreeMap<&str, &rbx_reflection::ClassDescriptor> = BTreeMap::new();
@@ -357,7 +368,9 @@ fn main() {
         props.dedup();
         for property in &props {
             if dew_host::datamodel::accepts(name, property) {
-                implemented.insert(property);
+                accepted_somewhere.insert(property);
+            } else {
+                refused_somewhere.insert(property);
             }
         }
 
@@ -392,8 +405,14 @@ fn main() {
         .copied()
         .filter(|p| not_ui.contains(p) || input_device.contains(p))
         .collect();
-    let implemented: BTreeSet<&str> = implemented
-        .into_iter()
+    let disagreed: Vec<&str> = accepted_somewhere
+        .intersection(&refused_somewhere)
+        .copied()
+        .filter(|p| !not_ui.contains(p) && !input_device.contains(p))
+        .collect();
+    let implemented: BTreeSet<&str> = accepted_somewhere
+        .difference(&refused_somewhere)
+        .copied()
         .filter(|p| !not_ui.contains(p) && !input_device.contains(p))
         .collect();
 
@@ -521,6 +540,7 @@ fn main() {
             in_scope_total,
             &excluded,
             &backlog,
+            &disagreed,
             pipeline_covered,
             &backlog_host_only,
             &backlog_host_and_render,
@@ -569,6 +589,13 @@ fn main() {
         100.0 * covered_total as f64 / in_scope_total as f64
     );
     println!("PIPELINE:  {pipeline_covered} of those are honoured by Aether's renderer already");
+    if !disagreed.is_empty() {
+        println!(
+            "SPLIT:     {} name(s) the host takes on one class and refuses on another: {}",
+            disagreed.len(),
+            disagreed.join(", ")
+        );
+    }
     println!(
         "EXCLUDED:  {} ({} engine bookkeeping, {} input devices this host lacks)",
         excluded.len(),
@@ -647,6 +674,7 @@ fn emit_markdown(
     in_scope: usize,
     excluded: &[&str],
     backlog: &[&str],
+    disagreed: &[&str],
     pipeline_covered: usize,
     backlog_host_only: &[&str],
     backlog_host_and_render: &[&str],
@@ -745,6 +773,23 @@ fn emit_markdown(
             .collect::<Vec<_>>()
             .join(", ")
     );
+
+    if !disagreed.is_empty() {
+        println!("## Names the host is split on");
+        println!();
+        println!("Accepted on one class and refused on another, because the same property name");
+        println!("is a different type on unrelated classes. `UIStroke.Color` is a `Color3` the");
+        println!("host takes; `UIGradient.Color` is a `ColorSequence` it does not.");
+        println!();
+        println!("These count as NOT accepted. Counting them the other way let one class mask");
+        println!("another, and reported the surface as 100% complete while two properties were");
+        println!("still unassignable.");
+        println!();
+        for name in disagreed {
+            println!("- `{name}`");
+        }
+        println!();
+    }
 
     println!("## Property backlog");
     println!();
