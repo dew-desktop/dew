@@ -16,7 +16,7 @@ mod surface;
 mod tray;
 
 use aether_raster::{Backend, Font};
-use aether_runtime::{Driver, Painter, RasterPainter, Rgb};
+use aether_runtime::{Driver, RasterPainter, Rgb};
 use aether_window::{Button, Event, Window};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -259,7 +259,7 @@ fn run() -> Result<(), String> {
                 painted_frames += 1;
             }
             if last_report.elapsed() >= Duration::from_secs(1) {
-                let n = painted_frames.max(1) as u32;
+                let n = painted_frames.max(1);
                 println!(
                     "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
                     sum_frame / n,

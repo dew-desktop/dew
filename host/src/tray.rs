@@ -83,7 +83,7 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_COMMAND => {
-            let id = (wp.0 & 0xFFFF) as usize;
+            let id = wp.0 & 0xFFFF;
             if id == ID_EXIT {
                 EXIT_REQUESTED.store(1, Ordering::Relaxed);
             } else if let Some((_, _, us)) = CAPS.iter().find(|(cap_id, _, _)| *cap_id == id) {

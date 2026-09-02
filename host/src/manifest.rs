@@ -35,6 +35,19 @@ impl Permission {
     }
 }
 
+/// PARSED AND NOT ALL USED. Only `id` and `permissions` are read today; `name`,
+/// `description` and `hotkeys` are accepted, validated as strings, and dropped.
+///
+/// They stay because they are the manifest CONTRACT rather than leftovers -- a mod
+/// author writing one is describing something Dew intends to honour, and deleting
+/// the fields would make the format quietly narrower without deciding anything.
+/// `hotkeys` in particular is not decoration: `mods/timetracker` binds three of
+/// them, and today the host reads none, so a mod can ship a keybinding that has
+/// never once fired.
+///
+/// The allow is scoped to this struct on purpose. A crate-level one would also
+/// hide the next field that stops being read for a worse reason.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
     pub id: String,

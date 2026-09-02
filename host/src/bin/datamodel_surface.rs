@@ -271,7 +271,7 @@ fn main() {
         all_props.len()
     );
 
-    println!("{:<28} {:>9}  {}", "CLASS", "COVERED", "OF");
+    println!("{:<28} {:>9}  OF", "CLASS", "COVERED");
     for (name, covered, total) in per_class.iter().take(18) {
         println!("{name:<28} {covered:>9}  {total}");
     }

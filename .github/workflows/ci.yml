@@ -69,11 +69,23 @@ jobs:
       - run: lune run scripts/commitlint_check.luau
 
   format:
-    name: fmt
+    name: fmt and clippy
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+
       - run: cargo fmt --manifest-path host/Cargo.toml --all --check
+
+      # `-D warnings` OR THIS STEP IS DECORATION. clippy exits 0 with warnings on
+      # stdout, so without it the job is green whether the code is clean or not --
+      # and a lint nobody fails is a lint nobody fixes.
+      #
+      # --all-targets covers the test builds too. The tray's `WM_COMMAND` cast was
+      # only reported there.
+      - run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
