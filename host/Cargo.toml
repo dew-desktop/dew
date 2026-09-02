@@ -40,9 +40,9 @@ name = "datamodel-surface"
 path = "src/bin/datamodel_surface.rs"
 
 [dependencies]
-aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "c31e708ec7507ac11160073f89360f3ea85c20ab", features = ["raster"] }
-aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "c31e708ec7507ac11160073f89360f3ea85c20ab" }
-aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "c31e708ec7507ac11160073f89360f3ea85c20ab" }
+aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "de6e395e5de0c54d125d7f8401ce87ca23eafa83", features = ["raster"] }
+aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "de6e395e5de0c54d125d7f8401ce87ca23eafa83" }
+aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "de6e395e5de0c54d125d7f8401ce87ca23eafa83" }
 
 # WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
 # from a platform -- surfaces and input -- and a tray icon is neither. It presents
