@@ -47,6 +47,12 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # FIRST, NOT LAST. This was the final step of the job, so a malformed
+      # subject line cost a full toolchain install, a pesde install, a cold cargo
+      # build and three mod mounts -- about ten minutes -- to find out about. It
+      # needs nothing but lune, so it runs the moment lune exists.
+      - run: lune run scripts/commitlint_check.luau
+
       # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
       # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
       # them. Pinned here to the version this repository is developed against.
@@ -69,6 +75,12 @@ jobs:
 
       - run: cargo build --manifest-path host/Cargo.toml
 
+      # `cargo test` compiled ZERO tests until the manifest gained some, and
+      # printed `ok. 0 passed` while doing it -- the same sentence a passing suite
+      # prints. It runs here so that the moment a test exists, something fails
+      # when it breaks.
+      - run: cargo test --manifest-path host/Cargo.toml
+
       # EVERY MOD, not the first one. A mod that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
       # a broken mod here.
@@ -81,7 +93,6 @@ jobs:
             cargo run --quiet --manifest-path host/Cargo.toml -- --mod "$id" --snapshot "/tmp/$id.png"
           done
 
-      - run: lune run scripts/commitlint_check.luau
 
   format:
     name: fmt and clippy
