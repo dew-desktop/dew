@@ -10,6 +10,120 @@
 use rbx_reflection::{DataType, Scriptability};
 use std::collections::{BTreeMap, BTreeSet};
 
+// ── The method and event surface ─────────────────────────────────────────────
+
+/// The scriptable API surface, pinned.
+///
+/// NOT FROM `rbx_reflection_database`, and it cannot be. That crate's
+/// `ClassDescriptor` carries exactly `name`, `tags`, `superclass`, `properties`
+/// and `default_properties` -- it is built for file serialisation, and a method
+/// cannot be serialised. So the property half of this tool has a machine-readable
+/// source and the method half had none, which is why the API surface has never
+/// been measured while the property surface has been measured since d4.
+///
+/// `scripts/fetch_api_surface.luau` writes this from Roblox's own API dump.
+/// Embedded rather than read at runtime so the data is part of the build: a
+/// missing or malformed file is a compile error rather than a tool that runs and
+/// reports a smaller surface than exists.
+const API_SURFACE: &str = include_str!("../../datamodel/api_surface.json");
+
+#[derive(serde::Deserialize)]
+struct ApiSurface {
+    version: String,
+    classes: BTreeMap<String, ApiClass>,
+}
+
+#[derive(serde::Deserialize)]
+struct ApiClass {
+    superclass: Option<String>,
+    /// Member name to "Function" or "Event".
+    ///
+    /// A MAP RATHER THAN A LIST because Lune, which writes this file, encodes an
+    /// empty array and an empty map identically as `{}` -- and most classes in
+    /// the chain introduce no members of their own. A list shape failed to
+    /// deserialise on precisely the classes that carry nothing, which is the
+    /// least useful place for a format to be ambiguous.
+    members: BTreeMap<String, String>,
+}
+
+/// Methods and events DEW'S HOST exposes to a guest today.
+///
+/// WHAT IS BEING MEASURED, because getting this wrong makes the number
+/// meaningless: the standard's two implementations are the ROBLOX ENGINE and the
+/// DEW HOST. Both run Luau applications; an application must mount and render
+/// the same on either, WITH OR WITHOUT Aether. Aether is a headless framework
+/// that runs on top of a host, the way Ark UI runs on top of a DOM -- it is a
+/// consumer of this surface and never an implementation of it, so nothing Aether
+/// provides belongs in this list. `createPressable` taking `OnClick` says
+/// something about Aether's API and nothing about whether a Dew guest can write
+/// `button.Activated:Connect(fn)`.
+///
+/// EMPTY, AND THAT IS THE MEASUREMENT. Dew's guest reaches a `dew` capability
+/// table and Aether's module surface. There is no `Instance`, no property
+/// assignment, no signal to connect -- so an application written against the
+/// engine directly has nothing to run against here.
+const IMPLEMENTED_MEMBERS: &[&str] = &[];
+
+/// Animation belongs to another seam, on both hosts.
+///
+/// `TweenPosition` bakes an easing curve into the instance and cannot be
+/// interrupted and re-targeted without restarting. Excluding it is a claim that
+/// a conformant host may offer motion through a separate mechanism rather than
+/// through methods on the object, and it is the one exclusion here most likely
+/// to be argued with -- an application calling `frame:TweenPosition(...)` on the
+/// engine has no equivalent line to write on a conformant host that omits it.
+const MOTION: &[&str] = &["TweenPosition", "TweenSize", "TweenSizeAndPosition"];
+
+/// Engine bookkeeping, the method-and-event twin of `NOT_UI`.
+///
+/// Tags, attributes, styling, wiring, actors and reflection-on-self. None of it
+/// affects what is drawn or where, and a standard that demanded it would be
+/// describing Roblox's object model rather than describing a UI.
+const NOT_UI_MEMBERS: &[&str] = &[
+    "AddTag",
+    "GetTags",
+    "HasTag",
+    "RemoveTag",
+    "GetAttribute",
+    "GetAttributes",
+    "SetAttribute",
+    "GetAttributeChangedSignal",
+    "AttributeChanged",
+    "GetStyled",
+    "GetStyledPropertyChangedSignal",
+    "StyledPropertiesChanged",
+    "GetConnectedWires",
+    "GetInputPins",
+    "GetOutputPins",
+    "WiringChanged",
+    "GetActor",
+    "GetFullName",
+    "IsPropertyModified",
+    "ResetPropertyToDefault",
+    "QueryDescendants",
+    "Clone",
+    "AncestryChanged",
+];
+
+/// Input devices this host does not have -- the twin of `INPUT_DEVICE`.
+///
+/// Touch gestures, gamepad selection traversal, and the on-screen keyboard's
+/// return key. Same reasoning and the same caveat: if Dew grows gamepad or touch
+/// support these stop being out of scope and become backlog, which is why they
+/// are listed apart rather than lumped in above.
+const INPUT_DEVICE_MEMBERS: &[&str] = &[
+    "TouchTap",
+    "TouchPan",
+    "TouchPinch",
+    "TouchRotate",
+    "TouchSwipe",
+    "TouchLongPress",
+    "SelectionGained",
+    "SelectionLost",
+    "SelectionChanged",
+    "ReturnPressedFromOnScreenKeyboard",
+];
+
 /// What `Aether/src/host/Layout.luau` declares it reads, verbatim from
 /// `Layout.Inputs`. Kept here rather than parsed: a hand-copied list that drifts
 /// is visible in a diff, and a parser that silently matches nothing is not.
@@ -231,6 +345,95 @@ fn main() {
         .filter(|p| !implemented.contains(p) && !not_ui.contains(p) && !input_device.contains(p))
         .collect();
 
+    // ── The method and event surface, measured the same way ──────────────────
+    //
+    // Members are declared on the class that INTRODUCES them and are not
+    // repeated on descendants, so this walks the superclass chain exactly as the
+    // property pass does. `TextButton` declares one function of its own; the
+    // forty-odd a script can call on it come from six ancestors.
+    let api: ApiSurface =
+        serde_json::from_str(API_SURFACE).expect("host/datamodel/api_surface.json is malformed");
+
+    let implemented_members: BTreeSet<&str> = IMPLEMENTED_MEMBERS.iter().copied().collect();
+    let motion: BTreeSet<&str> = MOTION.iter().copied().collect();
+    let not_ui_members: BTreeSet<&str> = NOT_UI_MEMBERS.iter().copied().collect();
+    let input_device_members: BTreeSet<&str> = INPUT_DEVICE_MEMBERS.iter().copied().collect();
+
+    let mut all_members: BTreeMap<&str, &str> = BTreeMap::new();
+    let mut missing_from_dump: Vec<&str> = Vec::new();
+    for name in ui_classes.keys() {
+        if OUT_OF_SCOPE.contains(name) {
+            continue;
+        }
+        let mut cursor = Some((*name).to_string());
+        let mut found = false;
+        while let Some(current) = cursor {
+            let Some(class) = api.classes.get(&current) else {
+                break;
+            };
+            found = true;
+            for (member, kind) in &class.members {
+                all_members.insert(member, kind);
+            }
+            cursor = class.superclass.clone();
+        }
+        // A class the reflection database has and the pinned dump does not means
+        // the two describe different Roblox builds, or that MODIFIERS drifted
+        // from the fetch script's copy of it. The surface reported would be short
+        // either way, so it is said out loud rather than shrugged off.
+        if !found {
+            missing_from_dump.push(name);
+        }
+    }
+
+    let classify = |m: &str| -> &'static str {
+        if implemented_members.contains(m) {
+            "implemented"
+        } else if motion.contains(m)
+            || not_ui_members.contains(m)
+            || input_device_members.contains(m)
+        {
+            "excluded"
+        } else {
+            "backlog"
+        }
+    };
+
+    let member_methods = all_members.values().filter(|k| **k == "Function").count();
+    let member_events = all_members.len() - member_methods;
+    let m_implemented = all_members
+        .keys()
+        .filter(|m| classify(m) == "implemented")
+        .count();
+    let m_excluded = all_members
+        .keys()
+        .filter(|m| classify(m) == "excluded")
+        .count();
+    let member_backlog: Vec<&str> = all_members
+        .keys()
+        .copied()
+        .filter(|m| classify(m) == "backlog")
+        .collect();
+    let member_in_scope = m_implemented + member_backlog.len();
+
+    // THE TWO HALVES CITE DIFFERENT ROBLOX BUILDS, and until now nothing said so.
+    // The property surface tracks whatever `rbx_reflection_database` ships; the
+    // member surface is pinned by scripts/fetch_api_surface.luau; the conformance
+    // cases record `verifiedAgainst` by hand. A standard measured against two
+    // builds at once is one no implementation can actually satisfy, so the skew
+    // is reported rather than left to be found by reading two files side by side.
+    let db_version = db
+        .version
+        .iter()
+        .map(|n| n.to_string())
+        .collect::<Vec<_>>()
+        .join(".");
+    let build_skew = if db_version == api.version {
+        None
+    } else {
+        Some((db_version.clone(), api.version.clone()))
+    };
+
     // THE DENOMINATOR IS THE POINT. Against every writable property the figure
     // is meaningless, because it counts things nobody intends to implement.
     // Against what is in scope it is a completion percentage someone can act on.
@@ -245,6 +448,14 @@ fn main() {
             in_scope_total,
             &excluded,
             &backlog,
+            &api.version,
+            member_methods,
+            member_events,
+            m_implemented,
+            member_in_scope,
+            m_excluded,
+            &member_backlog,
+            build_skew.as_ref(),
         );
         return;
     }
@@ -299,8 +510,48 @@ BACKLOG ({}) -- what conformance actually requires:",
     for chunk in backlog.chunks(6) {
         println!("  {}", chunk.join(", "));
     }
+
+    println!(
+        "
+METHODS AND EVENTS, from the pinned dump at Roblox {}
+",
+        api.version
+    );
+    println!(
+        "{} in scope of {} reachable ({member_methods} methods, {member_events} events)",
+        member_in_scope,
+        all_members.len()
+    );
+    println!(
+        "IN SCOPE:  {m_implemented} of {member_in_scope} ({:.0}%)",
+        100.0 * m_implemented as f64 / member_in_scope as f64
+    );
+    println!("EXCLUDED:  {m_excluded} (engine bookkeeping, input devices, motion)");
+    println!(
+        "
+API BACKLOG ({}) -- no Dew guest can reach any of these:",
+        member_backlog.len()
+    );
+    for chunk in member_backlog.chunks(6) {
+        println!("  {}", chunk.join(", "));
+    }
+
+    for name in &missing_from_dump {
+        println!();
+        println!("WARNING  {name} is in scope and absent from host/datamodel/api_surface.json.");
+        println!("         Regenerate it: lune run scripts/fetch_api_surface.luau");
+    }
+    if let Some((property_build, member_build)) = &build_skew {
+        println!();
+        println!("WARNING  this standard is measured against TWO Roblox builds.");
+        println!("         properties  {property_build}  (whatever rbx_reflection_database ships)");
+        println!("         methods     {member_build}  (pinned by scripts/fetch_api_surface.luau)");
+        println!("         Conformance against two builds at once is not a thing an");
+        println!("         implementation can satisfy.");
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_markdown(
     version: &[u32],
     ui_classes: &BTreeMap<&str, &rbx_reflection::ClassDescriptor>,
@@ -309,6 +560,14 @@ fn emit_markdown(
     in_scope: usize,
     excluded: &[&str],
     backlog: &[&str],
+    api_version: &str,
+    member_methods: usize,
+    member_events: usize,
+    m_implemented: usize,
+    member_in_scope: usize,
+    m_excluded: usize,
+    member_backlog: &[&str],
+    build_skew: Option<&(String, String)>,
 ) {
     let v = version
         .iter()
@@ -320,11 +579,13 @@ fn emit_markdown(
 "
     );
     println!("<!-- GENERATED. Regenerate with:");
+    println!("       lune run scripts/fetch_api_surface.luau   # only to move the Roblox pin");
+    print!("       cargo run --manifest-path host/Cargo.toml --bin datamodel-surface");
+    println!(" -- --markdown > docs/datamodel_scope.md");
+    println!("     Do not edit by hand; edit the classification lists in the tool.");
     println!(
-        "       cargo run --manifest-path host/Cargo.toml --bin datamodel_surface -- --markdown"
-    );
-    println!(
-        "     Do not edit by hand; edit the classification lists in the tool. -->
+        "     The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
+     the command it gave had never run. -->
 "
     );
     println!("Measured against Roblox **{v}**, from the reflection database that ships");
@@ -400,5 +661,63 @@ fn emit_markdown(
                 .collect::<Vec<_>>()
                 .join(", ")
         );
+    }
+
+    println!();
+    println!("## Methods and events");
+    println!();
+    println!("The other half of what an application can reach, and the half that had never");
+    println!("been measured. `rbx_reflection_database` carries no methods and no events, so");
+    println!("this comes from Roblox's own API dump, pinned at **{api_version}** by");
+    println!("`scripts/fetch_api_surface.luau`.");
+    println!();
+    println!("**THE TWO IMPLEMENTATIONS ARE THE ROBLOX ENGINE AND THE DEW HOST.** Aether is a");
+    println!("headless framework that runs on top of a host, the way Ark UI runs on top of a");
+    println!("DOM. It is a consumer of this surface and never an implementation of it, so it");
+    println!("is not measured here and is not required to conform. What must match is what a");
+    println!("Luau application sees, **with or without Aether**.");
+    println!();
+    // ONE LITERAL PER LINE, no `\`-continuations. rustfmt joins a continued
+    // string literal and keeps the indentation it was wrapped with, so the
+    // generated markdown came out with runs of spaces inside a sentence.
+    println!("**{m_implemented} of {member_in_scope} in-scope members implemented.**",);
+    println!(
+        "{m_excluded} more are excluded by decision, out of {} reachable",
+        member_in_scope + m_excluded
+    );
+    println!("({member_methods} methods, {member_events} events).");
+    println!();
+    println!("Dew's guest reaches a `dew` capability table and Aether's module surface. There");
+    println!("is no `Instance`, no property assignment, and no signal to connect, so an");
+    println!("application written against the engine directly has nothing to run against.");
+    println!("The number is zero because the mechanism is absent, not because it is partial.");
+    println!();
+    println!("### API backlog");
+    println!();
+    println!("What parity actually requires. No Dew guest can reach any of these.");
+    println!();
+    for chunk in member_backlog.chunks(8) {
+        println!(
+            "- {}",
+            chunk
+                .iter()
+                .map(|m| format!("`{m}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
+    if let Some((property_build, member_build)) = build_skew {
+        println!();
+        println!("### This document measures two Roblox builds at once");
+        println!();
+        println!("| half | build | pinned by |");
+        println!("| :--- | :--- | :--- |");
+        println!("| properties | {property_build} | whatever `rbx_reflection_database` ships |");
+        println!("| methods and events | {member_build} | `scripts/fetch_api_surface.luau` |");
+        println!();
+        println!("Conformance against two builds at once is not a thing an implementation can");
+        println!("satisfy. Closing this means moving the property half onto the pinned dump too,");
+        println!("or pinning the crate to the build the dump names.");
     }
 }

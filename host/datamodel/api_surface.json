@@ -1,0 +1,267 @@
+{
+  "classes": {
+    "CanvasGroup": {
+      "members": {},
+      "superclass": "GuiObject"
+    },
+    "Frame": {
+      "members": {},
+      "superclass": "GuiObject"
+    },
+    "GuiBase": {
+      "members": {},
+      "superclass": "Instance"
+    },
+    "GuiBase2d": {
+      "members": {
+        "SelectionChanged": "Event"
+      },
+      "superclass": "GuiBase"
+    },
+    "GuiButton": {
+      "members": {
+        "Activated": "Event",
+        "MouseButton1Click": "Event",
+        "MouseButton1Down": "Event",
+        "MouseButton1Up": "Event",
+        "MouseButton2Click": "Event",
+        "MouseButton2Down": "Event",
+        "MouseButton2Up": "Event",
+        "SecondaryActivated": "Event"
+      },
+      "superclass": "GuiObject"
+    },
+    "GuiLabel": {
+      "members": {},
+      "superclass": "GuiObject"
+    },
+    "GuiObject": {
+      "members": {
+        "InputBegan": "Event",
+        "InputChanged": "Event",
+        "InputEnded": "Event",
+        "MouseEnter": "Event",
+        "MouseLeave": "Event",
+        "MouseMoved": "Event",
+        "MouseWheelBackward": "Event",
+        "MouseWheelForward": "Event",
+        "SelectionGained": "Event",
+        "SelectionLost": "Event",
+        "TouchLongPress": "Event",
+        "TouchPan": "Event",
+        "TouchPinch": "Event",
+        "TouchRotate": "Event",
+        "TouchSwipe": "Event",
+        "TouchTap": "Event",
+        "TweenPosition": "Function",
+        "TweenSize": "Function",
+        "TweenSizeAndPosition": "Function"
+      },
+      "superclass": "GuiBase2d"
+    },
+    "ImageButton": {
+      "members": {},
+      "superclass": "GuiButton"
+    },
+    "ImageLabel": {
+      "members": {},
+      "superclass": "GuiLabel"
+    },
+    "InputActionLabel": {
+      "members": {},
+      "superclass": "GuiObject"
+    },
+    "Instance": {
+      "members": {
+        "AddTag": "Function",
+        "AncestryChanged": "Event",
+        "AttributeChanged": "Event",
+        "ChildAdded": "Event",
+        "ChildRemoved": "Event",
+        "ClearAllChildren": "Function",
+        "Clone": "Function",
+        "DescendantAdded": "Event",
+        "DescendantRemoving": "Event",
+        "Destroy": "Function",
+        "Destroying": "Event",
+        "FindFirstAncestor": "Function",
+        "FindFirstAncestorOfClass": "Function",
+        "FindFirstAncestorWhichIsA": "Function",
+        "FindFirstChild": "Function",
+        "FindFirstChildOfClass": "Function",
+        "FindFirstChildWhichIsA": "Function",
+        "FindFirstDescendant": "Function",
+        "GetActor": "Function",
+        "GetAttribute": "Function",
+        "GetAttributeChangedSignal": "Function",
+        "GetAttributes": "Function",
+        "GetChildren": "Function",
+        "GetDescendants": "Function",
+        "GetFullName": "Function",
+        "GetStyled": "Function",
+        "GetStyledPropertyChangedSignal": "Function",
+        "GetTags": "Function",
+        "HasTag": "Function",
+        "IsAncestorOf": "Function",
+        "IsDescendantOf": "Function",
+        "IsPropertyModified": "Function",
+        "QueryDescendants": "Function",
+        "RemoveTag": "Function",
+        "ResetPropertyToDefault": "Function",
+        "SetAttribute": "Function",
+        "StyledPropertiesChanged": "Event",
+        "WaitForChild": "Function"
+      },
+      "superclass": "Object"
+    },
+    "Object": {
+      "members": {
+        "Changed": "Event",
+        "GetPropertyChangedSignal": "Function",
+        "IsA": "Function"
+      },
+      "superclass": "<<<ROOT>>>"
+    },
+    "RelativeGui": {
+      "members": {},
+      "superclass": "GuiObject"
+    },
+    "ScrollingFrame": {
+      "members": {
+        "GetScrollVelocity": "Function",
+        "ResetScrollVelocity": "Function"
+      },
+      "superclass": "GuiObject"
+    },
+    "TextBox": {
+      "members": {
+        "CaptureFocus": "Function",
+        "FocusLost": "Event",
+        "Focused": "Event",
+        "IsFocused": "Function",
+        "ReleaseFocus": "Function",
+        "ReturnPressedFromOnScreenKeyboard": "Event"
+      },
+      "superclass": "GuiObject"
+    },
+    "TextButton": {
+      "members": {},
+      "superclass": "GuiButton"
+    },
+    "TextChannelWindow": {
+      "members": {},
+      "superclass": "GuiObject"
+    },
+    "TextLabel": {
+      "members": {},
+      "superclass": "GuiLabel"
+    },
+    "UIAspectRatioConstraint": {
+      "members": {},
+      "superclass": "UIConstraint"
+    },
+    "UIBase": {
+      "members": {},
+      "superclass": "Instance"
+    },
+    "UIComponent": {
+      "members": {},
+      "superclass": "UIBase"
+    },
+    "UIConstraint": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UICorner": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UIFlexItem": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UIGradient": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UIGridLayout": {
+      "members": {},
+      "superclass": "UIGridStyleLayout"
+    },
+    "UIGridStyleLayout": {
+      "members": {},
+      "superclass": "UILayout"
+    },
+    "UILayout": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UIListLayout": {
+      "members": {},
+      "superclass": "UIGridStyleLayout"
+    },
+    "UIPadding": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UIPageLayout": {
+      "members": {
+        "JumpTo": "Function",
+        "JumpToIndex": "Function",
+        "Next": "Function",
+        "PageEnter": "Event",
+        "PageLeave": "Event",
+        "Previous": "Function",
+        "Stopped": "Event"
+      },
+      "superclass": "UIGridStyleLayout"
+    },
+    "UIScale": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UISizeConstraint": {
+      "members": {},
+      "superclass": "UIConstraint"
+    },
+    "UIStroke": {
+      "members": {},
+      "superclass": "UIComponent"
+    },
+    "UITableLayout": {
+      "members": {},
+      "superclass": "UIGridStyleLayout"
+    },
+    "UITextSizeConstraint": {
+      "members": {},
+      "superclass": "UIConstraint"
+    },
+    "VideoDisplay": {
+      "members": {
+        "GetConnectedWires": "Function",
+        "GetInputPins": "Function",
+        "GetOutputPins": "Function",
+        "WiringChanged": "Event"
+      },
+      "superclass": "GuiObject"
+    },
+    "VideoFrame": {
+      "members": {
+        "DidLoop": "Event",
+        "Ended": "Event",
+        "Loaded": "Event",
+        "Pause": "Function",
+        "Paused": "Event",
+        "Play": "Function",
+        "Played": "Event"
+      },
+      "superclass": "GuiObject"
+    },
+    "ViewportFrame": {
+      "members": {},
+      "superclass": "GuiObject"
+    }
+  },
+  "note": "Methods and events only. Properties come from rbx_reflection_database. Generated by scripts/fetch_api_surface.luau; do not edit by hand.",
+  "version": "0.736.0.7361346"
+}
