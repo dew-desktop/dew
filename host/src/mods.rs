@@ -81,7 +81,6 @@ pub fn load(
         aliases: aliases.clone(),
     };
     let vm = Vm::new(caps.clone()).map_err(|e| format!("{}: {e}", manifest.id))?;
-    modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     //      THE DATAMODEL IS PER MOD, like the VM. Two mods sharing one instance
     //      tree could reach each other's widgets by walking Parent, which is the
@@ -90,8 +89,20 @@ pub fn load(
     //      a capability: it is the language of the platform, present for every
     //      guest on Roblox and on Dew alike, and an application that had to be
     //      handed it would not be the application that runs on both.
+    //
+    //      `Instance` ONLY, NOT THE VOCABULARY. Aether carries its own `UDim2`,
+    //      `Color3` and the rest for off-engine hosts and publishes them with
+    //      `if rawget(g, name) == nil` -- first writer wins -- so a partial host
+    //      vocabulary does not merge with Aether's, it blocks it. Installing the
+    //      five host types here took `Color3.fromHex` away and all three mods
+    //      stopped loading, in either order. `datamodel::install_vocabulary` says
+    //      what closing that costs; it is the change where Aether consumes the
+    //      host's vocabulary rather than carrying one, and it retires
+    //      `Headless.luau` at the same time.
     let dom = datamodel::SharedDom::default();
     datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
+
+    modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     // 3 ── the framework's own desktop ceremony. Dew ships no Luau of its own:
     //      resolving the host, installing the vocabulary, opening a reactive

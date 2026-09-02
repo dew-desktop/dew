@@ -34,12 +34,15 @@
 //! than reporting a rejection, because "this host has not built that yet" and
 //! "your program is wrong" must never arrive as the same message.
 
+mod vocabulary;
+
 use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 use rbx_reflection::{DataType, PropertyDescriptor, Scriptability};
 use rbx_types::{Variant, VariantType};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use vocabulary::{LuaColor3, LuaRect, LuaUDim, LuaUDim2, LuaVector2};
 
 /// One instance's state. Never handed to a guest directly.
 struct Node {
@@ -151,6 +154,38 @@ fn default_for(class: &str, property: &str) -> Option<Variant> {
     None
 }
 
+/// A Lua number, whichever way the VM is holding it.
+///
+/// `Value::as_f64` matches ONLY `Value::Number` and `Value::as_i32` matches ONLY
+/// `Value::Integer`; neither crosses the boundary. Luau has one number type and a
+/// guest writing `10` cannot know or care which variant mlua produced, so reading
+/// through the strict accessors made `UDim2.new(0, 10, 0, 20)` silently yield
+/// offsets of zero -- every literal offset in every layout, discarded.
+///
+/// Nothing caught it because no test had set a numeric property. The tests below
+/// now set one of each kind.
+pub(crate) fn number(value: &LuaValue) -> Option<f64> {
+    match value {
+        LuaValue::Integer(i) => Some(*i as f64),
+        LuaValue::Number(n) => Some(*n),
+        _ => None,
+    }
+}
+
+/// A whole number of pixels, refusing a fraction rather than truncating.
+///
+/// `Offset`, `ZIndex` and `LayoutOrder` are integers in the engine. Truncating
+/// 10.7 to 10 produces a UI that is subtly wrong everywhere and blames nobody, so
+/// this asks instead.
+pub(crate) fn whole_i32(value: f64, what: &str) -> LuaResult<i32> {
+    if value.fract() != 0.0 {
+        return Err(LuaError::runtime(format!(
+            "{what} is a whole number; got {value}"
+        )));
+    }
+    Ok(value as i32)
+}
+
 /// Turn a Lua value into a `Variant` of the declared type, or say why not.
 ///
 /// THE TWO FAILURES ARE DIFFERENT MESSAGES. A value of the wrong shape is the
@@ -177,10 +212,38 @@ fn coerce(value: &LuaValue, want: VariantType, class: &str, property: &str) -> L
                 .ok_or_else(|| wrong("a string"))?
                 .to_string_lossy(),
         ),
-        VariantType::Float32 => Variant::Float32(value.as_f32().ok_or_else(|| wrong("a number"))?),
-        VariantType::Float64 => Variant::Float64(value.as_f64().ok_or_else(|| wrong("a number"))?),
-        VariantType::Int32 => Variant::Int32(value.as_i32().ok_or_else(|| wrong("an integer"))?),
-        VariantType::Int64 => Variant::Int64(value.as_i64().ok_or_else(|| wrong("an integer"))?),
+        VariantType::Float32 => {
+            Variant::Float32(number(value).ok_or_else(|| wrong("a number"))? as f32)
+        }
+        VariantType::Float64 => Variant::Float64(number(value).ok_or_else(|| wrong("a number"))?),
+        VariantType::Int32 => Variant::Int32(whole_i32(
+            number(value).ok_or_else(|| wrong("a number"))?,
+            &format!("{class}.{property}"),
+        )?),
+        VariantType::Int64 => {
+            let n = number(value).ok_or_else(|| wrong("a number"))?;
+            if n.fract() != 0.0 {
+                return Err(LuaError::runtime(format!(
+                    "{class}.{property} is a whole number; got {n}"
+                )));
+            }
+            Variant::Int64(n as i64)
+        }
+        VariantType::UDim => {
+            Variant::UDim(LuaUDim::from_value(value).ok_or_else(|| wrong("a UDim"))?)
+        }
+        VariantType::UDim2 => {
+            Variant::UDim2(LuaUDim2::from_value(value).ok_or_else(|| wrong("a UDim2"))?)
+        }
+        VariantType::Vector2 => {
+            Variant::Vector2(LuaVector2::from_value(value).ok_or_else(|| wrong("a Vector2"))?)
+        }
+        VariantType::Color3 => {
+            Variant::Color3(LuaColor3::from_value(value).ok_or_else(|| wrong("a Color3"))?)
+        }
+        VariantType::Rect => {
+            Variant::Rect(LuaRect::from_value(value).ok_or_else(|| wrong("a Rect"))?)
+        }
         // `supported` was checked before the match, so every remaining type has
         // an arm above. Written as unreachable rather than as a second copy of
         // the message, because two copies is how a predicate and its error drift
@@ -205,6 +268,11 @@ pub fn supported(ty: VariantType) -> bool {
             | VariantType::Float64
             | VariantType::Int32
             | VariantType::Int64
+            | VariantType::UDim
+            | VariantType::UDim2
+            | VariantType::Vector2
+            | VariantType::Color3
+            | VariantType::Rect
     )
 }
 
@@ -240,6 +308,15 @@ fn to_lua(lua: &Lua, value: &Variant) -> LuaResult<LuaValue> {
         Variant::Float64(v) => LuaValue::Number(*v),
         Variant::Int32(v) => LuaValue::Integer(*v as i64),
         Variant::Int64(v) => LuaValue::Integer(*v),
+        Variant::UDim(v) => LuaUDim(*v).into_lua(lua)?,
+        Variant::UDim2(v) => LuaUDim2(*v).into_lua(lua)?,
+        Variant::Vector2(v) => LuaVector2(*v).into_lua(lua)?,
+        Variant::Color3(v) => LuaColor3(*v).into_lua(lua)?,
+        Variant::Rect(v) => LuaRect(*v).into_lua(lua)?,
+        // The engine stores some colours as bytes. A guest reads a Color3 either
+        // way; presenting two Luau types for one engine concept would make
+        // `typeof` answer differently depending on which property was read.
+        Variant::Color3uint8(v) => LuaColor3(rbx_types::Color3::from(*v)).into_lua(lua)?,
         // A property whose stored type this slice cannot present. Reading it is
         // not an error the way writing it is -- the value exists and is correct,
         // this host simply has no representation for it yet -- but returning nil
@@ -455,6 +532,30 @@ impl UserData for InstanceRef {
 /// DataModel is not a capability: it is the language of the platform, present for
 /// every guest on both hosts, and an application that had to be handed it would
 /// not be the same application that runs on Roblox.
+/// Install `UDim2`, `Color3`, `Vector2`, `UDim` and `Rect`.
+///
+/// SEPARATE FROM `install`, AND NOT CALLED FOR AN AETHER MOD YET. Aether carries
+/// its own vocabulary for off-engine hosts, and `Headless.InstallVocabulary`
+/// publishes it with `if rawget(g, name) == nil` -- first writer wins. So a
+/// partial host vocabulary does not merge with Aether's, it BLOCKS it: installing
+/// these into a mod VM took `Color3.fromHex` away and all three mods stopped
+/// loading, whichever order the two ran in.
+///
+/// Closing the gap is not a matter of adding `fromHex`. Aether's values are Luau
+/// tables its own `create` consumes, and these are userdata; substituting one for
+/// the other is the change where Aether starts consuming the host's vocabulary
+/// instead of carrying its own, which is the same change that retires
+/// `Headless.luau`.
+///
+/// Until then this is the language for a guest whose host IS the whole story --
+/// the tests below, and `dew run` for a raw Luau application when it exists. On
+/// Roblox `InstallVocabulary` is already a no-op because the engine provides the
+/// vocabulary; on Dew it should be a no-op for the same reason, and that is the
+/// end state this is waiting for rather than working around.
+pub fn install_vocabulary(lua: &Lua) -> LuaResult<()> {
+    vocabulary::install(lua)
+}
+
 pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
     let instance = lua.create_table()?;
     let shared = dom.clone();
@@ -488,6 +589,7 @@ mod tests {
         let lua = Lua::new();
         let dom: SharedDom = Arc::new(Mutex::new(Dom::default()));
         install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
         (lua, dom)
     }
 
@@ -586,13 +688,97 @@ mod tests {
 
     #[test]
     fn an_unimplemented_type_says_so_rather_than_rejecting_the_program() {
-        // `Size` is a UDim2 and this slice has no vocabulary types. The message
-        // must not read as "your program is wrong".
-        let err = run(r#"Instance.new("Frame").Size = 1"#)
+        // `FontFace` is a Font, which no slice has reached. The message must not
+        // read as "your program is wrong".
+        //
+        // This test named `Size` until the vocabulary landed and made it pass for
+        // the wrong reason -- a test for "unsupported" has to be repointed every
+        // time support arrives, which is the test doing its job.
+        let err = run(r#"Instance.new("TextLabel").FontFace = 1"#)
             .unwrap_err()
             .to_string();
         assert!(err.contains("cannot accept yet"), "{err}");
         assert!(err.contains("The property is real"), "{err}");
+    }
+
+    #[test]
+    fn a_number_is_a_number_however_the_vm_holds_it() {
+        // THE BUG THIS EXISTS FOR: `Value::as_f32` matches only `Value::Number`
+        // and `as_i32` only `Value::Integer`, so an integer literal assigned to a
+        // float property was refused, and every literal offset in a UDim2 came
+        // back zero. Nothing caught it because no test set a numeric property.
+        let got: f64 = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.BackgroundTransparency = 1
+            return f.BackgroundTransparency
+        "#,
+        )
+        .expect("integer into a float property");
+        assert_eq!(got, 1.0);
+
+        let got: f64 = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.BackgroundTransparency = 0.25
+            return f.BackgroundTransparency
+        "#,
+        )
+        .expect("fraction into a float property");
+        assert_eq!(got, 0.25);
+
+        let got: i64 = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.ZIndex = 3
+            return f.ZIndex
+        "#,
+        )
+        .expect("integer into an int property");
+        assert_eq!(got, 3);
+    }
+
+    #[test]
+    fn a_fraction_in_an_integer_property_is_refused() {
+        let err = run(r#"Instance.new("Frame").ZIndex = 3.5"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("whole number"), "{err}");
+        assert!(err.contains("3.5"), "{err}");
+    }
+
+    #[test]
+    fn a_udim2_property_round_trips_through_the_vocabulary() {
+        let got: Vec<f64> = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.Size = UDim2.new(0.5, 10, 0, 40)
+            return { f.Size.X.Scale, f.Size.X.Offset, f.Size.Y.Scale, f.Size.Y.Offset }
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, vec![0.5, 10.0, 0.0, 40.0]);
+    }
+
+    #[test]
+    fn a_colour_property_round_trips() {
+        let got: f32 = eval(
+            r#"
+            local f = Instance.new("Frame")
+            f.BackgroundColor3 = Color3.fromRGB(255, 128, 0)
+            return f.BackgroundColor3.R
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, 1.0);
+    }
+
+    #[test]
+    fn a_vocabulary_value_of_the_wrong_type_is_refused() {
+        let err = run(r#"Instance.new("Frame").Size = Vector2.new(1, 2)"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expects a UDim2"), "{err}");
     }
 
     #[test]
