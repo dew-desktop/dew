@@ -17,7 +17,7 @@ DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or
 without Aether**.
 
-**0 of 138 in-scope properties accepted by the host.** 22 more are
+**53 of 138 in-scope properties accepted by the host.** 22 more are
 excluded by decision, and 24 classes under `GuiObject` are in scope.
 
 Of those 138, **35 are already honoured by Aether's
@@ -63,34 +63,28 @@ layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `Rel
 
 ## Property backlog
 
-What conformance actually requires, split by what it costs. 138 properties.
+What conformance actually requires, split by what it costs. 85 properties.
 
-### Host work only (35)
+### Host work only (20)
 
 Aether's renderer already honours these, so the host has to accept, validate and
 store them and nothing else has to change.
 
-- `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `CanvasPosition`, `ClipsDescendants`, `Color`, `CornerRadius`
-- `FillDirection`, `Image`, `ImageColor3`, `ImageTransparency`, `LayoutOrder`, `Name`, `Offset`, `Padding`
-- `PaddingBottom`, `PaddingLeft`, `PaddingRight`, `PaddingTop`, `Parent`, `Position`, `Rotation`, `Scale`
-- `Size`, `Text`, `TextColor3`, `TextSize`, `TextTransparency`, `TextXAlignment`, `TextYAlignment`, `Thickness`
-- `Transparency`, `Visible`, `ZIndex`
+- `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `CanvasPosition`, `Color`, `CornerRadius`, `FillDirection`, `Image`
+- `ImageColor3`, `Offset`, `Padding`, `PaddingBottom`, `PaddingLeft`, `PaddingRight`, `PaddingTop`, `Position`
+- `Size`, `TextColor3`, `TextXAlignment`, `TextYAlignment`
 
-### Host and rendering (103)
+### Host and rendering (65)
 
-- `Active`, `Animated`, `ApplyStrokeMode`, `AspectRatio`, `AspectType`, `AutoButtonColor`, `AutomaticCanvasSize`, `BorderColor3`
-- `BorderMode`, `BorderOffset`, `BorderSizePixel`, `BorderStrokePosition`, `BottomImage`, `BottomImageContent`, `BottomLeftRadius`, `BottomRightRadius`
-- `CanvasSize`, `CellPadding`, `CellSize`, `Circular`, `ClearTextOnFocus`, `CursorPosition`, `DominantAxis`, `EasingDirection`
-- `EasingStyle`, `ElasticBehavior`, `Enabled`, `FillDirectionMaxCells`, `FillEmptySpaceColumns`, `FillEmptySpaceRows`, `FlexMode`, `Font`
-- `FontFace`, `GroupColor3`, `GroupTransparency`, `GrowRatio`, `HorizontalAlignment`, `HorizontalFlex`, `HorizontalScrollBarInset`, `HoverImage`
-- `HoverImageContent`, `ImageContent`, `ImageRectOffset`, `ImageRectSize`, `InputSink`, `Interactable`, `ItemLineAlignment`, `LineHeight`
-- `LineJoinMode`, `MajorAxis`, `MaxSize`, `MaxTextSize`, `MaxVisibleGraphemes`, `MidImage`, `MidImageContent`, `MinSize`
-- `MinTextSize`, `Modal`, `MultiLine`, `OpenTypeFeatures`, `PlaceholderColor3`, `PlaceholderText`, `PressedImage`, `PressedImageContent`
-- `ResampleMode`, `RichText`, `ScaleType`, `ScrollBarImageColor3`, `ScrollBarImageTransparency`, `ScrollBarThickness`, `ScrollWheelInputEnabled`, `ScrollingDirection`
-- `ScrollingEnabled`, `Selected`, `SelectionStart`, `ShrinkRatio`, `SizeConstraint`, `SliceCenter`, `SliceScale`, `SortOrder`
-- `StartCorner`, `StrokeSizingMode`, `Style`, `TextDirection`, `TextEditable`, `TextScaled`, `TextStrokeColor3`, `TextStrokeTransparency`
-- `TextTruncate`, `TextWrapped`, `TileMode`, `TileSize`, `TopImage`, `TopImageContent`, `TopLeftRadius`, `TopRightRadius`
-- `TweenTime`, `Type`, `VerticalAlignment`, `VerticalFlex`, `VerticalScrollBarInset`, `VerticalScrollBarPosition`, `Wraps`
+- `ApplyStrokeMode`, `AspectType`, `AutomaticCanvasSize`, `BorderColor3`, `BorderMode`, `BorderOffset`, `BorderStrokePosition`, `BottomImage`
+- `BottomImageContent`, `BottomLeftRadius`, `BottomRightRadius`, `CanvasSize`, `CellPadding`, `CellSize`, `DominantAxis`, `EasingDirection`
+- `EasingStyle`, `ElasticBehavior`, `FlexMode`, `Font`, `FontFace`, `GroupColor3`, `HorizontalAlignment`, `HorizontalFlex`
+- `HorizontalScrollBarInset`, `HoverImage`, `HoverImageContent`, `ImageContent`, `ImageRectOffset`, `ImageRectSize`, `InputSink`, `ItemLineAlignment`
+- `LineJoinMode`, `MajorAxis`, `MaxSize`, `MidImage`, `MidImageContent`, `MinSize`, `PlaceholderColor3`, `PressedImage`
+- `PressedImageContent`, `ResampleMode`, `ScaleType`, `ScrollBarImageColor3`, `ScrollingDirection`, `SizeConstraint`, `SliceCenter`, `SortOrder`
+- `StartCorner`, `StrokeSizingMode`, `Style`, `TextDirection`, `TextStrokeColor3`, `TextTruncate`, `TileMode`, `TileSize`
+- `TopImage`, `TopImageContent`, `TopLeftRadius`, `TopRightRadius`, `Type`, `VerticalAlignment`, `VerticalFlex`, `VerticalScrollBarInset`
+- `VerticalScrollBarPosition`
 
 ## Methods and events
 

@@ -28,6 +28,10 @@ default-run = "dew-host"
 # Bump these deliberately, as their own `chore(deps)` commit, when a change in
 # Aether is wanted here. That is the whole point of the split -- Dew upgrades
 # when Dew chooses.
+[lib]
+name = "dew_host"
+path = "src/lib.rs"
+
 [[bin]]
 name = "dew-host"
 path = "src/main.rs"

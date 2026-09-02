@@ -124,19 +124,14 @@ const INPUT_DEVICE_MEMBERS: &[&str] = &[
     "ReturnPressedFromOnScreenKeyboard",
 ];
 
-/// What DEW'S HOST accepts from a guest today.
-///
-/// THE SUBJECT OF THIS STANDARD, and the twin of `IMPLEMENTED_MEMBERS`. Both
-/// halves must measure the same thing or the document is two reports wearing one
-/// title: the members half measured the host from the day it was written, while
-/// this one measured Aether's `Layout.Inputs` and reported 35 of 138 for a
-/// component that is not an implementation of the standard at all.
-///
-/// EMPTY, for the same reason and with the same weight. Nothing in the host
-/// binary imports `rbx_reflection`; there is no `Instance`, so there is nothing
-/// to assign a property to. See `AETHER_PIPELINE` for the number that used to
-/// sit here and what it actually says.
-const HOST_ACCEPTS: &[&str] = &[];
+// What DEW'S HOST accepts is asked of the HOST, not listed here.
+//
+// `dew_host::datamodel::accepts` is the predicate the guest's own assignment
+// path uses: the property must exist on the class or an ancestor, be writable,
+// and carry a type `coerce` can store. Calling it means this document cannot
+// claim a coverage the code does not have, which a hand-written list can and did
+// -- it said 35 of 138 while the host implemented none of it, because the names
+// in it were Aether's.
 
 /// What `Aether/src/host/Layout.luau` declares it reads, verbatim from
 /// `Layout.Inputs`. Kept here rather than parsed: a hand-copied list that drifts
@@ -300,8 +295,13 @@ fn main() {
     // list of 160 properties would be wrong within one Roblox release.
     let markdown = std::env::args().any(|a| a == "--markdown");
     let db = rbx_reflection_database::get().expect("bundled reflection database");
-    let implemented: BTreeSet<&str> = HOST_ACCEPTS.iter().copied().collect();
     let pipeline: BTreeSet<&str> = AETHER_PIPELINE.iter().copied().collect();
+
+    // ASKED OF THE HOST, one property at a time, for every class in scope. A name
+    // counts as accepted if the host would take it on any class that declares it;
+    // the same name can be a different type on two unrelated classes, and the
+    // per-class table below is what shows that when it happens.
+    let mut implemented: BTreeSet<&str> = BTreeSet::new();
 
     // Everything that is, or descends from, GuiObject.
     let mut ui_classes: BTreeMap<&str, &rbx_reflection::ClassDescriptor> = BTreeMap::new();
@@ -355,10 +355,15 @@ fn main() {
         }
         props.sort_unstable();
         props.dedup();
-        // The per-class column reports what AETHER'S PIPELINE honours, not what
-        // the host accepts -- the host accepts nothing, so a host column would be
-        // a table of zeroes. Labelled at every print site so the two are never
-        // read as one number.
+        for property in &props {
+            if dew_host::datamodel::accepts(name, property) {
+                implemented.insert(property);
+            }
+        }
+
+        // The per-class column reports what AETHER'S PIPELINE honours, which is a
+        // different question from what the host accepts and is labelled as such
+        // at every print site so the two are never read as one number.
         let covered = props.iter().filter(|p| pipeline.contains(*p)).count();
         for p in &props {
             all_props.insert(p);
@@ -370,15 +375,35 @@ fn main() {
     let not_ui: BTreeSet<&str> = NOT_UI.iter().copied().collect();
     let input_device: BTreeSet<&str> = INPUT_DEVICE.iter().copied().collect();
 
+    // EXCLUSION WINS OVER ACCEPTANCE, and it did not until the host became real.
+    //
+    // `accepts` answers a mechanical question: would the assignment path store
+    // this. The generic path stores any writable primitive, so it happily accepts
+    // `Archivable` -- a replication flag this standard says a conformant host may
+    // ignore. Counting that as coverage inflated the denominator from 138 to 148
+    // and the score with it, which is a scope decision being overturned by an
+    // implementation detail.
+    //
+    // The guard used to run the other way, letting `implemented` win, because the
+    // old Aether list carried `Name` and `Parent` while `NOT_UI` also did. Those
+    // moved out of `NOT_UI` in their own commit, so nothing needs that guard now.
+    let excluded: Vec<&str> = all_props
+        .iter()
+        .copied()
+        .filter(|p| not_ui.contains(p) || input_device.contains(p))
+        .collect();
+    let implemented: BTreeSet<&str> = implemented
+        .into_iter()
+        .filter(|p| !not_ui.contains(p) && !input_device.contains(p))
+        .collect();
+
+    // COUNTED AFTER THE NARROWING, not before. Computing this against the raw
+    // `accepts` answer counted excluded properties as coverage and reported 63
+    // of 148 where the honest figure is against 138.
     let covered_total = all_props
         .iter()
         .filter(|p| implemented.contains(*p))
         .count();
-    let excluded: Vec<&str> = all_props
-        .iter()
-        .copied()
-        .filter(|p| !implemented.contains(p) && (not_ui.contains(p) || input_device.contains(p)))
-        .collect();
     let backlog: Vec<&str> = all_props
         .iter()
         .copied()

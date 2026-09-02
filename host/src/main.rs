@@ -10,6 +10,7 @@
 //! a desktop. That is the whole remit.
 
 mod capabilities;
+use dew_host::datamodel;
 mod manifest;
 mod mods;
 mod surface;

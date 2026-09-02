@@ -13,6 +13,7 @@
 //! mod", which puts every one of the earlier steps after the fact.
 
 use crate::capabilities::{self, Shared};
+use crate::datamodel;
 use crate::manifest::Manifest;
 use crate::surface::Declared;
 use aether_runtime::{modules, Session, Vm};
@@ -81,6 +82,16 @@ pub fn load(
     };
     let vm = Vm::new(caps.clone()).map_err(|e| format!("{}: {e}", manifest.id))?;
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
+
+    //      THE DATAMODEL IS PER MOD, like the VM. Two mods sharing one instance
+    //      tree could reach each other's widgets by walking Parent, which is the
+    //      same isolation the require roots above enforce for files. It is
+    //      installed as a GLOBAL rather than passed like `dew`, because it is not
+    //      a capability: it is the language of the platform, present for every
+    //      guest on Roblox and on Dew alike, and an application that had to be
+    //      handed it would not be the application that runs on both.
+    let dom = datamodel::SharedDom::default();
+    datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     // 3 ── the framework's own desktop ceremony. Dew ships no Luau of its own:
     //      resolving the host, installing the vocabulary, opening a reactive
