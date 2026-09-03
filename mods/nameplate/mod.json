@@ -1,0 +1,7 @@
+{
+  "id": "nameplate",
+  "name": "Nameplate",
+  "description": "A Dew widget with no framework: Instance.new, the vocabulary, and nothing imported",
+  "runtime": "datamodel",
+  "permissions": ["storage"]
+}

@@ -35,13 +35,53 @@ impl Permission {
     }
 }
 
+/// The runtime a mod is written against.
+///
+/// DECLARED BY THE AUTHOR, NEVER GUESSED BY THE HOST. Both flavours build a tree
+/// and both get painted by the same painter, so there is no reliable artefact to
+/// sniff: a heuristic on `require("@aether/api")` would be reading source to
+/// decide how to execute it, and it would answer wrong for the first mod that
+/// requires Aether conditionally or wraps it. One key in `mod.json` is the whole
+/// mechanism.
+///
+/// A CLOSED SET, like `Permission`, and for the same reason. `"runtime": "solid"`
+/// is refused at parse rather than silently falling back to Aether, which would
+/// mount a DataModel mod through `Desktop.Mount` and report the failure from
+/// inside the framework.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Runtime {
+    /// An Aether component. `mount(dew)` returns a tree the framework owns, and
+    /// the host drives it through `Desktop.Mount` and a `Session`.
+    ///
+    /// THE DEFAULT, because it is what every mod that exists today is. A manifest
+    /// written before this key existed keeps working, and the absent key means
+    /// the thing it has always meant.
+    #[default]
+    Aether,
+    /// No framework. `mount(dew, root)` parents instances into the root the host
+    /// made, and the host renders that tree directly.
+    #[serde(rename = "datamodel")]
+    DataModel,
+}
+
+impl Runtime {
+    pub fn name(self) -> &'static str {
+        match self {
+            Runtime::Aether => "aether",
+            Runtime::DataModel => "datamodel",
+        }
+    }
+}
+
 /// What a mod declares about itself.
 ///
 /// EVERY FIELD HERE IS READ BY SOMETHING. `id` names the mod and picks its entry
-/// module, `permissions` builds the capability table, `name` titles the window
-/// and the tray, `description` fills the tray tooltip. `hotkeys` is the one
-/// exception, and it is a LOUD one: nothing in the host registers a global
-/// hotkey yet, so `unhonoured()` names every binding a mod declared, at load.
+/// module, `runtime` picks the branch `mods::load` takes, `permissions` builds
+/// the capability table, `name` titles the window and the tray, `description`
+/// fills the tray tooltip. `hotkeys` is the one exception, and it is a LOUD one:
+/// nothing in the host registers a global hotkey yet, so `unhonoured()` names
+/// every binding a mod declared, at load.
 ///
 /// The rule this struct is built around is that a mod author is never met with
 /// silence. A field Dew accepts and ignores, and a key Dew has never heard of,
@@ -53,6 +93,18 @@ pub struct Manifest {
     pub name: String,
     #[serde(default)]
     pub description: String,
+
+    /// Which runtime this mod's `mount` is written against.
+    ///
+    /// THE ONE MANIFEST KEY THAT CHANGES HOW THE MOD IS LOADED. Everything else
+    /// here describes a mod; this decides what `mods::load` does with it — which
+    /// globals the VM gets, whether Aether's desktop ceremony runs at all, and
+    /// what `mount` is handed. It is a field rather than an inference because
+    /// getting it wrong is not a cosmetic error: an Aether mod loaded on the
+    /// DataModel branch never opens a reactive scope, and a DataModel mod loaded
+    /// on the Aether branch is handed no root to parent into.
+    #[serde(default)]
+    pub runtime: Runtime,
 
     /// What this mod may reach. Absent means NOTHING, which is the correct
     /// default and the one a mod author is least likely to have intended by
@@ -87,7 +139,14 @@ pub struct Manifest {
 /// Written out rather than derived. Serde offers no way to ask a struct for its
 /// field names, and the alternative -- a list of keys seen in the wild -- goes
 /// stale in the direction that stays quiet.
-const KNOWN: &[&str] = &["id", "name", "description", "permissions", "hotkeys"];
+const KNOWN: &[&str] = &[
+    "id",
+    "name",
+    "description",
+    "runtime",
+    "permissions",
+    "hotkeys",
+];
 
 impl Manifest {
     pub fn load(dir: &Path) -> Result<Manifest, String> {
@@ -221,6 +280,32 @@ mod tests {
         assert_eq!(parse(r#"{ "id": "t" }"#).display_name(), "t");
         assert_eq!(parse(r#"{ "id": "t", "name": "  " }"#).display_name(), "t");
         assert_eq!(parse(r#"{ "id": "t", "name": "T" }"#).display_name(), "T");
+    }
+
+    #[test]
+    fn runtime_defaults_to_aether_and_is_not_reported_as_unknown() {
+        // Every mod that existed before this key did. The absent key has to mean
+        // what it has always meant, or adding the field breaks all three.
+        let m = parse(r#"{ "id": "t" }"#);
+        assert_eq!(m.runtime, Runtime::Aether);
+        assert!(m.unhonoured().is_empty());
+    }
+
+    #[test]
+    fn a_datamodel_mod_declares_its_runtime_and_the_key_is_read() {
+        let m = parse(r#"{ "id": "t", "runtime": "datamodel" }"#);
+        assert_eq!(m.runtime, Runtime::DataModel);
+        // The whole reason this is a modelled field rather than an extra key:
+        // arriving in `unknown` would mean the host ignored it and mounted the
+        // mod through Aether anyway.
+        assert!(m.unknown.is_empty());
+    }
+
+    #[test]
+    fn an_unknown_runtime_is_refused_rather_than_falling_back() {
+        // Silently defaulting would hand a DataModel mod to `Desktop.Mount` and
+        // report the failure from inside a framework the author never used.
+        assert!(Manifest::parse(r#"{ "id": "t", "runtime": "solid" }"#, "test").is_err());
     }
 
     #[test]

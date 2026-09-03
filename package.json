@@ -8,6 +8,7 @@
     "build": "cargo build --release --manifest-path host/Cargo.toml",
     "timetracker": "cargo run --manifest-path host/Cargo.toml -- --mod timetracker",
     "calculator": "cargo run --manifest-path host/Cargo.toml -- --mod calculator",
+    "nameplate": "cargo run --manifest-path host/Cargo.toml -- --mod nameplate",
     "snapshot": "cargo run --manifest-path host/Cargo.toml -- --snapshot dew.png"
   }
 }

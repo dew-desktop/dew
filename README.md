@@ -49,6 +49,30 @@ nothing. [docs/mod_contract.md](docs/mod_contract.md) has the rest.
 Three surfaces are available: a floating transparent widget, an ordinary window,
 or an overlay covering the desktop.
 
+### Without a framework
+
+A widget does not have to be an Aether component. `"runtime": "datamodel"` in
+`mod.json` gets a mod the DataModel Dew implements itself and nothing else:
+
+```luau
+return {
+    id = "nameplate",
+    size = { width = 340, height = 148 },
+
+    mount = function(dew, root)
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 1, 0)
+        card.BackgroundColor3 = Color3.fromRGB(20, 26, 36)
+        card.Parent = root
+    end,
+}
+```
+
+No `require`, nothing imported, and every line of it would build the same tree
+inside Roblox. [`mods/nameplate`](mods/nameplate/) is the whole example. The
+runtime is declared rather than detected, and everything else — discovery, the
+manifest, capabilities, the surface — is identical either way.
+
 ## Setup
 
 Aether is pinned by commit in [`host/Cargo.toml`](host/Cargo.toml). Both the Rust

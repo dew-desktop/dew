@@ -29,6 +29,71 @@ This is the same rule the runtime already enforces one layer down: the guest VM
 is deny-by-default and every capability is a function the host installs by name.
 A registration-by-side-effect API quietly undoes that at the layer above.
 
+## A mod declares the runtime it is written against
+
+```json
+{ "id": "nameplate", "runtime": "datamodel", "permissions": ["storage"] }
+```
+
+Two flavours, one loader. `runtime` is `"aether"` when absent, which is what every
+mod written before the key existed is.
+
+| | `"aether"` | `"datamodel"` |
+| :--- | :--- | :--- |
+| the mod imports | `@aether/api` | nothing |
+| the VM gets | `Instance` | `Instance`, plus `UDim2`, `Color3`, `Vector2`, `UDim`, `Rect`, `Enum` and `Content` |
+| `mount` is | `function(dew)`, returning a tree | `function(dew, root)`, parenting into `root` |
+| it is called | through `Desktop.Mount`, inside a reactive scope | directly |
+| the host drives | a `Session`, repainting when the graph changes | the DataModel arena, re-rendered every frame |
+
+```luau
+return {
+    id = "nameplate",
+    size = { width = 340, height = 148 },
+
+    mount = function(dew, root)
+        local card = Instance.new("Frame")
+        card.Size = UDim2.new(1, 0, 1, 0)
+        card.BackgroundColor3 = Color3.fromRGB(20, 26, 36)
+        card.Parent = root
+    end,
+}
+```
+
+Everything else in this document is unchanged by the choice: discovery, the
+manifest, the capability table, `size`, `surface`, and the fact that `mount` runs
+once are Dew's remit, and none of them is a property of the framework an author
+picked.
+
+**Declared, never sniffed.** Both flavours build a tree, and there is no artefact
+that reliably tells them apart — a heuristic on `require("@aether/api")` reads
+source to decide how to execute it, and answers wrong for the first mod that
+requires the framework conditionally. And getting it wrong is not cosmetic: an
+Aether mod on the DataModel branch never opens a reactive scope, and a DataModel
+mod on the Aether branch is handed no root. So it is one key, in a closed set, and
+`"runtime": "solid"` is refused at load rather than falling back.
+
+**The root is a parameter, like `dew`.** A DataModel mod does not reach for a
+global, because what a mod may draw into is granted to it in the same way as what
+it may do. The root is a `ScreenGui` named `DewRoot` — **not `game`**, which is
+what `Host.detect()` keys on (`typeof(game) == "Instance"`); installing one before
+the services and the member surface exist would flip every Aether mod in the same
+binary onto the Roblox branch. That name arrives when there is enough behind it to
+be true.
+
+**No vocabulary for an Aether mod, deliberately.** Aether carries its own `UDim2`
+and `Color3` for off-engine hosts and publishes them with
+`if rawget(g, name) == nil` — first writer wins — so a partial host vocabulary
+does not merge with Aether's, it *blocks* it. That the two branches install
+different globals is the reason the runtime is declared, not an inconsistency
+waiting to be tidied.
+
+**A DataModel mod does not react yet.** There is no signal model behind the arena,
+so `mount` runs once and what it built is what stays on screen; the host
+re-renders every frame regardless, so the day `Changed` exists nothing in a mod
+has to change. There is no click either — the member surface reads 0 of 52, and
+pointer events are dropped for this flavour.
+
 ## Capabilities arrive as an argument, never as a global
 
 `mount` receives `dew`. There is no `_G.dew`, and mods are not handed one.
@@ -63,7 +128,7 @@ same way it does in an engine: the graph re-runs what depends on it, and the nex
 `Live.Frame` differs. The same component behaves identically in both places,
 which is the property the whole stack exists to preserve.
 
-## Mods author in Aether's own idiom
+## An Aether mod authors in Aether's own idiom
 
 `create`, `source`, `derive`, and Roblox's property vocabulary — `UDim2`,
 `Color3`, `BackgroundTransparency`. Not a Dew dialect.
@@ -74,6 +139,12 @@ or previewed with `aether snapshot`. A Dew-specific construction API would make
 every widget a dead end.
 
 Dew's own additions are capabilities and lifecycle, not construction.
+
+The same argument is why a `"datamodel"` mod authors in the engine's idiom rather
+than a host one: `Instance.new`, property assignment and `Parent` are what a
+Roblox developer already knows, and `mods/nameplate` would build the identical
+tree inside a place. Neither flavour is a Dew dialect; they are the two idioms
+that already exist.
 
 ## One rendering path, with a shorthand above it
 
@@ -158,6 +229,7 @@ the difference out loud at load.
 | field | read by |
 | :--- | :--- |
 | `id` | mod selection (`--mod`), and the entry module `<id>.luau` |
+| `runtime` | which branch `mods::load` takes: `"aether"` (the default) or `"datamodel"` |
 | `permissions` | the capability table, and nothing outside this list is reachable |
 | `name` | the window caption when the declaration sets no `surface.title`, and the tray tooltip |
 | `description` | the tray tooltip |

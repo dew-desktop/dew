@@ -54,6 +54,94 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     Ok(painter)
 }
 
+/// What the frame loop drives, whichever runtime the active mod declared.
+///
+/// TWO WAYS TO PRODUCE A `Frame`, ONE PAINTER. `Driver` diffs an Aether session
+/// and repaints only when the framework says something changed; a DataModel tree
+/// is instances in an arena with nothing watching them, so there is no "changed"
+/// to ask about and the honest answer is to render it again. Both arms end at
+/// `Painter::paint_frame`, which is the seam that has survived four rasterisers.
+///
+/// NOT A TRAIT. The two do not share a lifecycle — one owns Lua handles the
+/// framework maintains, the other owns ids into a `Dom` — and a trait over them
+/// would exist to make this file shorter rather than to describe anything.
+enum Renderer {
+    Aether(Driver<RasterPainter>),
+    DataModel {
+        dom: datamodel::SharedDom,
+        root: usize,
+        painter: RasterPainter,
+        background: Option<Rgb>,
+        width: f32,
+        height: f32,
+    },
+}
+
+impl Renderer {
+    /// Advance and paint. `true` means the canvas changed and is worth presenting.
+    fn frame(&mut self, dt: f32) -> Result<bool, String> {
+        match self {
+            Renderer::Aether(driver) => driver.frame(dt).map_err(|e| e.to_string()),
+            //--- ALWAYS TRUE, AND THAT IS NOT A STUB. A DataModel mod's `mount`
+            //--- ran once; anything it changes afterwards it changes by assigning
+            //--- to a property, and nothing signals that. Until `Changed` exists
+            //--- (sprint 8) the only correct answer to "did anything change" is
+            //--- "assume so", and claiming otherwise would freeze a mod that
+            //--- animates. `dt` is unused for the same reason: there is nothing
+            //--- to step.
+            Renderer::DataModel {
+                dom,
+                root,
+                painter,
+                background,
+                width,
+                height,
+            } => {
+                let _ = dt;
+                let frame = datamodel::render::frame_of(dom, *root, *width, *height);
+                aether_runtime::Painter::paint_frame(painter, &frame, *background);
+                Ok(true)
+            }
+        }
+    }
+
+    /// A pointer event, for a runtime that has somewhere to send it.
+    ///
+    /// DROPPED, LOUDLY IN THE COMMENT AND SILENTLY AT RUNTIME, for a DataModel
+    /// mod. The member surface reads 0 of 52: there is no `Activated`, no
+    /// `InputBegan` and no signal model to deliver one through, so there is
+    /// nothing to call. Sprint 8 is where this arm gets a body, and the
+    /// milestone is not finished until it does.
+    fn pointer(&mut self, kind: aether_runtime::Pointer, x: f32, y: f32) -> Result<(), String> {
+        match self {
+            Renderer::Aether(driver) => driver.pointer(kind, x, y).map_err(|e| e.to_string()),
+            Renderer::DataModel { .. } => Ok(()),
+        }
+    }
+
+    fn wheel(&mut self, x: f32, y: f32, delta: f32) -> Result<(), String> {
+        match self {
+            Renderer::Aether(driver) => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
+            Renderer::DataModel { .. } => Ok(()),
+        }
+    }
+
+    /// Force the next frame to repaint. A no-op where every frame already does.
+    fn invalidate(&mut self) {
+        match self {
+            Renderer::Aether(driver) => driver.invalidate(),
+            Renderer::DataModel { .. } => {}
+        }
+    }
+
+    fn painter_mut(&mut self) -> &mut RasterPainter {
+        match self {
+            Renderer::Aether(driver) => driver.painter_mut(),
+            Renderer::DataModel { painter, .. } => painter,
+        }
+    }
+}
+
 /// `--script <path> --snapshot <png>`: run a Luau file against Dew's OWN
 /// DataModel and draw what it built. No Aether anywhere in the chain.
 ///
@@ -185,17 +273,17 @@ fn run() -> Result<(), String> {
         }
     };
 
-    // DESTRUCTURED, to move the session out by value. `Mod` implements no `Drop`,
-    // so Rust permits this directly — and the alternative that suggests itself,
-    // swapping in a placeholder, has no valid placeholder to swap: a `Session` is
-    // Lua handles, and a zeroed one is undefined behaviour the moment it is
-    // dropped rather than a temporarily invalid value.
+    // DESTRUCTURED, to move the mounted half out by value. `Mod` implements no
+    // `Drop`, so Rust permits this directly — and the alternative that suggests
+    // itself, swapping in a placeholder, has no valid placeholder to swap: a
+    // `Session` is Lua handles, and a zeroed one is undefined behaviour the moment
+    // it is dropped rather than a temporarily invalid value.
     let mods::Mod {
         manifest,
         mut width,
         mut height,
         surface,
-        session,
+        mounted,
         vm,
     } = active;
 
@@ -216,7 +304,28 @@ fn run() -> Result<(), String> {
     } else {
         Some(BACKGROUND)
     };
-    let mut driver = Driver::new(session, painter(width, height)?, background);
+    // THE BRANCH IS HERE AND NOWHERE ELSE IN THIS FUNCTION. Everything above --
+    // discovery, the manifest, the screen, the surface, the background -- is Dew's
+    // own remit and identical for both runtimes; everything below drives whatever
+    // this produced.
+    let mut renderer = match mounted {
+        mods::Mounted::Aether(session) => {
+            Renderer::Aether(Driver::new(session, painter(width, height)?, background))
+        }
+        //--- SIZED ONCE, at the size the window was opened at. A DataModel tree
+        //--- lays out against the surface it is given, and `Event::Resized` does
+        //--- not change `width` here for the Aether path either -- the window is
+        //--- not resizable yet, and pretending otherwise would put a second
+        //--- untested code path behind a feature that does not exist.
+        mods::Mounted::DataModel { dom, root } => Renderer::DataModel {
+            dom,
+            root,
+            painter: painter(width, height)?,
+            background,
+            width: width as f32,
+            height: height as f32,
+        },
+    };
 
     // `--snapshot <path>`: draw one frame, write it, exit.
     //
@@ -226,8 +335,8 @@ fn run() -> Result<(), String> {
     // widget's appearance from a terminal, which is where most of this gets
     // written.
     if let Some(path) = flag("--snapshot") {
-        driver.frame(1.0 / 60.0).map_err(|e| e.to_string())?;
-        driver
+        renderer.frame(1.0 / 60.0)?;
+        renderer
             .painter_mut()
             .write_png(&path)
             .map_err(|code| format!("could not write {path}: rasteriser status {code}"))?;
@@ -282,33 +391,27 @@ fn run() -> Result<(), String> {
         for event in events {
             match event {
                 Event::PointerMove { x, y } => {
-                    driver
-                        .pointer(aether_runtime::Pointer::Move, x, y)
-                        .map_err(|e| e.to_string())?;
+                    renderer.pointer(aether_runtime::Pointer::Move, x, y)?;
                 }
                 Event::PointerDown {
                     x,
                     y,
                     button: Button::Left,
                 } => {
-                    driver
-                        .pointer(aether_runtime::Pointer::Down, x, y)
-                        .map_err(|e| e.to_string())?;
+                    renderer.pointer(aether_runtime::Pointer::Down, x, y)?;
                 }
                 Event::PointerUp {
                     x,
                     y,
                     button: Button::Left,
                 } => {
-                    driver
-                        .pointer(aether_runtime::Pointer::Up, x, y)
-                        .map_err(|e| e.to_string())?;
+                    renderer.pointer(aether_runtime::Pointer::Up, x, y)?;
                 }
                 Event::PointerDown { .. } | Event::PointerUp { .. } => {}
                 Event::Wheel { x, y, delta } => {
-                    driver.wheel(x, y, delta).map_err(|e| e.to_string())?;
+                    renderer.wheel(x, y, delta)?;
                 }
-                Event::Resized { .. } | Event::Exposed => driver.invalidate(),
+                Event::Resized { .. } | Event::Exposed => renderer.invalidate(),
                 Event::CloseRequested => return Ok(()),
                 Event::Char(_) | Event::Key { .. } => {}
             }
@@ -321,11 +424,11 @@ fn run() -> Result<(), String> {
         // is the load a drag produces. Without it `--stats` measures an idle
         // screen, where the interesting number is always zero.
         if bench {
-            driver.invalidate();
+            renderer.invalidate();
         }
 
         let t0 = Instant::now();
-        let painted = driver
+        let painted = renderer
             .frame(dt)
             .map_err(|e| format!("while rendering: {e}"))?;
         let t_frame = t0.elapsed();
@@ -335,7 +438,7 @@ fn run() -> Result<(), String> {
         // drawing. Timing it as "present" made the blit look like the bottleneck
         // when the blit is a memcpy.
         let t1 = Instant::now();
-        if let Some(bgra) = driver.painter_mut().canvas_mut().bgra() {
+        if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
             window.present(bgra, width, height);
         }
         let t_raster = t1.elapsed();
