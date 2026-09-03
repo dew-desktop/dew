@@ -53,6 +53,13 @@ jobs:
       # needs nothing but lune, so it runs the moment lune exists.
       - run: lune run scripts/commitlint_check.luau
 
+      # ARCHITECTURE, CHECKED. ADR-004 draws hard lines between Aether, Dew and
+      # dew-cli, and a boundary with nothing checking it is a boundary nobody
+      # follows -- this repository has found that class five times in one
+      # milestone. Lune-only, so it runs beside commitlint before anything is
+      # built.
+      - run: lune run scripts/verify_boundaries.luau
+
       # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
       # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
       # them. Pinned here to the version this repository is developed against.
