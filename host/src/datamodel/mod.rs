@@ -36,6 +36,7 @@
 
 mod content;
 mod enums;
+pub mod members;
 pub mod render;
 mod vocabulary;
 
@@ -133,6 +134,40 @@ impl Dom {
         self.node(id).map(|n| n.name.clone())
     }
 
+    pub fn parent_of(&self, id: usize) -> Option<usize> {
+        self.node(id).and_then(|n| n.parent)
+    }
+
+    /// Free `id` and everything under it, and detach it from its parent.
+    ///
+    /// THE SLOT IS EMPTIED, NOT MARKED. `Index` and `NewIndex` already answer
+    /// "this instance has been destroyed" when `node` comes back `None`, so
+    /// clearing the slot is what makes a handle held across a `Destroy` fail
+    /// loudly instead of reading a stale name -- which is the whole difference
+    /// between `Destroy` and `Parent = nil`.
+    ///
+    /// IDS ARE NEVER REUSED: `insert` pushes, so a freed slot stays `None`
+    /// forever and a stale id cannot come back pointing at a new instance.
+    /// That costs one `Option` per destroyed node and buys the guarantee that
+    /// makes handles safe to hold.
+    ///
+    /// DESCENDANTS GO TOO. Roblox destroys the subtree, and leaving children in
+    /// the arena would strand a set of nodes with a parent id pointing at an
+    /// empty slot -- reachable from nothing, freed by nothing.
+    pub fn destroy(&mut self, id: usize) {
+        if self.node(id).is_none() {
+            return;
+        }
+        self.unparent(id);
+        let mut stack = vec![id];
+        while let Some(current) = stack.pop() {
+            let Some(node) = self.slots.get_mut(current).and_then(Option::take) else {
+                continue;
+            };
+            stack.extend(node.children);
+        }
+    }
+
     /// Write a property the HOST computed, bypassing the guest's rules.
     ///
     /// `AbsolutePosition` and `AbsoluteSize` are read-only to a guest and written
@@ -156,6 +191,15 @@ impl Dom {
         }
         false
     }
+}
+
+/// A handle whose slot has been cleared.
+///
+/// ONE MESSAGE FOR EVERY PATH that finds an empty slot -- reading a property,
+/// writing one, or calling a method on a handle held across a `Destroy`. A guest
+/// cannot tell which of those it hit and should not have to.
+pub(crate) fn dead_instance() -> LuaError {
+    LuaError::runtime("this instance has been destroyed")
 }
 
 /// A handle a guest holds. `typeof` reports "Instance".
@@ -545,9 +589,7 @@ impl UserData for InstanceRef {
 
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
             let dom = this.dom.lock().expect("dom");
-            let node = dom
-                .node(this.id)
-                .ok_or_else(|| LuaError::runtime("this instance has been destroyed"))?;
+            let node = dom.node(this.id).ok_or_else(dead_instance)?;
 
             match key.as_str() {
                 "ClassName" => return lua.create_string(&node.class)?.into_lua(lua),
@@ -564,6 +606,22 @@ impl UserData for InstanceRef {
                 }
                 _ => {}
             }
+
+            // METHODS BEFORE PROPERTIES, and the lock is released first because
+            // `members::lookup` builds a closure that will take it again when the
+            // guest calls the function. `Mutex` is not reentrant; holding it
+            // across the lookup deadlocked on the first `GetChildren`.
+            //
+            // BEFORE THE "not a valid member" ERROR, since a method is not in the
+            // reflection database at all -- that crate carries properties only,
+            // which is why the member surface needed its own predicate.
+            let class = node.class.clone();
+            drop(dom);
+            if let Some(method) = members::lookup(lua, this, &class, &key)? {
+                return Ok(method);
+            }
+            let dom = this.dom.lock().expect("dom");
+            let node = dom.node(this.id).ok_or_else(dead_instance)?;
 
             // THE DESCRIPTOR IS LOOKED UP FIRST, EVEN FOR A STORED VALUE, because
             // an enum cannot name itself. `Variant::Enum` is a bare number, so
@@ -605,11 +663,7 @@ impl UserData for InstanceRef {
             MetaMethod::NewIndex,
             |_, this, (key, value): (String, LuaValue)| {
                 let mut dom = this.dom.lock().expect("dom");
-                let class = dom
-                    .node(this.id)
-                    .ok_or_else(|| LuaError::runtime("this instance has been destroyed"))?
-                    .class
-                    .clone();
+                let class = dom.node(this.id).ok_or_else(dead_instance)?.class.clone();
 
                 match key.as_str() {
                     "ClassName" => {

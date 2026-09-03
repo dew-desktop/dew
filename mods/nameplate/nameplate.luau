@@ -94,10 +94,18 @@ return {
 		label(card, "Subtitle", 48, 14, Color3.fromRGB(146, 162, 188)).Text =
 			"a mod with no framework"
 		label(card, "Caps", 76, 12, Color3.fromRGB(120, 170, 240)).Text = capabilityReport(dew)
-		--- `root.Name`, not `root:GetChildren()`. The member surface reads 0 of
-		--- 52: there is not a method on an instance yet, on either host. Sprint 7.
+		--- THREE METHOD CALLS, and until sprint 7 this line could not be written.
+		--- The member surface read 0 of 52 when this file was first committed, and
+		--- the comment here said so; tree navigation and lifecycle are the first
+		--- 14 of it. A test calling `GetChildren` on a bare VM proves the dispatch
+		--- works. This proves it survives the ordinary loader — the same VM a mod
+		--- is really given, with the same globals, discovered from `mods/`.
+		---
+		--- `card:IsA("GuiObject")` is the one worth printing: `card` is a Frame,
+		--- and the answer is true only because `IsA` walks the superclass chain
+		--- rather than comparing strings.
 		label(card, "Runtime", 100, 12, Color3.fromRGB(104, 118, 142)).Text =
-			`runtime = "datamodel" · parented into {root.Name}`
+			`in {root.Name} · {#card:GetChildren()} kids · IsA GuiObject: {card:IsA("GuiObject")}`
 
 		--- ZIndex over declaration order, the one rule a geometric conformance
 		--- runner cannot check. Drawn last on purpose: it overlaps the text.

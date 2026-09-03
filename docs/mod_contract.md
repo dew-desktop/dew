@@ -88,11 +88,13 @@ does not merge with Aether's, it *blocks* it. That the two branches install
 different globals is the reason the runtime is declared, not an inconsistency
 waiting to be tidied.
 
-**A DataModel mod does not react yet.** There is no signal model behind the arena,
-so `mount` runs once and what it built is what stays on screen; the host
-re-renders every frame regardless, so the day `Changed` exists nothing in a mod
-has to change. There is no click either — the member surface reads 0 of 52, and
-pointer events are dropped for this flavour.
+**A DataModel mod can navigate its tree and cannot yet react to anything.**
+`GetChildren`, `FindFirstChild`, `IsA`, `Destroy` and the rest of the fourteen
+tree-and-lifecycle methods are there. What is not there is a signal: `mount` runs
+once and what it built is what stays on screen; the host re-renders every frame
+regardless, so the day `Changed` exists nothing in a mod has to change. There is
+no click either — every one of the 14 reachable members is a method and none is
+an event, so pointer events are dropped for this flavour.
 
 ## Capabilities arrive as an argument, never as a global
 

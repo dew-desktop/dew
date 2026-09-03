@@ -26,7 +26,8 @@ renderer**. That is not a conformance figure; it splits the backlog by cost.
 ## Coverage by class
 
 The middle column is what AETHER'S RENDERER honours, not what the host accepts.
-The host accepts nothing, so a host column would be a table of zeroes.
+The two are different questions and the gap between them is the backlog: a
+property the host stores but the pipeline ignores is stored and not drawn.
 
 | Class | Renderable | In the class |
 | :--- | ---: | ---: |
@@ -101,26 +102,32 @@ DOM. It is a consumer of this surface and never an implementation of it, so it
 is not measured here and is not required to conform. What must match is what a
 Luau application sees, **with or without Aether**.
 
-**0 of 52 in-scope members implemented.**
+**14 of 52 in-scope members implemented.**
 32 more are excluded by decision, out of 84 reachable
 (44 methods, 40 events).
 
-Dew's guest reaches a `dew` capability table and Aether's module surface. There
-is no `Instance`, no property assignment, and no signal to connect, so an
-application written against the engine directly has nothing to run against.
-The number is zero because the mechanism is absent, not because it is partial.
+Asked of `dew_host::datamodel::members::implements`, the predicate `__index`
+consults before it hands a guest a function -- so nothing below is a claim this
+document makes on the host's behalf.
+
+### Implemented
+
+- `ClearAllChildren`, `Destroy`, `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`
+- `FindFirstDescendant`, `GetChildren`, `GetDescendants`, `IsA`, `IsAncestorOf`, `IsDescendantOf`
+
+**No event is reachable.** There is no signal type yet, so there is nothing
+for a guest to connect to and nothing for the host to fire. That is the half
+of the surface a mod needs before it can respond to anything at all.
 
 ### API backlog
 
 What parity actually requires. No Dew guest can reach any of these.
 
-- `Activated`, `CaptureFocus`, `Changed`, `ChildAdded`, `ChildRemoved`, `ClearAllChildren`, `DescendantAdded`, `DescendantRemoving`
-- `Destroy`, `Destroying`, `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`
-- `FindFirstDescendant`, `FocusLost`, `Focused`, `GetChildren`, `GetDescendants`, `GetPropertyChangedSignal`, `GetScrollVelocity`, `InputBegan`
-- `InputChanged`, `InputEnded`, `IsA`, `IsAncestorOf`, `IsDescendantOf`, `IsFocused`, `JumpTo`, `JumpToIndex`
-- `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`, `MouseEnter`, `MouseLeave`
-- `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `Next`, `PageEnter`, `PageLeave`, `Previous`, `ReleaseFocus`
-- `ResetScrollVelocity`, `SecondaryActivated`, `Stopped`, `WaitForChild`
+- `Activated`, `CaptureFocus`, `Changed`, `ChildAdded`, `ChildRemoved`, `DescendantAdded`, `DescendantRemoving`, `Destroying`
+- `FocusLost`, `Focused`, `GetPropertyChangedSignal`, `GetScrollVelocity`, `InputBegan`, `InputChanged`, `InputEnded`, `IsFocused`
+- `JumpTo`, `JumpToIndex`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`
+- `MouseEnter`, `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `Next`, `PageEnter`, `PageLeave`
+- `Previous`, `ReleaseFocus`, `ResetScrollVelocity`, `SecondaryActivated`, `Stopped`, `WaitForChild`
 
 ### This document measures two Roblox builds at once
 

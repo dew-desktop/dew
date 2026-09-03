@@ -46,23 +46,28 @@ struct ApiClass {
     members: BTreeMap<String, String>,
 }
 
-/// Methods and events DEW'S HOST exposes to a guest today.
-///
-/// WHAT IS BEING MEASURED, because getting this wrong makes the number
-/// meaningless: the standard's two implementations are the ROBLOX ENGINE and the
-/// DEW HOST. Both run Luau applications; an application must mount and render
-/// the same on either, WITH OR WITHOUT Aether. Aether is a headless framework
-/// that runs on top of a host, the way Ark UI runs on top of a DOM -- it is a
-/// consumer of this surface and never an implementation of it, so nothing Aether
-/// provides belongs in this list. `createPressable` taking `OnClick` says
-/// something about Aether's API and nothing about whether a Dew guest can write
-/// `button.Activated:Connect(fn)`.
-///
-/// EMPTY, AND THAT IS THE MEASUREMENT. Dew's guest reaches a `dew` capability
-/// table and Aether's module surface. There is no `Instance`, no property
-/// assignment, no signal to connect -- so an application written against the
-/// engine directly has nothing to run against here.
-const IMPLEMENTED_MEMBERS: &[&str] = &[];
+// What DEW'S HOST implements is asked of the HOST, not listed here either.
+//
+// THIS WAS `IMPLEMENTED_MEMBERS: &[&str] = &[]`, with a comment saying the
+// emptiness was the measurement. It was, right up until it stopped being -- and
+// then it would have been an array somebody edited, which is exactly what the
+// property half was before `accepts` existed and exactly how this document came
+// to report 35 of 138 for a surface the host had never implemented.
+//
+// `dew_host::datamodel::members::implements` is the predicate `__index` itself
+// consults before it will hand a guest a function. Asking it means this document
+// cannot claim a method the dispatch will not answer, and cannot miss one it
+// will.
+//
+// WHAT IS BEING MEASURED, because getting this wrong makes the number
+// meaningless: the standard's two implementations are the ROBLOX ENGINE and the
+// DEW HOST. Both run Luau applications; an application must mount and render the
+// same on either, WITH OR WITHOUT Aether. Aether is a headless framework that
+// runs on top of a host, the way Ark UI runs on top of a DOM -- it is a consumer
+// of this surface and never an implementation of it, so nothing Aether provides
+// counts here. `createPressable` taking `OnClick` says something about Aether's
+// API and nothing about whether a Dew guest can write
+// `button.Activated:Connect(fn)`.
 
 /// Animation belongs to another seam, on both hosts.
 ///
@@ -446,12 +451,22 @@ fn main() {
     let api: ApiSurface =
         serde_json::from_str(API_SURFACE).expect("host/datamodel/api_surface.json is malformed");
 
-    let implemented_members: BTreeSet<&str> = IMPLEMENTED_MEMBERS.iter().copied().collect();
     let motion: BTreeSet<&str> = MOTION.iter().copied().collect();
     let not_ui_members: BTreeSet<&str> = NOT_UI_MEMBERS.iter().copied().collect();
     let input_device_members: BTreeSet<&str> = INPUT_DEVICE_MEMBERS.iter().copied().collect();
 
     let mut all_members: BTreeMap<&str, &str> = BTreeMap::new();
+    // Member name to a CONCRETE in-scope class that reaches it.
+    //
+    // The census is by name -- a member counts once however many classes inherit
+    // it -- but the host's predicate takes a class, because `CaptureFocus` is a
+    // `GuiObject`'s and `GetScrollVelocity` is a `ScrollingFrame`'s. Asking about
+    // the class the walk found the member on is the only question that has a
+    // right answer: asking about `Instance` would report a `ScrollingFrame`
+    // method as unimplemented even once it is, and asking about the class that
+    // DECLARES it would name `Object`, which `rbx_reflection_database` does not
+    // carry at all.
+    let mut reached_from: BTreeMap<&str, &str> = BTreeMap::new();
     let mut missing_from_dump: Vec<&str> = Vec::new();
     for name in ui_classes.keys() {
         if OUT_OF_SCOPE.contains(name) {
@@ -466,6 +481,7 @@ fn main() {
             found = true;
             for (member, kind) in &class.members {
                 all_members.insert(member, kind);
+                reached_from.entry(member).or_insert(name);
             }
             cursor = class.superclass.clone();
         }
@@ -479,7 +495,8 @@ fn main() {
     }
 
     let classify = |m: &str| -> &'static str {
-        if implemented_members.contains(m) {
+        let concrete = reached_from.get(m).copied().unwrap_or("Instance");
+        if dew_host::datamodel::members::implements(concrete, m) {
             "implemented"
         } else if motion.contains(m)
             || not_ui_members.contains(m)
@@ -506,6 +523,15 @@ fn main() {
         .copied()
         .filter(|m| classify(m) == "backlog")
         .collect();
+    let implemented_members: Vec<&str> = all_members
+        .keys()
+        .copied()
+        .filter(|m| classify(m) == "implemented")
+        .collect();
+    let implemented_events = all_members
+        .iter()
+        .filter(|(m, kind)| **kind == "Event" && classify(m) == "implemented")
+        .count();
     let member_in_scope = m_implemented + member_backlog.len();
 
     // THE TWO HALVES CITE DIFFERENT ROBLOX BUILDS, and until now nothing said so.
@@ -551,6 +577,8 @@ fn main() {
             member_in_scope,
             m_excluded,
             &member_backlog,
+            &implemented_members,
+            implemented_events,
             build_skew.as_ref(),
         );
         return;
@@ -685,6 +713,8 @@ fn emit_markdown(
     member_in_scope: usize,
     m_excluded: usize,
     member_backlog: &[&str],
+    implemented_members: &[&str],
+    implemented_events: usize,
     build_skew: Option<&(String, String)>,
 ) {
     let v = version
@@ -736,7 +766,8 @@ fn emit_markdown(
 "
     );
     println!("The middle column is what AETHER'S RENDERER honours, not what the host accepts.");
-    println!("The host accepts nothing, so a host column would be a table of zeroes.");
+    println!("The two are different questions and the gap between them is the backlog: a");
+    println!("property the host stores but the pipeline ignores is stored and not drawn.");
     println!();
     println!("| Class | Renderable | In the class |");
     println!("| :--- | ---: | ---: |");
@@ -851,10 +882,35 @@ fn emit_markdown(
     );
     println!("({member_methods} methods, {member_events} events).");
     println!();
-    println!("Dew's guest reaches a `dew` capability table and Aether's module surface. There");
-    println!("is no `Instance`, no property assignment, and no signal to connect, so an");
-    println!("application written against the engine directly has nothing to run against.");
-    println!("The number is zero because the mechanism is absent, not because it is partial.");
+    println!("Asked of `dew_host::datamodel::members::implements`, the predicate `__index`");
+    println!("consults before it hands a guest a function -- so nothing below is a claim this");
+    println!("document makes on the host's behalf.");
+    println!();
+    println!("### Implemented");
+    println!();
+    if implemented_members.is_empty() {
+        println!("Nothing yet.");
+    } else {
+        for chunk in implemented_members.chunks(8) {
+            println!(
+                "- {}",
+                chunk
+                    .iter()
+                    .map(|m| format!("`{m}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+    }
+    // GENERATED, NOT ASSERTED. "No event is reachable" is a sentence that goes
+    // stale the moment one is, so it is printed from the count rather than
+    // written down -- the same reason the numbers above it are.
+    if implemented_events == 0 {
+        println!();
+        println!("**No event is reachable.** There is no signal type yet, so there is nothing");
+        println!("for a guest to connect to and nothing for the host to fire. That is the half");
+        println!("of the surface a mod needs before it can respond to anything at all.");
+    }
     println!();
     println!("### API backlog");
     println!();
