@@ -36,6 +36,7 @@
 
 mod content;
 mod enums;
+pub mod input;
 pub mod members;
 pub mod render;
 pub mod signal;

@@ -52,6 +52,35 @@ pub enum Kind {
     DescendantAdded,
     DescendantRemoving,
     Destroying,
+    // ── Input, sprint 9 ──────────────────────────────────────────────────────
+    //
+    // ONE ENUM FOR EVERY EVENT, and the input family joins it rather than
+    // getting a parallel type. `Dom::connect` stores a `Kind`, `listeners`
+    // filters on one, and `fire` calls them -- none of which cares whether the
+    // event came from a property write or from a mouse. A second enum would need
+    // a second handler table, a second `listeners`, and a second copy of the
+    // collect-release-call discipline that is the whole reason this module
+    // exists.
+    //
+    // THE `GuiButton` HALF. `implements` refuses these on a `Frame` by class, so
+    // nothing here has to check.
+    Activated,
+    SecondaryActivated,
+    MouseButton1Click,
+    MouseButton1Down,
+    MouseButton1Up,
+    MouseButton2Click,
+    MouseButton2Down,
+    MouseButton2Up,
+    // The `GuiObject` half.
+    MouseEnter,
+    MouseLeave,
+    MouseMoved,
+    MouseWheelForward,
+    MouseWheelBackward,
+    InputBegan,
+    InputChanged,
+    InputEnded,
 }
 
 impl Kind {
@@ -65,6 +94,22 @@ impl Kind {
             Kind::DescendantAdded => "DescendantAdded".into(),
             Kind::DescendantRemoving => "DescendantRemoving".into(),
             Kind::Destroying => "Destroying".into(),
+            Kind::Activated => "Activated".into(),
+            Kind::SecondaryActivated => "SecondaryActivated".into(),
+            Kind::MouseButton1Click => "MouseButton1Click".into(),
+            Kind::MouseButton1Down => "MouseButton1Down".into(),
+            Kind::MouseButton1Up => "MouseButton1Up".into(),
+            Kind::MouseButton2Click => "MouseButton2Click".into(),
+            Kind::MouseButton2Down => "MouseButton2Down".into(),
+            Kind::MouseButton2Up => "MouseButton2Up".into(),
+            Kind::MouseEnter => "MouseEnter".into(),
+            Kind::MouseLeave => "MouseLeave".into(),
+            Kind::MouseMoved => "MouseMoved".into(),
+            Kind::MouseWheelForward => "MouseWheelForward".into(),
+            Kind::MouseWheelBackward => "MouseWheelBackward".into(),
+            Kind::InputBegan => "InputBegan".into(),
+            Kind::InputChanged => "InputChanged".into(),
+            Kind::InputEnded => "InputEnded".into(),
         }
     }
 }

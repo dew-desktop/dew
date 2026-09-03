@@ -72,6 +72,31 @@ pub fn item_by_value(ty: &str, value: u32) -> Option<LuaEnumItem> {
         })
 }
 
+/// The member of `ty` with this name.
+///
+/// THE HOST'S OWN DIRECTION OF LOOKUP. [`item_by_value`] serves a guest reading
+/// a property back, where a bare `u32` has to be given a name. This serves the
+/// host handing a guest an enum item it decided on -- `Enum.UserInputType`
+/// `.MouseButton1` on an `InputObject` -- where the name is what the host knows
+/// and the value is the detail. Generated from the same database, so an item
+/// this host names and an item the engine names cannot disagree.
+///
+/// A NAME THE DATABASE DOES NOT CARRY RETURNS `None` rather than a placeholder
+/// item. The callers are all host-side constants, so `None` means this host
+/// spelled one wrong -- and an `EnumItem` with a made-up value would travel into
+/// a guest's comparison and answer false against the real one.
+pub fn item_by_name(ty: &str, name: &str) -> Option<LuaEnumItem> {
+    let descriptor = category(ty)?;
+    descriptor
+        .items
+        .get_key_value(name)
+        .map(|(name, value)| LuaEnumItem {
+            ty: descriptor.name,
+            name,
+            value: *value,
+        })
+}
+
 /// Is `value` a member of `ty`?
 pub fn value_is_valid(ty: &str, value: u32) -> bool {
     category(ty).is_some_and(|d| d.items.values().any(|v| *v == value))

@@ -1,10 +1,16 @@
 //! 💧 Dew — a desktop applet platform.
 //!
-//! WHAT IS NOT IN THIS CRATE, and deliberately: layout, hit testing, pointer
-//! arbitration, text measurement, rasterisation, the Luau VM, and the frame
-//! loop. All of it comes from Aether, which is also what the Roblox host uses —
-//! so a widget's visual half behaves the same in both places, and a rendering
-//! fix reaches both at once.
+//! WHAT IS NOT IN THIS CRATE, and deliberately: text measurement,
+//! rasterisation, the Luau VM, and the frame loop. Those come from Aether, which
+//! is also what the Roblox host uses — so a widget's visual half behaves the same
+//! in both places, and a rendering fix reaches both at once.
+//!
+//! LAYOUT, HIT TESTING AND POINTER ARBITRATION USED TO BE ON THAT LIST, and for
+//! the Aether arm they still are: `Driver::pointer` hands an event to the
+//! framework and the framework decides. Dew's own DataModel has no framework
+//! under it, so the host answers for itself — `datamodel::render` resolves the
+//! geometry and `datamodel::input` says which instance is at (x, y). ADR-001 is
+//! why: a host that owns its DataModel owns the questions asked of it.
 //!
 //! What IS Dew's: mod discovery, manifests, capabilities, and putting widgets on
 //! a desktop. That is the whole remit.
@@ -19,6 +25,7 @@ mod tray;
 use aether_raster::{Backend, Font};
 use aether_runtime::{Driver, RasterPainter, Rgb};
 use aether_window::{Button, Event, Window};
+use dew_host::datamodel::input;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -74,7 +81,35 @@ enum Renderer {
         background: Option<Rgb>,
         width: f32,
         height: f32,
+        /// The VM the tree's handlers live in.
+        ///
+        /// HELD BECAUSE FIRING NEEDS IT. A handler's arguments are Lua values —
+        /// two numbers for `MouseMoved`, an `InputObject` for `InputBegan` — and
+        /// building one needs a `&Lua`. `Vm` itself stays in `run`'s
+        /// `_keep_alive`; mlua's `Lua` is a reference-counted handle onto the same
+        /// state, so this is a second reference to that VM rather than a second
+        /// VM.
+        lua: mlua::Lua,
+        /// Hover and press state, carried across frames. See
+        /// `datamodel::input::Pointer` — `MouseEnter` is the difference between
+        /// two events, so somebody has to remember the previous answer.
+        pointer: input::Pointer,
     },
+}
+
+/// Which mouse button, in the DataModel's spelling.
+///
+/// TWO ENUMS RATHER THAN ONE SHARED ONE. `aether_window::Button` is what the
+/// platform reports and `input::Button` is what the DataModel fires as; making
+/// Dew's host depend on the window crate's enum inside the datamodel would put an
+/// Aether type in `dew_host`, which is exactly the boundary ADR-004's checker
+/// counts. It is three lines to translate and the allowlist stays where it is.
+fn button(button: Button) -> input::Button {
+    match button {
+        Button::Left => input::Button::Left,
+        Button::Right => input::Button::Right,
+        Button::Middle => input::Button::Middle,
+    }
 }
 
 impl Renderer {
@@ -102,6 +137,8 @@ impl Renderer {
                 background,
                 width,
                 height,
+                lua,
+                pointer,
             } => {
                 let _ = dt;
                 if !dom.lock().expect("dom").take_dirty() {
@@ -109,30 +146,172 @@ impl Renderer {
                 }
                 let frame = datamodel::render::frame_of(dom, *root, *width, *height);
                 aether_runtime::Painter::paint_frame(painter, &frame, *background);
+
+                //--- HOVER IS RECONCILED AFTER A PAINT, and this is the case a
+                //--- naive implementation gets wrong silently. `MouseEnter` and
+                //--- `MouseLeave` are the difference between two pointer events,
+                //--- so an implementation that updates them only when the pointer
+                //--- moves is correct until the TREE moves instead — and then a
+                //--- mod that destroys the button under a stationary cursor keeps
+                //--- a stale hover forever, and one that puts a new element there
+                //--- never fires `MouseEnter` until the person jiggles the mouse.
+                //---
+                //--- ONLY ON A PAINTED FRAME, which is what keeps this off the
+                //--- idle path: a frame that found nothing dirty returned above
+                //--- and never reaches here, so an untouched tree costs one
+                //--- `take_dirty` and nothing else. `refresh` does not dirty the
+                //--- tree either, so a settled hover does not schedule the next
+                //--- frame — which is the whole of sprint 8's gain, preserved.
+                pointer
+                    .refresh(&input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    })
+                    .map_err(|e| e.to_string())?;
                 Ok(true)
             }
         }
     }
 
-    /// A pointer event, for a runtime that has somewhere to send it.
+    /// The cursor moved.
     ///
-    /// DROPPED, LOUDLY IN THE COMMENT AND SILENTLY AT RUNTIME, for a DataModel
-    /// mod. There is a signal model now -- sprint 8 built the type and the events
-    /// an instance raises about ITSELF -- but no `Activated`, no `InputBegan`, and
-    /// no hit testing to decide which instance a click at (x, y) belongs to.
-    /// Sprint 9 is where this arm gets a body, and the milestone is not finished
-    /// until it does.
-    fn pointer(&mut self, kind: aether_runtime::Pointer, x: f32, y: f32) -> Result<(), String> {
+    /// THIS ARM WAS `Ok(())` WITH A COMMENT ADMITTING IT, for three sprints. A
+    /// DataModel mod could be drawn, navigated, torn down and told about its own
+    /// properties, and could not be clicked — sprint 7 measured that on the live
+    /// window and named the cause: fourteen methods and no events. The signal type
+    /// arrived in sprint 8; what was still missing was somewhere to send a
+    /// pointer, which is a hit test.
+    fn moved(&mut self, x: f32, y: f32) -> Result<(), String> {
         match self {
-            Renderer::Aether(driver) => driver.pointer(kind, x, y).map_err(|e| e.to_string()),
-            Renderer::DataModel { .. } => Ok(()),
+            Renderer::Aether(driver) => driver
+                .pointer(aether_runtime::Pointer::Move, x, y)
+                .map_err(|e| e.to_string()),
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .moved(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    x,
+                    y,
+                )
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// A button went down.
+    ///
+    /// THE AETHER ARM HAS ONE BUTTON AND THIS ONE HAS THREE. `Driver::pointer`
+    /// takes a `Pointer` with no button in it, so the loop below used to match
+    /// `button: Button::Left` and drop the other two with a bare arm. A DataModel
+    /// mod has `MouseButton2Click` and `SecondaryActivated`, so the button now
+    /// travels — and the Aether arm keeps ignoring anything but the left, which is
+    /// the framework's own limitation and not one to paper over here.
+    fn down(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
+        match self {
+            Renderer::Aether(driver) => {
+                if button != Button::Left {
+                    return Ok(());
+                }
+                driver
+                    .pointer(aether_runtime::Pointer::Down, x, y)
+                    .map_err(|e| e.to_string())
+            }
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .down(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    self::button(button),
+                    x,
+                    y,
+                )
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    /// A button came up.
+    fn up(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
+        match self {
+            Renderer::Aether(driver) => {
+                if button != Button::Left {
+                    return Ok(());
+                }
+                driver
+                    .pointer(aether_runtime::Pointer::Up, x, y)
+                    .map_err(|e| e.to_string())
+            }
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .up(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    self::button(button),
+                    x,
+                    y,
+                )
+                .map_err(|e| e.to_string()),
         }
     }
 
     fn wheel(&mut self, x: f32, y: f32, delta: f32) -> Result<(), String> {
         match self {
             Renderer::Aether(driver) => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
-            Renderer::DataModel { .. } => Ok(()),
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .wheel(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    x,
+                    y,
+                    delta,
+                )
+                .map_err(|e| e.to_string()),
         }
     }
 
@@ -340,6 +519,12 @@ fn run() -> Result<(), String> {
             background,
             width: width as f32,
             height: height as f32,
+            //--- CLONED BEFORE `vm` IS MOVED INTO `_keep_alive` BELOW. `Lua` is a
+            //--- reference-counted handle onto the VM's state, so this is a second
+            //--- reference and not a second VM — and the handlers this arm fires
+            //--- are functions the guest created in exactly that state.
+            lua: vm.lua().clone(),
+            pointer: input::Pointer::default(),
         },
     };
 
@@ -406,24 +591,16 @@ fn run() -> Result<(), String> {
     while let Some(events) = window.poll() {
         for event in events {
             match event {
-                Event::PointerMove { x, y } => {
-                    renderer.pointer(aether_runtime::Pointer::Move, x, y)?;
-                }
-                Event::PointerDown {
-                    x,
-                    y,
-                    button: Button::Left,
-                } => {
-                    renderer.pointer(aether_runtime::Pointer::Down, x, y)?;
-                }
-                Event::PointerUp {
-                    x,
-                    y,
-                    button: Button::Left,
-                } => {
-                    renderer.pointer(aether_runtime::Pointer::Up, x, y)?;
-                }
-                Event::PointerDown { .. } | Event::PointerUp { .. } => {}
+                Event::PointerMove { x, y } => renderer.moved(x, y)?,
+                //--- THE BUTTON TRAVELS NOW. These two arms matched
+                //--- `button: Button::Left` and a third dropped the rest, because
+                //--- `Driver::pointer` has nowhere to put a button. A DataModel mod
+                //--- has `MouseButton2Click` and `SecondaryActivated`, so which
+                //--- button it was is no longer the host's to discard — the Aether
+                //--- arm ignores everything but the left inside `Renderer`, where
+                //--- that limitation belongs.
+                Event::PointerDown { x, y, button } => renderer.down(button, x, y)?,
+                Event::PointerUp { x, y, button } => renderer.up(button, x, y)?,
                 Event::Wheel { x, y, delta } => {
                     renderer.wheel(x, y, delta)?;
                 }

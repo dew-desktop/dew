@@ -21,11 +21,20 @@
 	not sniff for a framework — declaring it is the author's job, because both
 	flavours build a tree and there is no artefact that tells them apart.
 
-	WHAT IT DOES NOT DO, and says so rather than faking: nothing here is clicked.
-	There is a signal model now — sprint 8 — and the bottom line on the card is a
-	real `GetPropertyChangedSignal` connection firing during `mount`. What is still
-	missing is INPUT: no `Activated`, no `InputBegan`, and no hit testing to decide
-	which instance a click at (x, y) belongs to. That is sprint 9.
+	AND IT IS CLICKABLE NOW, which is the clause milestone 1's done-test has been
+	missing since it was written. The button at the bottom of the card is a real
+	`TextButton` with a real `Activated` connection: clicking it counts up, recolours
+	the dot, and rewrites its own label. Sprint 7 recorded that pointer events were
+	dropped for a DataModel mod and named the cause — fourteen methods and no events.
+	Sprint 8 built the signal type; sprint 9 added the hit test that says which
+	instance is at (x, y), and this is it being clicked.
+
+	HOVER TOO, on the card itself. `card.Active = true` is what makes a Frame a hit
+	candidate: a Frame ships `Active = false`, and that is the engine's own answer to
+	how input is gated rather than this host's invention — it is why a TextLabel laid
+	over a button does not steal the click. The rule Dew honours is written down in
+	`host/src/datamodel/input.rs`: `Active` decides who is hit, `Interactable` decides
+	whether the hit fires anything.
 
 	AND THE HOST NO LONGER REPAINTS THIS EVERY FRAME. It used to, because nothing
 	signalled a change and "assume so" was the only honest answer; the same
@@ -33,6 +42,12 @@
 	moves is drawn once. A mod that animates does it by assigning to a property,
 	which is exactly what dirties the tree — so that costs an animating mod
 	nothing, and this file did not have to change for either.
+
+	INPUT DOES NOT CHANGE THAT EITHER. Moving the cursor over this card fires
+	`MouseEnter` and `MouseMoved`, and none of it repaints anything unless a handler
+	actually assigns something. The dot recolouring on hover DOES repaint, once, per
+	crossing — which is the point: `painted` rises while you interact and returns to
+	zero when you stop.
 ]]
 
 --- Reading a capability, and reading the ABSENCE of one.
@@ -97,10 +112,10 @@ return {
 		stroke.Thickness = 1
 		stroke.Parent = card
 
-		label(card, "Title", 16, 22, Color3.fromRGB(233, 239, 249)).Text = "Nameplate"
-		label(card, "Subtitle", 48, 14, Color3.fromRGB(146, 162, 188)).Text =
+		label(card, "Title", 14, 22, Color3.fromRGB(233, 239, 249)).Text = "Nameplate"
+		label(card, "Subtitle", 42, 14, Color3.fromRGB(146, 162, 188)).Text =
 			"a mod with no framework"
-		label(card, "Caps", 76, 12, Color3.fromRGB(120, 170, 240)).Text = capabilityReport(dew)
+		label(card, "Caps", 66, 12, Color3.fromRGB(120, 170, 240)).Text = capabilityReport(dew)
 		--- THREE METHOD CALLS, and until sprint 7 this line could not be written.
 		--- The member surface read 0 of 52 when this file was first committed, and
 		--- the comment here said so; tree navigation and lifecycle are the first
@@ -111,7 +126,7 @@ return {
 		--- `card:IsA("GuiObject")` is the one worth printing: `card` is a Frame,
 		--- and the answer is true only because `IsA` walks the superclass chain
 		--- rather than comparing strings.
-		label(card, "Runtime", 100, 12, Color3.fromRGB(104, 118, 142)).Text =
+		label(card, "Runtime", 84, 12, Color3.fromRGB(104, 118, 142)).Text =
 			`in {root.Name} · {#card:GetChildren()} kids · IsA GuiObject: {card:IsA("GuiObject")}`
 
 		--- A SIGNAL, CONNECTED AND FIRED AND DISCONNECTED, on the ordinary loader.
@@ -130,7 +145,7 @@ return {
 		card.BackgroundColor3 = Color3.fromRGB(23, 30, 41)
 		watch:Disconnect()
 
-		label(card, "Signals", 120, 12, Color3.fromRGB(104, 118, 142)).Text =
+		label(card, "Signals", 102, 12, Color3.fromRGB(104, 118, 142)).Text =
 			`2 writes · {changes} Changed · {typeof(watch)} connected: {watch.Connected}`
 
 		--- ZIndex over declaration order, the one rule a geometric conformance
@@ -147,5 +162,63 @@ return {
 		local dotCorner = Instance.new("UICorner")
 		dotCorner.CornerRadius = UDim.new(1, 0)
 		dotCorner.Parent = dot
+
+		--- A BUTTON, AND THE WHOLE POINT OF SPRINT 9.
+		---
+		--- A `TextButton` RATHER THAN A `Frame`, and the class is the decision:
+		--- `Activated` is a `GuiButton` event and a Frame does not have it —
+		--- `frame.Activated` errors with "not a valid member of Frame", because the
+		--- host's member predicate walks the superclass chain rather than matching a
+		--- name. It is also `Active = true` by default, which is what makes it a hit
+		--- candidate without this file setting anything.
+		local button = Instance.new("TextButton")
+		button.Name = "Bump"
+		--- THE ROWS ABOVE WERE COMPACTED TO MAKE ROOM, rather than the card being
+		--- made taller. A taller window would have changed the raster cost and made
+		--- this sprint's `--stats` numbers not comparable with sprint 7's and 8's,
+		--- which are measured at 340x148 — and the whole reason for taking those
+		--- numbers is the comparison.
+		button.Size = UDim2.new(1, -36, 0, 24)
+		button.Position = UDim2.new(0, 18, 0, 120)
+		button.BackgroundColor3 = Color3.fromRGB(38, 52, 74)
+		button.TextColor3 = Color3.fromRGB(206, 222, 246)
+		button.TextSize = 12
+		button.Text = "click me"
+		button.Parent = card
+
+		local buttonCorner = Instance.new("UICorner")
+		buttonCorner.CornerRadius = UDim.new(0, 8)
+		buttonCorner.Parent = button
+
+		--- THE TREE CHANGES, WHICH IS THE OBSERVABLE PART. A click that only
+		--- incremented a counter would prove the handler ran and nothing else; this
+		--- rewrites the label and recolours the dot, so what happened is on screen
+		--- and a `--snapshot` before and after differ.
+		local clicks = 0
+		button.Activated:Connect(function()
+			clicks += 1
+			button.Text = `clicked {clicks}x`
+			--- ASSIGNING THE SAME VALUE FIRES NOTHING AND REPAINTS NOTHING, which is
+			--- sprint 8's rule and the reason this alternates rather than setting one
+			--- colour: every click has to be a real change to be worth a frame.
+			dot.BackgroundColor3 = if clicks % 2 == 1
+				then Color3.fromRGB(240, 186, 96)
+				else Color3.fromRGB(96, 208, 148)
+		end)
+
+		--- HOVER, ON A FRAME, WHICH NEEDS ONE LINE OF CONSENT.
+		---
+		--- `card.Active = true` is that line. A `Frame` ships `Active = false` and is
+		--- therefore not a hit candidate at all — the same default that stops a
+		--- `TextLabel` stealing a click from the button underneath it. A mod that
+		--- wants a hoverable panel says so, which is what a Roblox developer writes
+		--- for one anyway.
+		card.Active = true
+		card.MouseEnter:Connect(function()
+			stroke.Color = Color3.fromRGB(120, 170, 240)
+		end)
+		card.MouseLeave:Connect(function()
+			stroke.Color = Color3.fromRGB(64, 110, 184)
+		end)
 	end,
 }

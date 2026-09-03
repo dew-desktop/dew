@@ -369,6 +369,64 @@ mod tests {
     }
 
     #[test]
+    fn a_datamodel_mod_responds_to_a_click_through_the_ordinary_loader() {
+        // THE MILESTONE'S DONE-TEST, ON THE PATH A MOD REALLY TAKES. The unit
+        // tests in `datamodel::input` prove the hit test and the firing on a bare
+        // VM; this proves it survives the loader — a manifest, a capability table,
+        // the root the host made, and the VM a mod is actually given.
+        let fixture = Fixture::new(
+            "clickable",
+            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 100, height = 60 },
+                    mount = function(dew, root)
+                        local b = Instance.new("TextButton")
+                        b.Name = "Go"
+                        b.Size = UDim2.new(1, 0, 1, 0)
+                        b.Text = "before"
+                        b.Parent = root
+                        b.Activated:Connect(function()
+                            b.Text = "after"
+                        end)
+                    end,
+                }
+            "#,
+        );
+        let loaded = fixture.load().expect("the mod loads");
+        let Mounted::DataModel { dom, root } = &loaded.mounted else {
+            panic!("a datamodel manifest must not produce an Aether session");
+        };
+
+        let surface = datamodel::input::Surface {
+            lua: loaded.vm.lua(),
+            dom,
+            root: *root,
+            size: (100.0, 60.0),
+        };
+        let mut pointer = datamodel::input::Pointer::default();
+        let button = datamodel::input::Button::Left;
+        // A SYNTHETIC PRESS AND RELEASE, headless. There is no window in this test
+        // — `Pointer` takes coordinates, and what the frame loop does with a real
+        // `Event::PointerDown` is one translation away.
+        pointer.down(&surface, button, 50.0, 30.0).expect("down");
+        pointer.up(&surface, button, 50.0, 30.0).expect("up");
+
+        // READ BACK THROUGH THE ARENA, because a mod is HANDED its root as an
+        // argument rather than given a global to reach it by — there is no
+        // `DewRoot` in a mod's VM to evaluate against. The renderer reads the tree
+        // the same way.
+        let dom = dom.lock().expect("dom");
+        let go = dom.children(*root)[0];
+        assert_eq!(
+            dom.property(go, "Text"),
+            Some(rbx_types::Variant::String("after".into())),
+            "a click on a mod loaded through the ordinary loader did not reach its handler"
+        );
+    }
+
+    #[test]
     fn the_vocabulary_is_installed_for_a_datamodel_mod() {
         // `Color3` above is the assertion: without `install_vocabulary` the mount
         // fails at the first line that names one. Stated separately so a failure
@@ -396,7 +454,7 @@ mod tests {
                         assert(dew.storage ~= nil, "storage was granted")
                         assert(dew.clipboard == nil, "clipboard was not asked for")
                         assert(root.Name == "DewRoot", "the root is named DewRoot")
-                        assert(rawget(_G, "game") == nil, "no `game` global before sprint 9")
+                        assert(rawget(_G, "game") == nil, "no `game` global before step F")
                     end,
                 }
             "#,

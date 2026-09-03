@@ -110,6 +110,43 @@ const NOT_UI_MEMBERS: &[&str] = &[
     "AncestryChanged",
 ];
 
+/// Which members are POINTER INPUT, as opposed to something an instance says
+/// about itself.
+///
+/// A CLASSIFICATION OF ROBLOX'S API, WHICH IS THIS TOOL'S JOB, and it is the one
+/// thing here that is a list rather than a question asked of the host. Whether
+/// Dew implements any of them is still `implements`'s answer -- this only says
+/// which names would count if it did, the same way `NOT_UI_MEMBERS` says which
+/// names are out of scope without claiming anything about the host.
+///
+/// IT EXISTS TO KEEP ONE PARAGRAPH HONEST. The prose under "Implemented" used to
+/// assert that no implemented event was input, which was true for exactly one
+/// sprint. Printing that claim from a count means it corrects itself instead of
+/// having to be noticed.
+///
+/// FOCUS IS NOT HERE. `Focused` and `FocusLost` are input in the ordinary sense
+/// and they are a different mechanism -- an owner and keyboard routing -- so
+/// counting them here would make this paragraph claim a pointer story the host
+/// does not have.
+const INPUT_MEMBERS: &[&str] = &[
+    "Activated",
+    "SecondaryActivated",
+    "MouseButton1Click",
+    "MouseButton1Down",
+    "MouseButton1Up",
+    "MouseButton2Click",
+    "MouseButton2Down",
+    "MouseButton2Up",
+    "MouseEnter",
+    "MouseLeave",
+    "MouseMoved",
+    "MouseWheelForward",
+    "MouseWheelBackward",
+    "InputBegan",
+    "InputChanged",
+    "InputEnded",
+];
+
 /// Input devices this host does not have -- the twin of `INPUT_DEVICE`.
 ///
 /// Touch gestures, gamepad selection traversal, and the on-screen keyboard's
@@ -532,6 +569,11 @@ fn main() {
         .iter()
         .filter(|(m, kind)| **kind == "Event" && classify(m) == "implemented")
         .count();
+    // THROUGH `classify`, so this is `implements`'s answer and not a second one.
+    let implemented_input = all_members
+        .keys()
+        .filter(|m| INPUT_MEMBERS.contains(*m) && classify(m) == "implemented")
+        .count();
     let member_in_scope = m_implemented + member_backlog.len();
 
     // THE TWO HALVES CITE DIFFERENT ROBLOX BUILDS, and until now nothing said so.
@@ -579,6 +621,7 @@ fn main() {
             &member_backlog,
             &implemented_members,
             implemented_events,
+            implemented_input,
             build_skew.as_ref(),
         );
         return;
@@ -715,6 +758,7 @@ fn emit_markdown(
     member_backlog: &[&str],
     implemented_members: &[&str],
     implemented_events: usize,
+    implemented_input: usize,
     build_skew: Option<&(String, String)>,
 ) {
     let v = version
@@ -915,14 +959,36 @@ fn emit_markdown(
         // built the signal type. Its replacement is printed from the same count
         // rather than written down, so it can go stale in its turn without
         // anybody having to notice.
+        //
+        // AND IT DID, ONE SPRINT LATER. It read "Every one is something an
+        // instance says about ITSELF ... None of them is input: that needs hit
+        // testing, which is a different problem" -- true while the only events
+        // were `Changed` and the tree notices, and false the moment the hit test
+        // landed. So this paragraph splits on a COUNT too rather than being
+        // reworded: whether input is reachable is asked of `implements`, the same
+        // predicate every number here comes from, and the prose cannot disagree
+        // with the list above it.
         println!();
         println!(
             "**{implemented_events} of them are events**, reachable through \
              `RBXScriptSignal` and"
         );
-        println!("`RBXScriptConnection`. Every one is something an instance says about ITSELF --");
-        println!("its properties, its children, its own destruction. None of them is input:");
-        println!("that needs hit testing, which is a different problem.");
+        println!("`RBXScriptConnection`.");
+        println!();
+        if implemented_input == 0 {
+            println!("**None of them is input.** Every one is something an instance says about");
+            println!("ITSELF -- its properties, its children, its own destruction. Input needs a");
+            println!("hit test to say which instance is at (x, y), which is a different problem");
+            println!("with a different failure mode.");
+        } else {
+            println!(
+                "**{implemented_input} of them are input**, which is what makes a mod written"
+            );
+            println!("without a framework CLICKABLE. The host resolves the tree's geometry once");
+            println!("and both the painter and the hit test read that one answer, so what");
+            println!("responds to a click is what is on screen. The rest are what an instance");
+            println!("says about ITSELF -- its properties, its children, its own destruction.");
+        }
     }
     println!();
     println!("### API backlog");

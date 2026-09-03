@@ -182,11 +182,44 @@ fn stroke_of(dom: &Dom, id: usize) -> Option<Stroke> {
     None
 }
 
-/// Build the display list for the subtree under `root`.
+/// One element, resolved, in paint order.
 ///
-/// `root` itself is the surface and is not drawn; its children are laid out
+/// THE UNIT BOTH DRAWING AND HIT TESTING CONSUME, and that is the whole reason
+/// this type exists rather than the walk building `Node`s directly. Sprint 9
+/// needed to know which instance is at (x, y), and the tempting shape is a second
+/// recursive walk that resolves geometry again. It would drift -- not at once,
+/// but the first time `resolve` learns about `AutomaticSize` or a layout
+/// modifier and only one of the two callers is updated. The symptom is a button
+/// that works everywhere except where it looks like it should, which is close to
+/// unattributable once it ships.
+///
+/// So there is ONE placement pass. `frame` turns these into `Node`s and
+/// `input::hit` reads the same list backwards.
+#[derive(Clone, Copy, Debug)]
+pub struct Placed {
+    /// The instance this box belongs to. `Node` cannot carry it -- `Node` is
+    /// Aether's type and its `id` is a paint sequence number, not an arena id --
+    /// and it is the one thing a hit test needs and drawing does not.
+    pub id: usize,
+    pub rect: Box2,
+    /// The clipping box inherited from the nearest `ClipsDescendants` ancestor.
+    ///
+    /// APPLIES TO HIT TESTING AS WELL AS DRAWING. A child outside a clipping
+    /// parent is not visible and therefore not clickable, and honouring it in
+    /// the painter alone is the easy half to do and the easy half to forget.
+    pub clip: Option<Box2>,
+}
+
+/// Resolve everything under `root` into paint order, back to front.
+///
+/// `root` itself is the surface and is not placed; its children are laid out
 /// against the box the surface offers, which is how a `ScreenGui` behaves.
-pub fn frame(dom: &Dom, root: usize, width: f32, height: f32) -> Frame {
+///
+/// PAINT ORDER IS ZINDEX, THEN DEPTH, THEN DECLARATION, per LAYOUT.md section 6.
+/// A STABLE sort on ZIndex alone gives the other two for free, because the walk
+/// is already depth-first in declaration order -- and `sort_by_key` on a `Vec`
+/// is stable, which is load bearing rather than incidental here.
+pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Placed> {
     let surface = Box2 {
         x: 0.0,
         y: 0.0,
@@ -194,20 +227,14 @@ pub fn frame(dom: &Dom, root: usize, width: f32, height: f32) -> Frame {
         h: height,
     };
 
-    // (z, sequence, node). PAINT ORDER IS ZINDEX, THEN DEPTH, THEN DECLARATION,
-    // per LAYOUT.md section 6. A stable sort on ZIndex alone gives the other two
-    // for free, because the walk below is already depth-first in declaration
-    // order.
-    let mut collected: Vec<(i32, Node)> = Vec::new();
-    let mut sequence: u64 = 0;
+    let mut collected: Vec<(i32, Placed)> = Vec::new();
 
     fn walk(
         dom: &Dom,
         id: usize,
         parent: Box2,
-        clip: Option<Rect>,
-        collected: &mut Vec<(i32, Node)>,
-        sequence: &mut u64,
+        clip: Option<Box2>,
+        collected: &mut Vec<(i32, Placed)>,
     ) {
         for child in dom.children(id) {
             let Some(class) = dom.class_of(child) else {
@@ -217,7 +244,8 @@ pub fn frame(dom: &Dom, root: usize, width: f32, height: f32) -> Frame {
                 continue;
             }
             // INVISIBLE HIDES THE SUBTREE, not just the element. A child of an
-            // invisible parent is not drawn in the engine either.
+            // invisible parent is not drawn in the engine either -- and it is not
+            // clickable there either, which now follows from the same line.
             if boolean(dom, child, "Visible") == Some(false) {
                 continue;
             }
@@ -226,61 +254,85 @@ pub fn frame(dom: &Dom, root: usize, width: f32, height: f32) -> Frame {
 
             // ZERO AREA IS ABSENT FROM THE DISPLAY LIST, which the conformance
             // case `zero_area_nodes_are_not_drawn` verifies against the engine.
-            // Its children still lay out against it.
-            let drawable = rect.w > 0.0 && rect.h > 0.0;
-
-            if drawable {
-                *sequence += 1;
-                let node = Node {
-                    id: *sequence,
-                    name: dom.name_of(child).unwrap_or_default(),
-                    rect: Rect {
-                        x: rect.x,
-                        y: rect.y,
-                        w: rect.w,
-                        h: rect.h,
-                    },
-                    fill: colour(dom, child, "BackgroundColor3"),
-                    alpha: alpha_from(dom, child, "BackgroundTransparency"),
-                    radius: corner_radius(dom, child),
-                    clip,
-                    stroke: stroke_of(dom, child),
-                    gradient: None,
-                    text: if draws_text(&class) {
-                        text(dom, child, "Text").filter(|t| !t.is_empty())
-                    } else {
-                        None
-                    },
-                    text_size: number(dom, child, "TextSize").unwrap_or(14.0),
-                    text_align_x: align(dom, child, "TextXAlignment", "TextXAlignment"),
-                    text_align_y: align(dom, child, "TextYAlignment", "TextYAlignment"),
-                    text_colour: colour(dom, child, "TextColor3"),
-                };
+            // Its children still lay out against it. A zero-area box could not
+            // contain a point either, so the hit test needs no rule of its own.
+            if rect.w > 0.0 && rect.h > 0.0 {
                 let z = number(dom, child, "ZIndex").unwrap_or(1.0) as i32;
-                collected.push((z, node));
+                collected.push((
+                    z,
+                    Placed {
+                        id: child,
+                        rect,
+                        clip,
+                    },
+                ));
             }
 
             let inner = if boolean(dom, child, "ClipsDescendants") == Some(true) {
-                Some(Rect {
-                    x: rect.x,
-                    y: rect.y,
-                    w: rect.w,
-                    h: rect.h,
-                })
+                Some(rect)
             } else {
                 clip
             };
-            walk(dom, child, rect, inner, collected, sequence);
+            walk(dom, child, rect, inner, collected);
         }
     }
 
-    walk(dom, root, surface, None, &mut collected, &mut sequence);
+    walk(dom, root, surface, None, &mut collected);
     collected.sort_by_key(|(z, _)| *z);
+    collected.into_iter().map(|(_, placed)| placed).collect()
+}
+
+/// Turn one placed element into the display list node the painter consumes.
+fn node(dom: &Dom, placed: &Placed, sequence: u64) -> Node {
+    let id = placed.id;
+    let class = dom.class_of(id).unwrap_or_default();
+    Node {
+        id: sequence,
+        name: dom.name_of(id).unwrap_or_default(),
+        rect: Rect {
+            x: placed.rect.x,
+            y: placed.rect.y,
+            w: placed.rect.w,
+            h: placed.rect.h,
+        },
+        fill: colour(dom, id, "BackgroundColor3"),
+        alpha: alpha_from(dom, id, "BackgroundTransparency"),
+        radius: corner_radius(dom, id),
+        clip: placed.clip.map(|c| Rect {
+            x: c.x,
+            y: c.y,
+            w: c.w,
+            h: c.h,
+        }),
+        stroke: stroke_of(dom, id),
+        gradient: None,
+        text: if draws_text(&class) {
+            text(dom, id, "Text").filter(|t| !t.is_empty())
+        } else {
+            None
+        },
+        text_size: number(dom, id, "TextSize").unwrap_or(14.0),
+        text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
+        text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
+        text_colour: colour(dom, id, "TextColor3"),
+    }
+}
+
+/// Build the display list for the subtree under `root`.
+pub fn frame(dom: &Dom, root: usize, width: f32, height: f32) -> Frame {
+    // THE SEQUENCE NUMBER IS ASSIGNED AFTER THE SORT, and it was assigned before
+    // it when this walk built `Node`s inline. Nothing read it, so nothing broke;
+    // it is now what it claims to be, a paint index.
+    let nodes = display_list(dom, root, width, height)
+        .iter()
+        .enumerate()
+        .map(|(i, placed)| node(dom, placed, i as u64 + 1))
+        .collect();
 
     Frame {
         width,
         height,
-        nodes: collected.into_iter().map(|(_, n)| n).collect(),
+        nodes,
         focused: false,
     }
 }

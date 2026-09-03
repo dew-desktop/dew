@@ -102,7 +102,7 @@ DOM. It is a consumer of this surface and never an implementation of it, so it
 is not measured here and is not required to conform. What must match is what a
 Luau application sees, **with or without Aether**.
 
-**21 of 52 in-scope members implemented.**
+**37 of 52 in-scope members implemented.**
 32 more are excluded by decision, out of 84 reachable
 (44 methods, 40 events).
 
@@ -112,23 +112,27 @@ document makes on the host's behalf.
 
 ### Implemented
 
-- `Changed`, `ChildAdded`, `ChildRemoved`, `ClearAllChildren`, `DescendantAdded`, `DescendantRemoving`, `Destroy`, `Destroying`
-- `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`, `FindFirstDescendant`, `GetChildren`
-- `GetDescendants`, `GetPropertyChangedSignal`, `IsA`, `IsAncestorOf`, `IsDescendantOf`
+- `Activated`, `Changed`, `ChildAdded`, `ChildRemoved`, `ClearAllChildren`, `DescendantAdded`, `DescendantRemoving`, `Destroy`
+- `Destroying`, `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`, `FindFirstDescendant`
+- `GetChildren`, `GetDescendants`, `GetPropertyChangedSignal`, `InputBegan`, `InputChanged`, `InputEnded`, `IsA`, `IsAncestorOf`
+- `IsDescendantOf`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`, `MouseEnter`
+- `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `SecondaryActivated`
 
-**6 of them are events**, reachable through `RBXScriptSignal` and
-`RBXScriptConnection`. Every one is something an instance says about ITSELF --
-its properties, its children, its own destruction. None of them is input:
-that needs hit testing, which is a different problem.
+**22 of them are events**, reachable through `RBXScriptSignal` and
+`RBXScriptConnection`.
+
+**16 of them are input**, which is what makes a mod written
+without a framework CLICKABLE. The host resolves the tree's geometry once
+and both the painter and the hit test read that one answer, so what
+responds to a click is what is on screen. The rest are what an instance
+says about ITSELF -- its properties, its children, its own destruction.
 
 ### API backlog
 
 What parity actually requires. No Dew guest can reach any of these.
 
-- `Activated`, `CaptureFocus`, `FocusLost`, `Focused`, `GetScrollVelocity`, `InputBegan`, `InputChanged`, `InputEnded`
-- `IsFocused`, `JumpTo`, `JumpToIndex`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`
-- `MouseButton2Up`, `MouseEnter`, `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `Next`, `PageEnter`
-- `PageLeave`, `Previous`, `ReleaseFocus`, `ResetScrollVelocity`, `SecondaryActivated`, `Stopped`, `WaitForChild`
+- `CaptureFocus`, `FocusLost`, `Focused`, `GetScrollVelocity`, `IsFocused`, `JumpTo`, `JumpToIndex`, `Next`
+- `PageEnter`, `PageLeave`, `Previous`, `ReleaseFocus`, `ResetScrollVelocity`, `Stopped`, `WaitForChild`
 
 ### This document measures two Roblox builds at once
 

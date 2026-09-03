@@ -12,18 +12,29 @@
 //! the dispatch does not honour.
 //!
 //! WHY THE CLASS IS A PARAMETER when every entry below says `Instance`
-//! It is vacuous today and it will not be next sprint. `CaptureFocus` belongs to
-//! `GuiObject` and `GetScrollVelocity` to `ScrollingFrame`; a name-only predicate
-//! would offer both on a `UIListLayout` and report them reachable everywhere.
-//! Building the check while every answer is "yes" is cheaper than retrofitting it
-//! on the day a wrong answer becomes possible.
+//! IT IS NO LONGER VACUOUS, and sprint 9 is the sprint that made it matter.
+//! `Activated` and the `MouseButton` pairs are `GuiButton`'s, so
+//! `frame.Activated` is not a valid member of a `Frame` and this predicate says
+//! so; the pointer events are `GuiObject`'s and reach a `Frame` but not a
+//! `UIListLayout`. Sprint 7 built the check while every answer was still "yes",
+//! which was cheaper than retrofitting it on the day a wrong answer became
+//! possible -- and this is that day.
 //!
-//! WHAT THIS SLICE COVERS: tree navigation, lifecycle, and the signals an
-//! instance raises ABOUT ITSELF -- `Changed`, `GetPropertyChangedSignal`, and the
-//! five tree-and-lifecycle events. The signal TYPE lives in [`super::signal`];
-//! this file is where the dispatch hands one out and where `Destroy` routes
-//! through the notices. Input events are the other half of the surface and need
-//! hit testing, which is a different problem with a different failure mode.
+//! WHAT THIS SLICE COVERS: tree navigation, lifecycle, the signals an instance
+//! raises ABOUT ITSELF -- `Changed`, `GetPropertyChangedSignal`, and the five
+//! tree-and-lifecycle events -- and, since sprint 9, the sixteen input events.
+//! The signal TYPE lives in [`super::signal`], and the hit test and the pointer
+//! state machine in [`super::input`]; this file is only where the dispatch hands
+//! a signal out. That split is the point: `__index` cannot tell an input event
+//! from a property one, and it should not have to.
+//!
+//! STILL NOT HERE, AND EACH FOR A STATED REASON. `Focused`, `FocusLost`,
+//! `CaptureFocus`, `ReleaseFocus` and `IsFocused` need an owner and keyboard
+//! routing, which is a mechanism of its own rather than the second half of this
+//! one. `PageEnter`, `PageLeave`, `Stopped`, `Next`, `Previous`, `JumpTo`,
+//! `JumpToIndex`, `GetScrollVelocity` and `ResetScrollVelocity` are
+//! `UIPageLayout` and `ScrollingFrame` behaviour, and neither class is rendered
+//! yet -- offering those members would be offering a scroll that cannot scroll.
 //!
 //! WHY `WaitForChild` IS NOT HERE, decided rather than overlooked
 //! On the engine it YIELDS: it returns the child if one exists and otherwise
@@ -61,6 +72,87 @@ struct Member {
 /// them would give `implements` two lists to stay consistent with, which is the
 /// one thing this file exists to avoid.
 const MEMBERS: &[Member] = &[
+    // -- Input, and THE CLASS PARAMETER STOPS BEING VACUOUS HERE --------------
+    //
+    // Every entry in this list said `Instance` until this sprint, and the module
+    // comment above promised that would change. It has: `Activated` and the
+    // `MouseButton` pairs are `GuiButton`'s, so `frame.Activated` is not a valid
+    // member of a `Frame` and `implements` says so by walking the superclass
+    // chain rather than by matching a name. A name-only predicate would have
+    // offered `Activated` on a `UIListLayout` and reported it reachable
+    // everywhere.
+    //
+    // THE CLASSES COME FROM THE PINNED API DUMP, not from memory:
+    // `host/datamodel/api_surface.json` puts these eight on `GuiButton` and the
+    // next eight on `GuiObject`, and both names exist in
+    // `rbx_reflection_database` -- which is the thing that had to be checked,
+    // because naming a class the database has never heard of makes the descendant
+    // check answer false for every instance in the arena.
+    Member {
+        name: "Activated",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "SecondaryActivated",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseButton1Click",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseButton1Down",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseButton1Up",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseButton2Click",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseButton2Down",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseButton2Up",
+        introduced_on: "GuiButton",
+    },
+    Member {
+        name: "MouseEnter",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "MouseLeave",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "MouseMoved",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "MouseWheelForward",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "MouseWheelBackward",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "InputBegan",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "InputChanged",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "InputEnded",
+        introduced_on: "GuiObject",
+    },
+    // -- Everything an instance says about itself -----------------------------
     Member {
         name: "Changed",
         introduced_on: "Instance",
@@ -282,6 +374,27 @@ pub fn lookup(
         "DescendantAdded" => Some(signal::Kind::DescendantAdded),
         "DescendantRemoving" => Some(signal::Kind::DescendantRemoving),
         "Destroying" => Some(signal::Kind::Destroying),
+        // INPUT IS READ, NOT CALLED, LIKE EVERY OTHER EVENT. There is nothing
+        // special about these sixteen at the dispatch: `button.Activated` fetches
+        // a signal from the same list by the same rule, and what makes them
+        // different lives entirely in who FIRES them -- `datamodel::input`, driven
+        // by the window rather than by a guest's assignment.
+        "Activated" => Some(signal::Kind::Activated),
+        "SecondaryActivated" => Some(signal::Kind::SecondaryActivated),
+        "MouseButton1Click" => Some(signal::Kind::MouseButton1Click),
+        "MouseButton1Down" => Some(signal::Kind::MouseButton1Down),
+        "MouseButton1Up" => Some(signal::Kind::MouseButton1Up),
+        "MouseButton2Click" => Some(signal::Kind::MouseButton2Click),
+        "MouseButton2Down" => Some(signal::Kind::MouseButton2Down),
+        "MouseButton2Up" => Some(signal::Kind::MouseButton2Up),
+        "MouseEnter" => Some(signal::Kind::MouseEnter),
+        "MouseLeave" => Some(signal::Kind::MouseLeave),
+        "MouseMoved" => Some(signal::Kind::MouseMoved),
+        "MouseWheelForward" => Some(signal::Kind::MouseWheelForward),
+        "MouseWheelBackward" => Some(signal::Kind::MouseWheelBackward),
+        "InputBegan" => Some(signal::Kind::InputBegan),
+        "InputChanged" => Some(signal::Kind::InputChanged),
+        "InputEnded" => Some(signal::Kind::InputEnded),
         _ => None,
     };
     if let Some(kind) = event {
@@ -542,17 +655,63 @@ mod tests {
 
     #[test]
     fn the_predicate_refuses_what_this_sprint_deferred() {
-        // Sprint 9's, and named here because a predicate that answered true for
-        // them would print a number the dispatch cannot honour -- exactly the
-        // failure the hand-written list produced. This list was
-        // `GetPropertyChangedSignal`, `Changed` and `CaptureFocus` last sprint;
-        // two of them arrived, which is the test being repointed rather than
-        // failing at its job.
-        for member in ["Activated", "InputBegan", "CaptureFocus", "IsFocused"] {
+        // WHAT IS STILL DEFERRED, named here because a predicate that answered
+        // true for any of it would print a number the dispatch cannot honour --
+        // exactly the failure the hand-written list produced.
+        //
+        // THIS TEST HAS NOW BEEN REPOINTED TWICE, and that is it working rather
+        // than it failing at its job. Sprint 8 found `Changed` and
+        // `GetPropertyChangedSignal` in it; this sprint found `Activated` and
+        // `InputBegan`. Whatever is left is what the next sprint owes.
+        //
+        // FOCUS, which needs an owner and keyboard routing.
+        for member in [
+            "CaptureFocus",
+            "ReleaseFocus",
+            "IsFocused",
+            "Focused",
+            "FocusLost",
+        ] {
             assert!(!implements("TextBox", member), "{member}");
+        }
+        // `UIPageLayout` AND `ScrollingFrame`, neither of which is rendered.
+        for member in ["GetScrollVelocity", "ResetScrollVelocity"] {
+            assert!(!implements("ScrollingFrame", member), "{member}");
+        }
+        for member in [
+            "PageEnter",
+            "PageLeave",
+            "Stopped",
+            "Next",
+            "Previous",
+            "JumpToIndex",
+        ] {
+            assert!(!implements("UIPageLayout", member), "{member}");
         }
         // Decided, not overlooked. See the module comment.
         assert!(!implements("Frame", "WaitForChild"));
+    }
+
+    #[test]
+    fn the_class_parameter_is_no_longer_vacuous() {
+        // EVERY ENTRY IN `MEMBERS` SAID `Instance` UNTIL THIS SPRINT, so every
+        // answer was "yes" and the class parameter could have been deleted
+        // without a single test noticing. It could not be now.
+        //
+        // `Activated` is a `GuiButton`'s, so a `Frame` does not have it; the
+        // pointer events are a `GuiObject`'s, so a `Frame` does and a
+        // `UIListLayout` does not. A name-only predicate answers true to all five
+        // of these.
+        assert!(implements("TextButton", "Activated"));
+        assert!(!implements("Frame", "Activated"));
+        assert!(implements("Frame", "MouseEnter"));
+        assert!(!implements("UIListLayout", "MouseEnter"));
+        assert!(!implements("Folder", "InputBegan"));
+        // AND THE SUPERCLASS WALK STILL RUNS BOTH WAYS: a `TextButton` has the
+        // `GuiObject` half by descent rather than by being listed twice, and the
+        // `Instance` members by descent from further up again.
+        assert!(implements("TextButton", "InputBegan"));
+        assert!(implements("TextButton", "GetChildren"));
     }
 
     // ── IsA ──────────────────────────────────────────────────────────────────
