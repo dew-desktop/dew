@@ -910,6 +910,19 @@ fn emit_markdown(
         println!("**No event is reachable.** There is no signal type yet, so there is nothing");
         println!("for a guest to connect to and nothing for the host to fire. That is the half");
         println!("of the surface a mod needs before it can respond to anything at all.");
+    } else {
+        // The sentence above went stale exactly as predicted, on the sprint that
+        // built the signal type. Its replacement is printed from the same count
+        // rather than written down, so it can go stale in its turn without
+        // anybody having to notice.
+        println!();
+        println!(
+            "**{implemented_events} of them are events**, reachable through \
+             `RBXScriptSignal` and"
+        );
+        println!("`RBXScriptConnection`. Every one is something an instance says about ITSELF --");
+        println!("its properties, its children, its own destruction. None of them is input:");
+        println!("that needs hit testing, which is a different problem.");
     }
     println!();
     println!("### API backlog");

@@ -18,10 +18,12 @@
 //! Building the check while every answer is "yes" is cheaper than retrofitting it
 //! on the day a wrong answer becomes possible.
 //!
-//! WHAT THIS SLICE COVERS: tree navigation and lifecycle. No signals. `Changed`
-//! and `GetPropertyChangedSignal` need a signal type, which is the next sprint's
-//! design, and a signal implemented twice is how two ends of one mechanism come
-//! to disagree.
+//! WHAT THIS SLICE COVERS: tree navigation, lifecycle, and the signals an
+//! instance raises ABOUT ITSELF -- `Changed`, `GetPropertyChangedSignal`, and the
+//! five tree-and-lifecycle events. The signal TYPE lives in [`super::signal`];
+//! this file is where the dispatch hands one out and where `Destroy` routes
+//! through the notices. Input events are the other half of the surface and need
+//! hit testing, which is a different problem with a different failure mode.
 //!
 //! WHY `WaitForChild` IS NOT HERE, decided rather than overlooked
 //! On the engine it YIELDS: it returns the child if one exists and otherwise
@@ -34,7 +36,7 @@
 //! partial one. So it stays on the backlog in `docs/datamodel_scope.md`, where a
 //! method this host does not implement belongs, and it arrives with the scheduler.
 
-use super::{handle, InstanceRef};
+use super::{handle, signal, InstanceRef};
 use mlua::prelude::*;
 
 /// One method this host answers, and the class a receiver must be to call it.
@@ -51,10 +53,40 @@ struct Member {
     introduced_on: &'static str,
 }
 
-/// Tree navigation and lifecycle: the whole of what this sprint added.
+/// Tree navigation, lifecycle, and the signals an instance raises about itself.
+///
+/// EVENTS SIT IN THE SAME LIST AS METHODS, because `__index` makes no
+/// distinction: `f:GetChildren()` fetches a function and `f.Changed` fetches a
+/// signal, and both are a member this host either answers or does not. Splitting
+/// them would give `implements` two lists to stay consistent with, which is the
+/// one thing this file exists to avoid.
 const MEMBERS: &[Member] = &[
     Member {
+        name: "Changed",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "ChildAdded",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "ChildRemoved",
+        introduced_on: "Instance",
+    },
+    Member {
         name: "ClearAllChildren",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "DescendantAdded",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "DescendantRemoving",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "Destroying",
         introduced_on: "Instance",
     },
     Member {
@@ -95,6 +127,10 @@ const MEMBERS: &[Member] = &[
     },
     Member {
         name: "GetDescendants",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "GetPropertyChangedSignal",
         introduced_on: "Instance",
     },
     Member {
@@ -233,6 +269,25 @@ pub fn lookup(
     if !implements(class, key) {
         return Ok(None);
     }
+
+    // AN EVENT IS NOT CALLED, IT IS READ. `f.Changed` is a property access that
+    // yields a signal; `f:Changed()` is a mistake. So these return before the
+    // function table below rather than being a function that returns a signal --
+    // which is what `GetPropertyChangedSignal` genuinely is, and the two live one
+    // above the other here so the difference is visible rather than inferred.
+    let event = match key {
+        "Changed" => Some(signal::Kind::Changed),
+        "ChildAdded" => Some(signal::Kind::ChildAdded),
+        "ChildRemoved" => Some(signal::Kind::ChildRemoved),
+        "DescendantAdded" => Some(signal::Kind::DescendantAdded),
+        "DescendantRemoving" => Some(signal::Kind::DescendantRemoving),
+        "Destroying" => Some(signal::Kind::Destroying),
+        _ => None,
+    };
+    if let Some(kind) = event {
+        return Ok(Some(signal::signal(lua, this, kind)?));
+    }
+
     let this = this.clone();
 
     let f = match key {
@@ -393,23 +448,57 @@ pub fn lookup(
             }
             Ok(this.id != other.id && dom.is_ancestor_of(other.id, this.id))
         })?,
+        // THE PROPERTY NAME IS CHECKED AGAINST THE CLASS, and a misspelling is
+        // loud here where `IsA`'s is not. `IsA` is handed arbitrary strings by
+        // design and answers a boolean; this is asked for a signal that will
+        // never fire, and returning a silent one would leave a guest watching a
+        // property that does not exist and concluding the host does not fire
+        // events. It is the property path's rule, in the one method that takes a
+        // property name as an argument.
+        "GetPropertyChangedSignal" => {
+            lua.create_function(move |lua, (_, property): (LuaValue, String)| {
+                let class = {
+                    let dom = this.dom.lock().expect("dom");
+                    dom.class_of(this.id).ok_or_else(dead)?
+                };
+                if super::describe(&class, &property).is_none() {
+                    return Err(LuaError::runtime(format!(
+                        "{property} is not a valid member of {class}"
+                    )));
+                }
+                signal::signal(lua, &this, signal::Kind::PropertyChanged(property))
+            })?
+        }
         // THE SLOT IS CLEARED, so every handle already held fails loudly on its
         // next read instead of reporting a stale name. `Index` and `NewIndex`
         // have answered "this instance has been destroyed" on an empty slot since
         // the arena existed; this is the thing that finally makes that branch
         // reachable. A `Parent = nil` that left the node in place would be the
         // version where a destroyed widget keeps answering questions about itself.
-        "Destroy" => lua.create_function(move |_, _: LuaValue| {
-            this.dom.lock().expect("dom").destroy(this.id);
-            Ok(())
-        })?,
-        "ClearAllChildren" => lua.create_function(move |_, _: LuaValue| {
-            let mut dom = this.dom.lock().expect("dom");
-            if dom.node(this.id).is_none() {
-                return Err(dead());
-            }
-            for child in dom.children(this.id) {
-                dom.destroy(child);
+        //
+        // THE NOTICES COME FIRST AND THE LOCK IS NOT HELD FOR THEM.
+        // `signal::destroy` fires `Destroying` over the whole subtree, then the
+        // removal notices, and only then frees the slots -- so a handler runs
+        // while the instance it is being told about still exists, and a handler
+        // that touches the tree does not meet a lock this call is holding.
+        "Destroy" => {
+            lua.create_function(move |lua, _: LuaValue| signal::destroy(lua, &this.dom, this.id))?
+        }
+        "ClearAllChildren" => lua.create_function(move |lua, _: LuaValue| {
+            let children = {
+                let dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                dom.children(this.id)
+            };
+            for child in children {
+                // RE-CHECKED EACH TIME. A `Destroying` handler on the first child
+                // is free to destroy the rest, and this list was taken before any
+                // of them ran.
+                if this.dom.lock().expect("dom").exists(child) {
+                    signal::destroy(lua, &this.dom, child)?;
+                }
             }
             Ok(())
         })?,
@@ -453,10 +542,13 @@ mod tests {
 
     #[test]
     fn the_predicate_refuses_what_this_sprint_deferred() {
-        // Sprint 8's, and named here because a predicate that answered true for
+        // Sprint 9's, and named here because a predicate that answered true for
         // them would print a number the dispatch cannot honour -- exactly the
-        // failure the hand-written list produced.
-        for member in ["GetPropertyChangedSignal", "Changed", "CaptureFocus"] {
+        // failure the hand-written list produced. This list was
+        // `GetPropertyChangedSignal`, `Changed` and `CaptureFocus` last sprint;
+        // two of them arrived, which is the test being repointed rather than
+        // failing at its job.
+        for member in ["Activated", "InputBegan", "CaptureFocus", "IsFocused"] {
             assert!(!implements("TextBox", member), "{member}");
         }
         // Decided, not overlooked. See the module comment.

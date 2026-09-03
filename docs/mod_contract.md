@@ -88,13 +88,24 @@ does not merge with Aether's, it *blocks* it. That the two branches install
 different globals is the reason the runtime is declared, not an inconsistency
 waiting to be tidied.
 
-**A DataModel mod can navigate its tree and cannot yet react to anything.**
-`GetChildren`, `FindFirstChild`, `IsA`, `Destroy` and the rest of the fourteen
-tree-and-lifecycle methods are there. What is not there is a signal: `mount` runs
-once and what it built is what stays on screen; the host re-renders every frame
-regardless, so the day `Changed` exists nothing in a mod has to change. There is
-no click either — every one of the 14 reachable members is a method and none is
-an event, so pointer events are dropped for this flavour.
+**A DataModel mod can navigate its tree and react to it, and cannot yet be
+clicked.** `GetChildren`, `FindFirstChild`, `IsA`, `Destroy` and the rest of the
+tree-and-lifecycle methods are there, and so is the signal model:
+`RBXScriptSignal` and `RBXScriptConnection` with `:Connect` and `:Disconnect`,
+`Changed`, `GetPropertyChangedSignal(name)`, `ChildAdded`, `ChildRemoved`,
+`DescendantAdded`, `DescendantRemoving` and `Destroying`.
+
+Three things to know about them. **Assigning a property the value it already has
+fires nothing** — that is deliberate, and it is what lets the host draw a static
+mod once instead of every frame. **`signal:Wait()` is not available**: it yields
+on the engine and Dew has no task scheduler, so it raises a message saying so
+rather than pretending; connect a handler. And **a handler that errors is
+reported and does not fail the write that notified it**, because on the engine
+each handler has its own thread and here it does not.
+
+There is still no click. Every event above is something an instance says about
+ITSELF; `Activated` and the pointer events need a hit test, so pointer events are
+still dropped for this flavour.
 
 ## Capabilities arrive as an argument, never as a global
 

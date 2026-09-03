@@ -21,11 +21,18 @@
 	not sniff for a framework — declaring it is the author's job, because both
 	flavours build a tree and there is no artefact that tells them apart.
 
-	WHAT IT DOES NOT DO, and says so rather than faking: nothing here reacts.
-	There is no signal model behind a DataModel tree yet, so `mount` runs once and
-	what it built is what stays on screen. The host re-renders every frame anyway,
-	which means the day `Changed` exists (sprint 8) an animating mod works with no
-	change to this file.
+	WHAT IT DOES NOT DO, and says so rather than faking: nothing here is clicked.
+	There is a signal model now — sprint 8 — and the bottom line on the card is a
+	real `GetPropertyChangedSignal` connection firing during `mount`. What is still
+	missing is INPUT: no `Activated`, no `InputBegan`, and no hit testing to decide
+	which instance a click at (x, y) belongs to. That is sprint 9.
+
+	AND THE HOST NO LONGER REPAINTS THIS EVERY FRAME. It used to, because nothing
+	signalled a change and "assume so" was the only honest answer; the same
+	plumbing that fires `Changed` now marks the tree dirty, so a card that never
+	moves is drawn once. A mod that animates does it by assigning to a property,
+	which is exactly what dirties the tree — so that costs an animating mod
+	nothing, and this file did not have to change for either.
 ]]
 
 --- Reading a capability, and reading the ABSENCE of one.
@@ -106,6 +113,25 @@ return {
 		--- rather than comparing strings.
 		label(card, "Runtime", 100, 12, Color3.fromRGB(104, 118, 142)).Text =
 			`in {root.Name} · {#card:GetChildren()} kids · IsA GuiObject: {card:IsA("GuiObject")}`
+
+		--- A SIGNAL, CONNECTED AND FIRED AND DISCONNECTED, on the ordinary loader.
+		---
+		--- Two assignments and one of them is not a change: the first writes the
+		--- colour the card already has, and the host fires nothing for it. That is
+		--- the decision this sprint made about `Changed` — assigning the same
+		--- value is not an event — and it is the reason the host can now tell a
+		--- static tree from a moving one and skip the repaint. Printing the count
+		--- puts the rule on screen instead of in a comment.
+		local changes = 0
+		local watch = card:GetPropertyChangedSignal("BackgroundColor3"):Connect(function()
+			changes += 1
+		end)
+		card.BackgroundColor3 = Color3.fromRGB(20, 26, 36)
+		card.BackgroundColor3 = Color3.fromRGB(23, 30, 41)
+		watch:Disconnect()
+
+		label(card, "Signals", 120, 12, Color3.fromRGB(104, 118, 142)).Text =
+			`2 writes · {changes} Changed · {typeof(watch)} connected: {watch.Connected}`
 
 		--- ZIndex over declaration order, the one rule a geometric conformance
 		--- runner cannot check. Drawn last on purpose: it overlaps the text.

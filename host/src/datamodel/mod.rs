@@ -38,6 +38,7 @@ mod content;
 mod enums;
 pub mod members;
 pub mod render;
+pub mod signal;
 mod vocabulary;
 
 use content::{LuaContent, LuaFont};
@@ -61,12 +62,54 @@ struct Node {
     /// than a full property set -- which is also what makes "was this touched"
     /// answerable later.
     props: BTreeMap<String, Variant>,
+    /// Indices into `Dom::handlers`, IN CONNECT ORDER. Firing order is connect
+    /// order, and this is the only place that order is recorded -- a map keyed by
+    /// event would lose it, and a guest that connects a logger and then a
+    /// mutator is relying on it.
+    connections: Vec<usize>,
+}
+
+/// One `Connect`, kept beside the arena rather than inside the signal object.
+///
+/// A SIGNAL OWNS NOTHING. `f.Changed` builds a fresh userdata every time it is
+/// read, so a handler list living in the signal would be a list per read. They
+/// live here, and the node owns the ids, which is also what makes `Destroy` drop
+/// every connection on the way past instead of leaving live closures pointing at
+/// a freed slot.
+struct Handler {
+    instance: usize,
+    kind: signal::Kind,
+    f: LuaFunction,
 }
 
 /// Every instance in one VM.
-#[derive(Default)]
 pub struct Dom {
     slots: Vec<Option<Node>>,
+    handlers: Vec<Option<Handler>>,
+    /// Has anything a guest can see changed since the last frame was drawn?
+    ///
+    /// THE ANSWER USED TO BE "ASSUME SO", and the DataModel arm of the frame loop
+    /// repainted unconditionally because of it -- 1424 painted frames a second on
+    /// a static mod, measured in sprint 7. Every write a guest can make now goes
+    /// through a path that fires `Changed`, and the same path sets this. Layout's
+    /// own writes do NOT: `set_internal` is how `AbsolutePosition` gets there, and
+    /// marking it dirty would make the render pass re-dirty the tree it just
+    /// rendered, which is a repaint loop wearing the costume of a fix.
+    dirty: bool,
+}
+
+/// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
+/// and a derived `Default` would leave the first frame unpainted -- a black
+/// window that fixes itself the first time anything moves, which is the worst
+/// possible way for this to be wrong.
+impl Default for Dom {
+    fn default() -> Self {
+        Dom {
+            slots: Vec::new(),
+            handlers: Vec::new(),
+            dirty: true,
+        }
+    }
 }
 
 pub type SharedDom = Arc<Mutex<Dom>>;
@@ -79,7 +122,9 @@ impl Dom {
             parent: None,
             children: Vec::new(),
             props: BTreeMap::new(),
+            connections: Vec::new(),
         }));
+        self.dirty = true;
         self.slots.len() - 1
     }
 
@@ -138,6 +183,87 @@ impl Dom {
         self.node(id).and_then(|n| n.parent)
     }
 
+    pub fn exists(&self, id: usize) -> bool {
+        self.node(id).is_some()
+    }
+
+    // ── Connections ──────────────────────────────────────────────────────────
+    //
+    // THE HANDLER TABLE IS AN ARENA TOO, and ids are never reused for the same
+    // reason instance ids are not: a `RBXScriptConnection` a guest kept must stay
+    // stale rather than come back pointing at somebody else's handler.
+
+    /// Record a handler, or `None` when the instance is gone.
+    pub fn connect(&mut self, id: usize, kind: signal::Kind, f: LuaFunction) -> Option<usize> {
+        self.node(id)?;
+        self.handlers.push(Some(Handler {
+            instance: id,
+            kind,
+            f,
+        }));
+        let conn = self.handlers.len() - 1;
+        self.node_mut(id).expect("checked").connections.push(conn);
+        Some(conn)
+    }
+
+    /// Drop a handler. Already gone is not an error -- see `Disconnect`.
+    pub fn disconnect(&mut self, conn: usize) {
+        let Some(handler) = self.handlers.get_mut(conn).and_then(Option::take) else {
+            return;
+        };
+        if let Some(node) = self.node_mut(handler.instance) {
+            node.connections.retain(|c| *c != conn);
+        }
+    }
+
+    pub fn is_connected(&self, conn: usize) -> bool {
+        self.handlers.get(conn).is_some_and(Option::is_some)
+    }
+
+    /// The handlers connected to `kind` on `id`, in connect order.
+    ///
+    /// RETURNS IDS, NOT FUNCTIONS. The caller re-looks-up each one immediately
+    /// before calling it, so that a handler which disconnects another during the
+    /// same fire is honoured rather than raced.
+    pub fn listeners(&self, id: usize, kind: &signal::Kind) -> Vec<usize> {
+        let Some(node) = self.node(id) else {
+            return Vec::new();
+        };
+        node.connections
+            .iter()
+            .copied()
+            .filter(|c| {
+                self.handlers
+                    .get(*c)
+                    .and_then(Option::as_ref)
+                    .is_some_and(|h| &h.kind == kind)
+            })
+            .collect()
+    }
+
+    pub fn handler(&self, conn: usize) -> Option<LuaFunction> {
+        self.handlers
+            .get(conn)
+            .and_then(Option::as_ref)
+            .map(|h| h.f.clone())
+    }
+
+    // ── Repaint ──────────────────────────────────────────────────────────────
+
+    /// Something changed; the next frame has to be drawn.
+    pub fn touch(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Is a repaint owed, and clear the debt.
+    ///
+    /// TAKING RATHER THAN READING, because the caller is about to draw. A
+    /// separate `is_dirty` and `clear` is the shape where a `?` between them
+    /// loses a frame that will never be asked for again.
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::replace(&mut self.dirty, false)
+    }
+
     /// Free `id` and everything under it, and detach it from its parent.
     ///
     /// THE SLOT IS EMPTIED, NOT MARKED. `Index` and `NewIndex` already answer
@@ -154,6 +280,12 @@ impl Dom {
     /// DESCENDANTS GO TOO. Roblox destroys the subtree, and leaving children in
     /// the arena would strand a set of nodes with a parent id pointing at an
     /// empty slot -- reachable from nothing, freed by nothing.
+    ///
+    /// AND THE CONNECTIONS GO WITH THEM. A handler outliving its instance is a
+    /// closure the guest can no longer see, still reachable from the arena, that
+    /// would fire on a node the arena no longer has. Dropping them here is what
+    /// makes `connection.Connected` answer false after a `Destroy` without the
+    /// signal type having to know anything about the tree.
     pub fn destroy(&mut self, id: usize) {
         if self.node(id).is_none() {
             return;
@@ -164,8 +296,14 @@ impl Dom {
             let Some(node) = self.slots.get_mut(current).and_then(Option::take) else {
                 continue;
             };
+            for conn in node.connections {
+                if let Some(slot) = self.handlers.get_mut(conn) {
+                    *slot = None;
+                }
+            }
             stack.extend(node.children);
         }
+        self.dirty = true;
     }
 
     /// Write a property the HOST computed, bypassing the guest's rules.
@@ -659,9 +797,17 @@ impl UserData for InstanceRef {
             }
         });
 
+        // EVERY WRITE PATH BELOW ENDS THE SAME WAY: mutate, DROP THE LOCK, fire.
+        //
+        // The arena is behind a `Mutex` and `Mutex` is not reentrant, so a
+        // `Changed` handler that sets another property -- which is the ordinary
+        // thing for one to do, not an exotic one -- deadlocks the instant it is
+        // called with the lock still held. The `drop(dom)` lines below are load
+        // bearing and there are tests for both shapes of handler that would hang
+        // without them.
         methods.add_meta_method(
             MetaMethod::NewIndex,
-            |_, this, (key, value): (String, LuaValue)| {
+            |lua, this, (key, value): (String, LuaValue)| {
                 let mut dom = this.dom.lock().expect("dom");
                 let class = dom.node(this.id).ok_or_else(dead_instance)?.class.clone();
 
@@ -681,8 +827,18 @@ impl UserData for InstanceRef {
                                 ))
                             })?
                             .to_string_lossy();
+                        // ASSIGNING THE SAME VALUE IS NOT A CHANGE. See the
+                        // comment on the property path below; the rule is one
+                        // rule and it applies to `Name` first because a mod that
+                        // rewrites a label every frame writes the same string
+                        // most of those frames.
+                        if dom.node(this.id).expect("checked").name == name {
+                            return Ok(());
+                        }
                         dom.node_mut(this.id).expect("checked").name = name;
-                        return Ok(());
+                        dom.touch();
+                        drop(dom);
+                        return signal::property_changed(lua, &this.dom, this.id, "Name");
                     }
                     "Parent" => {
                         let new_parent = match &value {
@@ -708,6 +864,25 @@ impl UserData for InstanceRef {
                                 return Err(LuaError::runtime("the new Parent has been destroyed"));
                             }
                         }
+                        if dom.node(this.id).expect("checked").parent == new_parent {
+                            return Ok(());
+                        }
+                        // THE DEPARTURE IS ANNOUNCED BEFORE IT HAPPENS, so a
+                        // `ChildRemoved` or `DescendantRemoving` handler can read
+                        // the instance one last time -- which is the only thing
+                        // those events are for. That means the lock is released
+                        // and taken again either side of the notice, and the
+                        // guards `leaving` carries exist because a handler may
+                        // have moved or destroyed something in between.
+                        drop(dom);
+                        signal::leaving(lua, &this.dom, this.id)?;
+                        let mut dom = this.dom.lock().expect("dom");
+                        if dom.node(this.id).is_none() {
+                            return Err(dead_instance());
+                        }
+                        if new_parent.is_some_and(|p| dom.node(p).is_none()) {
+                            return Err(LuaError::runtime("the new Parent has been destroyed"));
+                        }
                         dom.unparent(this.id);
                         if let Some(parent) = new_parent {
                             dom.node_mut(parent)
@@ -716,7 +891,10 @@ impl UserData for InstanceRef {
                                 .push(this.id);
                             dom.node_mut(this.id).expect("checked").parent = Some(parent);
                         }
-                        return Ok(());
+                        dom.touch();
+                        drop(dom);
+                        signal::arrived(lua, &this.dom, this.id)?;
+                        return signal::property_changed(lua, &this.dom, this.id, "Parent");
                     }
                     _ => {}
                 }
@@ -742,11 +920,16 @@ impl UserData for InstanceRef {
                     DataType::Value(ty) => *ty,
                     DataType::Enum(name) => {
                         let stored = coerce_enum(&value, name, &class, &key)?;
+                        if dom.property(this.id, &key) == Some(Variant::Enum(stored)) {
+                            return Ok(());
+                        }
                         dom.node_mut(this.id)
                             .expect("checked")
                             .props
-                            .insert(key, Variant::Enum(stored));
-                        return Ok(());
+                            .insert(key.clone(), Variant::Enum(stored));
+                        dom.touch();
+                        drop(dom);
+                        return signal::property_changed(lua, &this.dom, this.id, &key);
                     }
                     other => {
                         return Err(LuaError::runtime(format!(
@@ -757,11 +940,35 @@ impl UserData for InstanceRef {
                 };
 
                 let stored = coerce(&value, want, &class, &key)?;
+
+                // ASSIGNING THE SAME VALUE FIRES NOTHING, and this is a decision
+                // rather than an optimisation that fell out.
+                //
+                // A guest recomputing a whole tree on every tick -- which is what
+                // a Roblox developer writes, and what Aether's own reconciler
+                // does -- assigns the value a property already has far more often
+                // than it assigns a new one. Firing on those turns `Changed` into
+                // a tick, and a `Changed` handler that writes another property is
+                // then a repaint loop that never settles: exactly the failure the
+                // dirty flag below is meant to end. The other way round -- firing
+                // only sometimes on a real change -- produces a UI that misses
+                // updates, and both are miserable to attribute after the fact.
+                //
+                // COMPARED AGAINST THE EFFECTIVE VALUE, not the stored one. An
+                // unset property reads its engine default, so writing `true` to a
+                // `Visible` nothing has touched is not a change either, and
+                // comparing against the (absent) stored value would say it was.
+                if dom.property(this.id, &key).as_ref() == Some(&stored) {
+                    return Ok(());
+                }
+
                 dom.node_mut(this.id)
                     .expect("checked")
                     .props
-                    .insert(key, stored);
-                Ok(())
+                    .insert(key.clone(), stored);
+                dom.touch();
+                drop(dom);
+                signal::property_changed(lua, &this.dom, this.id, &key)
             },
         );
     }

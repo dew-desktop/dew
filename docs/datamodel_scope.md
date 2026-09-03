@@ -102,7 +102,7 @@ DOM. It is a consumer of this surface and never an implementation of it, so it
 is not measured here and is not required to conform. What must match is what a
 Luau application sees, **with or without Aether**.
 
-**14 of 52 in-scope members implemented.**
+**21 of 52 in-scope members implemented.**
 32 more are excluded by decision, out of 84 reachable
 (44 methods, 40 events).
 
@@ -112,22 +112,23 @@ document makes on the host's behalf.
 
 ### Implemented
 
-- `ClearAllChildren`, `Destroy`, `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`
-- `FindFirstDescendant`, `GetChildren`, `GetDescendants`, `IsA`, `IsAncestorOf`, `IsDescendantOf`
+- `Changed`, `ChildAdded`, `ChildRemoved`, `ClearAllChildren`, `DescendantAdded`, `DescendantRemoving`, `Destroy`, `Destroying`
+- `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`, `FindFirstDescendant`, `GetChildren`
+- `GetDescendants`, `GetPropertyChangedSignal`, `IsA`, `IsAncestorOf`, `IsDescendantOf`
 
-**No event is reachable.** There is no signal type yet, so there is nothing
-for a guest to connect to and nothing for the host to fire. That is the half
-of the surface a mod needs before it can respond to anything at all.
+**6 of them are events**, reachable through `RBXScriptSignal` and
+`RBXScriptConnection`. Every one is something an instance says about ITSELF --
+its properties, its children, its own destruction. None of them is input:
+that needs hit testing, which is a different problem.
 
 ### API backlog
 
 What parity actually requires. No Dew guest can reach any of these.
 
-- `Activated`, `CaptureFocus`, `Changed`, `ChildAdded`, `ChildRemoved`, `DescendantAdded`, `DescendantRemoving`, `Destroying`
-- `FocusLost`, `Focused`, `GetPropertyChangedSignal`, `GetScrollVelocity`, `InputBegan`, `InputChanged`, `InputEnded`, `IsFocused`
-- `JumpTo`, `JumpToIndex`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`
-- `MouseEnter`, `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `Next`, `PageEnter`, `PageLeave`
-- `Previous`, `ReleaseFocus`, `ResetScrollVelocity`, `SecondaryActivated`, `Stopped`, `WaitForChild`
+- `Activated`, `CaptureFocus`, `FocusLost`, `Focused`, `GetScrollVelocity`, `InputBegan`, `InputChanged`, `InputEnded`
+- `IsFocused`, `JumpTo`, `JumpToIndex`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`
+- `MouseButton2Up`, `MouseEnter`, `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `Next`, `PageEnter`
+- `PageLeave`, `Previous`, `ReleaseFocus`, `ResetScrollVelocity`, `SecondaryActivated`, `Stopped`, `WaitForChild`
 
 ### This document measures two Roblox builds at once
 

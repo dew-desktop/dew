@@ -58,8 +58,8 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
 ///
 /// TWO WAYS TO PRODUCE A `Frame`, ONE PAINTER. `Driver` diffs an Aether session
 /// and repaints only when the framework says something changed; a DataModel tree
-/// is instances in an arena with nothing watching them, so there is no "changed"
-/// to ask about and the honest answer is to render it again. Both arms end at
+/// now answers the same question for itself, because every write a guest can make
+/// goes through the path that fires `Changed`. Both arms end at
 /// `Painter::paint_frame`, which is the seam that has survived four rasterisers.
 ///
 /// NOT A TRAIT. The two do not share a lifecycle — one owns Lua handles the
@@ -82,13 +82,19 @@ impl Renderer {
     fn frame(&mut self, dt: f32) -> Result<bool, String> {
         match self {
             Renderer::Aether(driver) => driver.frame(dt).map_err(|e| e.to_string()),
-            //--- ALWAYS TRUE, AND THAT IS NOT A STUB. A DataModel mod's `mount`
-            //--- ran once; anything it changes afterwards it changes by assigning
-            //--- to a property, and nothing signals that. Until `Changed` exists
-            //--- (sprint 8) the only correct answer to "did anything change" is
-            //--- "assume so", and claiming otherwise would freeze a mod that
-            //--- animates. `dt` is unused for the same reason: there is nothing
-            //--- to step.
+            //--- WAS ALWAYS TRUE, AND IS NOT ANY MORE. This read "assume so", and
+            //--- the comment was honest: a DataModel mod's `mount` ran once, and
+            //--- anything it changed afterwards it changed by assigning to a
+            //--- property with nothing watching. `--stats` on the live window
+            //--- measured `painted` equal to `fps` -- 1424 repaints a second of a
+            //--- card that never moves.
+            //---
+            //--- The arena answers now. Every guest-visible write marks it dirty
+            //--- on the same path that fires `Changed`, and `take_dirty` both
+            //--- reads and clears, so a frame that finds nothing is a frame that
+            //--- is not drawn. `dt` is still unused: there is nothing to step, and
+            //--- a mod that animates does it by assigning, which is what dirties
+            //--- the tree.
             Renderer::DataModel {
                 dom,
                 root,
@@ -98,6 +104,9 @@ impl Renderer {
                 height,
             } => {
                 let _ = dt;
+                if !dom.lock().expect("dom").take_dirty() {
+                    return Ok(false);
+                }
                 let frame = datamodel::render::frame_of(dom, *root, *width, *height);
                 aether_runtime::Painter::paint_frame(painter, &frame, *background);
                 Ok(true)
@@ -108,10 +117,11 @@ impl Renderer {
     /// A pointer event, for a runtime that has somewhere to send it.
     ///
     /// DROPPED, LOUDLY IN THE COMMENT AND SILENTLY AT RUNTIME, for a DataModel
-    /// mod. The member surface reads 0 of 52: there is no `Activated`, no
-    /// `InputBegan` and no signal model to deliver one through, so there is
-    /// nothing to call. Sprint 8 is where this arm gets a body, and the
-    /// milestone is not finished until it does.
+    /// mod. There is a signal model now -- sprint 8 built the type and the events
+    /// an instance raises about ITSELF -- but no `Activated`, no `InputBegan`, and
+    /// no hit testing to decide which instance a click at (x, y) belongs to.
+    /// Sprint 9 is where this arm gets a body, and the milestone is not finished
+    /// until it does.
     fn pointer(&mut self, kind: aether_runtime::Pointer, x: f32, y: f32) -> Result<(), String> {
         match self {
             Renderer::Aether(driver) => driver.pointer(kind, x, y).map_err(|e| e.to_string()),
@@ -126,11 +136,17 @@ impl Renderer {
         }
     }
 
-    /// Force the next frame to repaint. A no-op where every frame already does.
+    /// Force the next frame to repaint.
+    ///
+    /// A NO-OP UNTIL THIS SPRINT, and it was wrong in a way nothing could show:
+    /// every DataModel frame repainted anyway, so `Exposed` and `Resized` were
+    /// served by accident. Now that a clean tree skips the paint, a window that
+    /// was uncovered has to be able to say so -- nothing in the arena changed,
+    /// and the pixels still need redrawing.
     fn invalidate(&mut self) {
         match self {
             Renderer::Aether(driver) => driver.invalidate(),
-            Renderer::DataModel { .. } => {}
+            Renderer::DataModel { dom, .. } => dom.lock().expect("dom").touch(),
         }
     }
 
