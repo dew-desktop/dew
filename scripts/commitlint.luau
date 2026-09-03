@@ -57,6 +57,7 @@ local config: CommitLintConfig = {
         "docs",      -- docs/, CONTRIBUTING, README
         "scripts",   -- scripts/
         "assets",    -- host/assets/
+        "examples",  -- examples/, programs that are not mods
         "deps"       -- VERSION, manifests, pins
     },
     maxHeaderLength = 100,
