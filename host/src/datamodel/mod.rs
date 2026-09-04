@@ -781,6 +781,32 @@ impl UserData for InstanceRef {
             // typo travel silently into layout -- the exact failure the
             // reflection database was brought in to prevent.
             let Some(descriptor) = describe(&node.class, &key) else {
+                // `parent.ChildName`, AND IT GOES HERE RATHER THAN EARLIER.
+                // A property SHADOWS a child on the engine -- a `Frame` called
+                // `Size` does not take `frame.Size` away from you -- so the
+                // reflection database is asked first and this is the fallback,
+                // not the other way round.
+                //
+                // NOT FOUND IS STILL AN ERROR, and that is the whole delicacy of
+                // this arm. `FindFirstChild` answers nil because "does a child
+                // called this exist" is a question with an honest negative;
+                // `parent.Panel` is a guest saying the child IS there, exactly
+                // as `frame.Sze` is a guest saying the property is. One message
+                // serves both because on the engine one message serves both --
+                // and a misspelled property that fell through to here finds no
+                // child either, so it still errors rather than reading nil.
+                let child = dom
+                    .children(this.id)
+                    .into_iter()
+                    .find(|c| dom.name_of(*c).as_deref() == Some(key.as_str()));
+                if let Some(child) = child {
+                    // THE LOCK GOES FIRST, for the reason the method arm above
+                    // gives: `handle` is cheap, but every value handed to a guest
+                    // is something the guest may immediately call back into, and
+                    // this `Mutex` is not reentrant.
+                    drop(dom);
+                    return handle(&this.dom, child).into_lua(lua);
+                }
                 return Err(LuaError::runtime(format!(
                     "{} is not a valid member of {}",
                     key, node.class
@@ -1112,6 +1138,108 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("not a valid member"), "{err}");
+    }
+
+    #[test]
+    fn a_child_is_reachable_by_name() {
+        let got: Vec<bool> = eval(
+            r#"
+            local root = Instance.new("Frame")
+            local panel = Instance.new("Frame")
+            panel.Name = "Panel"
+            panel.Parent = root
+            return { root.Panel == panel, root.Panel.Name == "Panel" }
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, vec![true, true]);
+    }
+
+    #[test]
+    fn a_property_shadows_a_child_of_the_same_name() {
+        // The ordering, asserted rather than assumed. A child called `Visible`
+        // must not take `frame.Visible` away, because on the engine it does not.
+        let got: bool = eval(
+            r#"
+            local root = Instance.new("Frame")
+            local decoy = Instance.new("Frame")
+            decoy.Name = "Visible"
+            decoy.Parent = root
+            root.Visible = false
+            return root.Visible == false
+        "#,
+        )
+        .expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn a_misspelled_property_still_errors_beside_a_child_lookup() {
+        // THE TRAP THIS SPRINT WAS WARNED ABOUT. A host that answered nil for a
+        // missing child would have to answer nil for a misspelled property too,
+        // since `__index` cannot tell which one the guest meant. Both arrive
+        // here and both must still be an error.
+        let err = run(r#"
+            local root = Instance.new("Frame")
+            local panel = Instance.new("Frame")
+            panel.Name = "Panel"
+            panel.Parent = root
+            local _ = root.Visibel
+        "#)
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Visibel"), "{err}");
+        assert!(err.contains("not a valid member"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_child_is_an_error_but_find_first_child_is_nil() {
+        // The two spellings answer differently ON PURPOSE, and this is the test
+        // that says so. `FindFirstChild` asks whether a child exists; `.Panel`
+        // asserts that it does.
+        let err = run(r#"local _ = Instance.new("Frame").Panel"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a valid member"), "{err}");
+
+        let got: bool = eval(r#"return Instance.new("Frame"):FindFirstChild("Panel") == nil"#)
+            .expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn a_reparented_child_stops_answering_by_name() {
+        let got: Vec<bool> = eval(
+            r#"
+            local root = Instance.new("Frame")
+            local panel = Instance.new("Frame")
+            panel.Name = "Panel"
+            panel.Parent = root
+            local before = root.Panel == panel
+            panel.Parent = nil
+            local after = pcall(function() return root.Panel end)
+            return { before, after }
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, vec![true, false]);
+    }
+
+    #[test]
+    fn a_method_still_wins_over_a_child_of_the_same_name() {
+        // Methods resolve before properties and therefore before children. A mod
+        // that names a child `Destroy` must not disarm `Destroy`.
+        let got: bool = eval(
+            r#"
+            local root = Instance.new("Frame")
+            local decoy = Instance.new("Frame")
+            decoy.Name = "GetChildren"
+            decoy.Parent = root
+            return type(root.GetChildren) == "function"
+        "#,
+        )
+        .expect("eval");
+        assert!(got);
     }
 
     #[test]
