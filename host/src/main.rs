@@ -26,10 +26,10 @@ mod services;
 mod surface;
 mod tray;
 
+use crate::services::SharedClock;
 use aether_raster::Backend;
 use aether_runtime::{Driver, RasterPainter, Rgb};
 use aether_window::{Button, Event, Window};
-use crate::services::SharedClock;
 use dew_host::datamodel::input;
 use std::collections::HashMap;
 use std::path::PathBuf;

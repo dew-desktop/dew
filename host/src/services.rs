@@ -303,7 +303,10 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
 fn note_once_font(name: &str) {
     static SAID: Mutex<Option<BTreeSet<String>>> = Mutex::new(None);
     let mut guard = SAID.lock().expect("said");
-    if guard.get_or_insert_with(BTreeSet::new).insert(name.to_string()) {
+    if guard
+        .get_or_insert_with(BTreeSet::new)
+        .insert(name.to_string())
+    {
         eprintln!(
             "[dew] text measured in this host's one face; the font named \
              `{name}` selected nothing"

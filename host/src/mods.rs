@@ -23,8 +23,8 @@
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
-use crate::services::{self, Clock, SharedClock};
 use crate::manifest::{Manifest, Runtime};
+use crate::services::{self, Clock, SharedClock};
 use crate::surface::Declared;
 use aether_runtime::{modules, Session, Vm};
 use mlua::prelude::*;

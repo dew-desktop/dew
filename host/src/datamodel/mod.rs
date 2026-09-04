@@ -1202,8 +1202,8 @@ mod tests {
             .to_string();
         assert!(err.contains("not a valid member"), "{err}");
 
-        let got: bool = eval(r#"return Instance.new("Frame"):FindFirstChild("Panel") == nil"#)
-            .expect("eval");
+        let got: bool =
+            eval(r#"return Instance.new("Frame"):FindFirstChild("Panel") == nil"#).expect("eval");
         assert!(got);
     }
 
