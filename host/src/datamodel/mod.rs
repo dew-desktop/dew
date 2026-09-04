@@ -39,6 +39,7 @@ mod enums;
 pub mod input;
 pub mod members;
 pub mod render;
+pub mod services;
 pub mod signal;
 mod vocabulary;
 

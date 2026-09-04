@@ -23,6 +23,7 @@
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
+use crate::datamodel::services::{self, Clock, SharedClock};
 use crate::manifest::{Manifest, Runtime};
 use crate::surface::Declared;
 use aether_runtime::{modules, Session, Vm};
@@ -68,6 +69,14 @@ pub struct Mod {
     pub height: u32,
     pub surface: Declared,
     pub mounted: Mounted,
+    /// Frame subscriptions this mod made, for the loop to drive.
+    ///
+    /// ON `Mod` RATHER THAN INSIDE `Mounted`, and that is the point of it. A
+    /// clock is not a property of which framework the author chose -- both
+    /// flavours subscribe through the same `DewHost.Clock`, and sprint 8 has
+    /// Aether reaching it through `Host.Clock` -- so putting it in the enum would
+    /// have made "can this mod animate" depend on the runtime it declared.
+    pub clock: SharedClock,
     /// The VM this mod lives in. Held because dropping it takes the mod's Lua
     /// handles with it — a mod is exactly as alive as its VM. True of both
     /// flavours: a `Session` is Lua objects, and a `SharedDom` is full of
@@ -142,6 +151,20 @@ pub fn load(
     dom.lock().expect("dom").assets.set_root(dir.to_path_buf());
     datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
 
+    //      AND `DewHost`, ON THE SAME TERMS AND FOR THE SAME REASON. Text metrics
+    //      and a frame clock are what the host computes and no guest can: they are
+    //      the language of the platform rather than a capability, so they are
+    //      installed as a global here beside `Instance` rather than granted in the
+    //      table built at step 4. `services.rs` carries the full argument, and the
+    //      short version is that a mod refused text metrics cannot lay out -- a
+    //      permission with only one sound answer is not a permission.
+    //
+    //      FOR BOTH RUNTIMES. A DataModel mod calls `DewHost.Text.Measure`
+    //      directly; an Aether mod reaches the same functions through the
+    //      `Host.Text` and `Host.Clock` seams its interface already declares.
+    let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
+    services::install(vm.lua(), &clock).map_err(|e| format!("{}: {e}", manifest.id))?;
+
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     // 3 ── whatever the declared runtime needs in place BEFORE the mod's own
@@ -184,15 +207,21 @@ pub fn load(
         }
         // 3b ── no framework: the vocabulary, and a root to parent into.
         //
-        //       `DewRoot` RATHER THAN `game`, and the reason is not cosmetic.
-        //       `Host.detect()` keys on `typeof(game) == "Instance"`, so a `game`
-        //       global here would flip every Aether mod in this same binary onto
-        //       the Roblox branch and break it. The name arrives in sprint 9,
-        //       when the services and the member surface behind it make it true.
+        //       `DewRoot` RATHER THAN `game`, and `game` IS NOT ON THE PLAN.
+        //       This used to say the name "arrives in sprint 9, when the services
+        //       and the member surface behind it make it true" -- which was the
+        //       plan under the old numbering and is now wrong about it twice over.
+        //       `game` was DROPPED from step F by decision on 2026-09-04: it was
+        //       never a capability here but a SENTINEL, the proxy `Host.detect()`
+        //       uses for "are these four globals real", and Dew installs all four.
+        //       The roadmap's "Why `game` was dropped from step F" carries the
+        //       measurement. It is not forbidden forever; it is simply not what
+        //       makes a guest framework run here.
         //
         //       A `ScreenGui` because that is what a Roblox application expects
         //       to find above its tree, so the same mod has a chance of running
-        //       in both places once `game` exists.
+        //       in both places -- which is a property of the TREE rather than of
+        //       anything named `game`.
         //
         //       HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/standalone`
         //       reaches for a `DewRoot` global because a bare script has no
@@ -292,6 +321,7 @@ pub fn load(
         height,
         surface,
         mounted,
+        clock,
         vm,
     })
 }
@@ -433,6 +463,138 @@ mod tests {
     }
 
     #[test]
+    fn a_mod_can_measure_a_string_and_subscribe_to_frames() {
+        // THE SPRINT'S TWO SERVICES, THROUGH THE ORDINARY LOADER. The unit tests
+        // in `datamodel::services` prove them on a bare VM; this proves `DewHost`
+        // survives the manifest, the sandbox and the capability table -- and that
+        // it is a GLOBAL, since a mod is handed `dew` and `root` and nothing else.
+        let fixture = Fixture::new(
+            "services",
+            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            r#"
+                return {
+                    id = "plain",
+                    mount = function(dew, root)
+                        assert(DewHost ~= nil, "DewHost is a global")
+                        assert(dew.text == nil, "text metrics are not a capability")
+                        local w, h = DewHost.Text.Measure("hello", 14)
+                        assert(type(w) == "number" and type(h) == "number", "two numbers")
+                        local stop = DewHost.Clock.OnFrame(function(dt) end)
+                        assert(type(stop) == "function", "OnFrame returns an unsubscribe")
+                        stop()
+                    end,
+                }
+            "#,
+        );
+        assert!(fixture.load().is_ok());
+    }
+
+    #[test]
+    fn subscribing_to_frames_does_not_dirty_the_tree() {
+        // THE REGRESSION THIS SPRINT WAS MOST LIKELY TO CAUSE, asserted rather
+        // than left to the live window. Milestone 1's sprint 9 stopped the host
+        // repainting a static DataModel mod every frame; a clock that ticked into
+        // `invalidate`, or a subscribe that touched the arena, hands that straight
+        // back. `--stats` sees it as `painted` climbing to meet `fps`, and this
+        // sees it as `take_dirty` answering true for a mod that changed nothing.
+        let fixture = Fixture::new(
+            "idleclock",
+            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            r#"
+                ticks = 0
+                return {
+                    id = "plain",
+                    mount = function(dew, root)
+                        local frame = Instance.new("Frame")
+                        frame.Name = "Body"
+                        frame.Parent = root
+                        DewHost.Clock.OnFrame(function(dt) ticks += 1 end)
+                    end,
+                }
+            "#,
+        );
+        let loaded = fixture.load().expect("the mod loads");
+        let Mounted::DataModel { dom, .. } = &loaded.mounted else {
+            panic!("a datamodel manifest must not produce an Aether session");
+        };
+
+        // The mount itself dirtied the tree, correctly: a new tree has to reach
+        // the screen once. Clear it the way the first painted frame would.
+        assert!(dom.lock().expect("dom").take_dirty());
+
+        for _ in 0..10 {
+            services::tick(&loaded.clock, 1.0 / 60.0);
+            assert!(
+                !dom.lock().expect("dom").take_dirty(),
+                "a frame listener that assigns nothing dirtied the tree"
+            );
+        }
+
+        // AND THE LISTENER REALLY RAN. Without this the test above passes just as
+        // well when `tick` does nothing at all, which is the shape of green number
+        // this project keeps finding.
+        let ticks: u32 = loaded.vm.lua().globals().get("ticks").expect("ticks");
+        assert_eq!(ticks, 10);
+    }
+
+    #[test]
+    fn a_frame_listener_that_assigns_does_dirty_the_tree() {
+        // The other direction, and the reason the test above is not just "the
+        // clock is inert". A mod that animates by assigning inside a frame
+        // listener must repaint -- the paint follows the change, not the tick.
+        let fixture = Fixture::new(
+            "animclock",
+            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            r#"
+                return {
+                    id = "plain",
+                    mount = function(dew, root)
+                        local frame = Instance.new("Frame")
+                        frame.Name = "Body"
+                        frame.Parent = root
+                        DewHost.Clock.OnFrame(function(dt)
+                            frame.BackgroundTransparency = 0.5
+                        end)
+                    end,
+                }
+            "#,
+        );
+        let loaded = fixture.load().expect("the mod loads");
+        let Mounted::DataModel { dom, .. } = &loaded.mounted else {
+            panic!("a datamodel manifest must not produce an Aether session");
+        };
+        assert!(dom.lock().expect("dom").take_dirty());
+
+        services::tick(&loaded.clock, 1.0 / 60.0);
+        assert!(
+            dom.lock().expect("dom").take_dirty(),
+            "a frame listener that assigned a property left the tree clean"
+        );
+    }
+
+    #[test]
+    fn an_aether_mod_gets_the_same_services() {
+        // NOT A DIFFERENT PLATFORM PER RUNTIME. `install_vocabulary` genuinely is
+        // conditional -- Aether carries its own and a partial host one blocks it --
+        // and the risk was that `DewHost` picked up the same conditionality by
+        // habit. It must not: sprint 8 has Aether's DataModel host filling
+        // `Host.Text` and `Host.Clock` from exactly these, so an Aether mod that
+        // could not see them would be sprint 8 failing a sprint early.
+        //
+        // NO AETHER INSTALL IS NEEDED to assert this, and that is deliberate: the
+        // install happens before the runtime branch, so this reads the globals of
+        // a VM built the same way without depending on `pesde install` having run.
+        let lua = mlua::Lua::new();
+        let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
+        services::install(&lua, &clock).expect("install");
+        let got: bool = lua
+            .load("return DewHost.Text.Measure ~= nil and DewHost.Clock.OnFrame ~= nil")
+            .eval()
+            .expect("eval");
+        assert!(got);
+    }
+
+    #[test]
     fn the_vocabulary_is_installed_for_a_datamodel_mod() {
         // `Color3` above is the assertion: without `install_vocabulary` the mount
         // fails at the first line that names one. Stated separately so a failure
@@ -460,7 +622,7 @@ mod tests {
                         assert(dew.storage ~= nil, "storage was granted")
                         assert(dew.clipboard == nil, "clipboard was not asked for")
                         assert(root.Name == "DewRoot", "the root is named DewRoot")
-                        assert(rawget(_G, "game") == nil, "no `game` global before step F")
+                        assert(rawget(_G, "game") == nil, "`game` is not on the plan; see the roadmap")
                     end,
                 }
             "#,

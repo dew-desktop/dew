@@ -25,10 +25,11 @@ mod mods;
 mod surface;
 mod tray;
 
-use aether_raster::{Backend, Font};
+use aether_raster::Backend;
 use aether_runtime::{Driver, RasterPainter, Rgb};
 use aether_window::{Button, Event, Window};
 use dew_host::datamodel::input;
+use dew_host::datamodel::services::SharedClock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -56,10 +57,14 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     // would silently vanish.
     let mut painter = RasterPainter::new(width, height, Backend::VelloCpu)
         .ok_or("could not create a drawing surface")?;
-    if let Some(path) = aether_runtime::font::system_font() {
-        if let Some(font) = Font::load(&path.to_string_lossy(), 0) {
-            painter = painter.with_font(font);
-        }
+    // THE FACE COMES FROM `services::face`, WHICH IS ALSO WHAT MEASURES. This
+    // used to call `Font::load` here, and once a guest can ask "how wide is this
+    // string" that is no longer merely wasteful -- `Font::load` hands back a fresh
+    // id per call, so the painter and the measurement would have been two
+    // registrations of the same file, and a measurement that does not describe the
+    // pixels is worse than no measurement. One memo, one id, one face.
+    if let Some(font) = datamodel::services::face() {
+        painter = painter.with_font(font);
     }
     Ok(painter)
 }
@@ -75,8 +80,17 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
 /// NOT A TRAIT. The two do not share a lifecycle — one owns Lua handles the
 /// framework maintains, the other owns ids into a `Dom` — and a trait over them
 /// would exist to make this file shorter rather than to describe anything.
+///
+/// BOTH ARMS CARRY A CLOCK, and it sits outside the enum's two shapes for the
+/// reason `Mod::clock` does: frames are the host's, not the framework's. An
+/// Aether mod subscribing through `Host.Clock` and a DataModel mod subscribing
+/// through `DewHost.Clock` are the same subscription, and a clock that only one
+/// arm drove would make animation a property of the runtime a mod declared.
 enum Renderer {
-    Aether(Driver<RasterPainter>),
+    Aether {
+        driver: Driver<RasterPainter>,
+        clock: SharedClock,
+    },
     DataModel {
         dom: datamodel::SharedDom,
         root: usize,
@@ -97,7 +111,18 @@ enum Renderer {
         /// `datamodel::input::Pointer` — `MouseEnter` is the difference between
         /// two events, so somebody has to remember the previous answer.
         pointer: input::Pointer,
+        clock: SharedClock,
     },
+}
+
+impl Renderer {
+    /// The frame subscriptions this renderer drives, whichever arm it is.
+    fn clock(&self) -> &SharedClock {
+        match self {
+            Renderer::Aether { clock, .. } => clock,
+            Renderer::DataModel { clock, .. } => clock,
+        }
+    }
 }
 
 /// Which mouse button, in the DataModel's spelling.
@@ -117,9 +142,33 @@ fn button(button: Button) -> input::Button {
 
 impl Renderer {
     /// Advance and paint. `true` means the canvas changed and is worth presenting.
+    ///
+    /// FRAME LISTENERS RUN FIRST, AND THEY DO NOT DECIDE WHETHER TO PAINT. Those
+    /// are two separate sentences and the second is the one milestone 1's sprint 9
+    /// is riding on.
+    ///
+    /// First, because a listener that assigns a property must have that assignment
+    /// land in THIS frame rather than the next -- an animation running one frame
+    /// behind its own clock is the kind of wrong that looks like jitter and reads
+    /// like a rasteriser problem.
+    ///
+    /// Not deciding, because a tick is not a change. Nothing in `services::tick`
+    /// touches the arena, so a mod that subscribes to frames and animates nothing
+    /// leaves the tree clean and this function still returns `false`. A listener
+    /// that DOES assign dirties the tree on the same path every other write takes,
+    /// and the paint follows the change rather than the tick. Getting this
+    /// backwards -- ticking straight into `invalidate`, or dirtying on subscribe --
+    /// would hand back the whole of sprint 9's gain, and `--stats` is where it
+    /// would show: `painted` climbing to meet `fps` the moment anything subscribed.
     fn frame(&mut self, dt: f32) -> Result<bool, String> {
+        // IDLE IS CHECKED BEFORE ANYTHING IS BUILT. A mod that never subscribed
+        // pays one uncontended lock per frame, which is what keeps a clock nobody
+        // asked for off the hot path entirely.
+        if !self.clock().lock().expect("clock").idle() {
+            datamodel::services::tick(&self.clock().clone(), dt);
+        }
         match self {
-            Renderer::Aether(driver) => driver.frame(dt).map_err(|e| e.to_string()),
+            Renderer::Aether { driver, .. } => driver.frame(dt).map_err(|e| e.to_string()),
             //--- WAS ALWAYS TRUE, AND IS NOT ANY MORE. This read "assume so", and
             //--- the comment was honest: a DataModel mod's `mount` ran once, and
             //--- anything it changed afterwards it changed by assigning to a
@@ -130,9 +179,10 @@ impl Renderer {
             //--- The arena answers now. Every guest-visible write marks it dirty
             //--- on the same path that fires `Changed`, and `take_dirty` both
             //--- reads and clears, so a frame that finds nothing is a frame that
-            //--- is not drawn. `dt` is still unused: there is nothing to step, and
-            //--- a mod that animates does it by assigning, which is what dirties
-            //--- the tree.
+            //--- is not drawn. `dt` IS UNUSED IN THIS ARM AND STILL MEANS
+            //--- SOMETHING: the frame listeners above already had it, and a mod
+            //--- that animates does so by assigning inside one, which is what
+            //--- dirties the tree. There is nothing left to step down here.
             Renderer::DataModel {
                 dom,
                 root,
@@ -142,6 +192,7 @@ impl Renderer {
                 height,
                 lua,
                 pointer,
+                ..
             } => {
                 let _ = dt;
                 if !dom.lock().expect("dom").take_dirty() {
@@ -188,7 +239,7 @@ impl Renderer {
     /// pointer, which is a hit test.
     fn moved(&mut self, x: f32, y: f32) -> Result<(), String> {
         match self {
-            Renderer::Aether(driver) => driver
+            Renderer::Aether { driver, .. } => driver
                 .pointer(aether_runtime::Pointer::Move, x, y)
                 .map_err(|e| e.to_string()),
             Renderer::DataModel {
@@ -224,7 +275,7 @@ impl Renderer {
     /// the framework's own limitation and not one to paper over here.
     fn down(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
         match self {
-            Renderer::Aether(driver) => {
+            Renderer::Aether { driver, .. } => {
                 if button != Button::Left {
                     return Ok(());
                 }
@@ -259,7 +310,7 @@ impl Renderer {
     /// A button came up.
     fn up(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
         match self {
-            Renderer::Aether(driver) => {
+            Renderer::Aether { driver, .. } => {
                 if button != Button::Left {
                     return Ok(());
                 }
@@ -293,7 +344,7 @@ impl Renderer {
 
     fn wheel(&mut self, x: f32, y: f32, delta: f32) -> Result<(), String> {
         match self {
-            Renderer::Aether(driver) => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
+            Renderer::Aether { driver, .. } => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
             Renderer::DataModel {
                 dom,
                 root,
@@ -327,14 +378,14 @@ impl Renderer {
     /// and the pixels still need redrawing.
     fn invalidate(&mut self) {
         match self {
-            Renderer::Aether(driver) => driver.invalidate(),
+            Renderer::Aether { driver, .. } => driver.invalidate(),
             Renderer::DataModel { dom, .. } => dom.lock().expect("dom").touch(),
         }
     }
 
     fn painter_mut(&mut self) -> &mut RasterPainter {
         match self {
-            Renderer::Aether(driver) => driver.painter_mut(),
+            Renderer::Aether { driver, .. } => driver.painter_mut(),
             Renderer::DataModel { painter, .. } => painter,
         }
     }
@@ -350,12 +401,17 @@ impl Renderer {
 /// what the property surface has been measuring all along, finally reaching a
 /// pixel.
 ///
-/// `DewRoot` RATHER THAN `game`, and the reason is not cosmetic. `game` would be
-/// the honest parity name and it is exactly what `Host.detect()` keys on:
-/// `typeof(game) == "Instance"` is Aether's whole test for whether it is on an
-/// engine. Installing one here without the services and the rest behind it would
-/// make every Aether mod in this same binary take the Roblox branch and fail. It
-/// arrives when there is enough behind it to be true.
+/// `DewRoot` RATHER THAN `game`, and `game` IS NOT ON THE PLAN. This used to say
+/// it "arrives when there is enough behind it to be true", which was the plan
+/// until 2026-09-04 and is now simply wrong about it. `game` was DROPPED from
+/// step F by decision, not postponed: it was never a capability here, it was a
+/// SENTINEL that two independent consumers -- Aether and vide -- used as a cheap
+/// proxy for "are these four globals real", and Dew installs all four already.
+/// Installing one to satisfy a proxy is parity for its own sake. See the roadmap
+/// section "Why `game` was dropped from step F" for the measurement.
+///
+/// What the services behind it became is `DewHost`, installed above: the two
+/// things a guest framework genuinely could not compute for itself.
 fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPainter), String> {
     let script = PathBuf::from(path);
     let dir = script
@@ -379,6 +435,13 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     dom.lock().expect("dom").assets.set_root(dir.clone());
     datamodel::install(vm.lua(), &dom).map_err(|e| e.to_string())?;
     datamodel::install_vocabulary(vm.lua()).map_err(|e| e.to_string())?;
+    // `DewHost` HERE TOO, so a standalone script measures text the same way a mod
+    // does. NOTHING DRIVES THE CLOCK ON THIS PATH and that is honest rather than
+    // missing: `--script` draws one frame and exits, so there are no frames to be
+    // called on. A script may still subscribe -- it simply never gets a tick,
+    // which is the truthful answer for a renderer that runs once.
+    let clock: datamodel::services::SharedClock = Arc::new(Mutex::new(Default::default()));
+    datamodel::services::install(vm.lua(), &clock).map_err(|e| e.to_string())?;
 
     // The surface the guest parents into. A `ScreenGui` because that is what a
     // Roblox application expects to find above its tree, so the same file has a
@@ -488,6 +551,7 @@ fn run() -> Result<(), String> {
         mut height,
         surface,
         mounted,
+        clock,
         vm,
     } = active;
 
@@ -513,9 +577,10 @@ fn run() -> Result<(), String> {
     // own remit and identical for both runtimes; everything below drives whatever
     // this produced.
     let mut renderer = match mounted {
-        mods::Mounted::Aether(session) => {
-            Renderer::Aether(Driver::new(session, painter(width, height)?, background))
-        }
+        mods::Mounted::Aether(session) => Renderer::Aether {
+            driver: Driver::new(session, painter(width, height)?, background),
+            clock: clock.clone(),
+        },
         //--- SIZED ONCE, at the size the window was opened at. A DataModel tree
         //--- lays out against the surface it is given, and `Event::Resized` does
         //--- not change `width` here for the Aether path either -- the window is
@@ -534,6 +599,7 @@ fn run() -> Result<(), String> {
             //--- are functions the guest created in exactly that state.
             lua: vm.lua().clone(),
             pointer: input::Pointer::default(),
+            clock: clock.clone(),
         },
     };
 

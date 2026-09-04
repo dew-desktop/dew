@@ -22,7 +22,7 @@ use crate::{
     ar_begin, ar_begin_alpha, ar_begin_rect_alpha, ar_bgra, ar_clip_pop, ar_clip_push,
     ar_draw_image, ar_fill_gradient, ar_fill_rect, ar_fill_text, ar_font_load, ar_image_free,
     ar_image_size, ar_image_upload, ar_png, ar_stroke_rect, ar_surface_free,
-    ar_surface_new_backend, ar_text_ascent, ar_text_width, Surface,
+    ar_surface_new_backend, ar_text_ascent, ar_text_line_height, ar_text_width, Surface,
 };
 
 /// Which rasteriser paints.
@@ -68,6 +68,18 @@ impl Font {
     /// Distance from the top of the line box to the baseline.
     pub fn ascent(self, size: f32) -> f32 {
         ar_text_ascent(self.0, size)
+    }
+
+    /// Height of one line, in pixels. `None` when the font is unknown.
+    ///
+    /// `Option`, LIKE [`Font::width`] AND UNLIKE [`Font::ascent`]. The ABI answers
+    /// a negative for an unknown id and the two callers want opposite things with
+    /// it: a baseline offset that comes back slightly wrong draws text slightly
+    /// wrong, but a HEIGHT that comes back as zero collapses the element it was
+    /// measuring. Only the second is worth making unavailable.
+    pub fn line_height(self, size: f32) -> Option<f32> {
+        let h = ar_text_line_height(self.0, size);
+        (h >= 0.0).then_some(h)
     }
 }
 
