@@ -1,45 +1,39 @@
 --!strict
 --[[
-	verify_ascii -- plain ASCII, in every file this repository writes.
+	verify_ascii -- plain ASCII in commits, pull requests and documentation.
 
 	    lune run scripts/verify_ascii.luau
 
 	WHY
-	`CONTRIBUTING.md` says it, `docs/contributing/guidelines.md` says it, and
-	`docs/contributing/guides/writing.md` gives it a section: plain ASCII, in
-	commits, pull requests and documentation alike. NOTHING CHECKED IT, and the
-	rule has been losing for as long as it has existed -- 2758 characters across
-	60 files on this script's first run, in the host's own source and in what Dew
-	prints to a terminal.
+	`CONTRIBUTING.md` names three places: "plain ASCII, in commits, pull requests
+	and documentation alike", and `docs/contributing/guides/writing.md` gives the
+	reason -- a person typing into a terminal and an agent generating text should
+	both be able to produce the house style without thinking about it, and a
+	character you cannot type is one that gets pasted inconsistently.
 
-	It is the same argument `verify_boundaries.luau` makes in its own header: a
-	rule with nothing checking it is a rule nobody follows. Six sprint records
-	drifted over four days and were normalised by hand, which is the fix that does
-	not stay fixed. This is the fix that does.
+	Nothing checked it, so it drifted: six sprint records grew a micro sign, a
+	middle dot and an em dash over four days and were normalised by hand, which is
+	the fix that does not stay fixed. `README.md`, `crates/runtime/README.md` and
+	`docs/mod_contract.md` were carrying 23 characters between them on the day this
+	landed, and are clean in the same commit.
 
-	THE BYTE-ORDER MARK IS THE ONE THAT BITES. `scripts/commitlint.luau` carried
-	one, so it did not parse, so commits landed for months using scopes it would
-	have rejected -- a validator reporting nothing while doing nothing. On this
-	script's first run `.gitignore` and `VERSION` were both carrying one,
-	invisible to every check in the repository and to every diff. Both are gone in
-	the commit that added this file. Nothing reads `VERSION` today; the day
-	something does, `parseSemVer` gets three bytes it cannot match and the version
-	is "not valid SemVer" for a reason that does not appear on screen.
+	THREE PLACES, AND NOT A FOURTH. This checks documentation. It does NOT check
+	Rust or Luau source, and it does not check what Dew prints at runtime -- the
+	writing guide says outright that emoji in a running program's output is
+	product rather than prose. An earlier draft checked every text file in the
+	repository and reported 2758 violations, most of them ruled comment headers in
+	`host/src/datamodel/`. That was the script inventing a rule rather than
+	enforcing one, and a gate that overreaches gets disabled and takes the real
+	rule with it.
 
-	THE CENSUS BELOW IS THE MIGRATION, exactly as the allowlist is in
-	`verify_boundaries.luau`. A file may carry no more than it carried on the day
-	this script landed, so every NEW violation fails on the commit that adds it,
-	while the existing population is named, counted, and shrinks under its own
-	commits. A file absent from the census gets no allowance at all --
-	`.artifacts/project/` is at zero for that reason, the sprint records having
-	been cleaned by hand the day before.
+	Commit messages are checked by `scripts/commitlint_check.luau`, which already
+	reads them. Pull requests are the third place and are not checkable from here.
 
-	Emptying it is what finishing looks like from here.
-
-	`.artifacts/` IS WALKED, and git does not track it. That is deliberate: the
-	drift this script exists to catch happened entirely inside it, and a check
-	scoped to tracked files would have passed on every one of those six records.
-	It is simply absent in CI, where the check earns its place on the rest.
+	THE CENSUS is the migration, as the allowlist is in `verify_boundaries.luau`.
+	No tracked file is in it: the only entries are private notes under
+	`.artifacts/`, which predate the convention and which CI never sees. A file
+	absent from the census gets no allowance, so every tracked document starts at
+	zero and a new violation fails on the commit that adds it.
 ]]
 
 local fs = require("@lune/fs")
@@ -63,12 +57,16 @@ local NOT_OURS = {
 --- violation; guessing which files are text from their contents would make this
 --- script's answer depend on what a file happens to contain. Extensionless names
 --- that are text are listed outright.
-local TEXT_EXTENSIONS = { "md", "luau", "rs", "toml", "json", "yml", "yaml", "txt", "gitignore" }
-local TEXT_NAMES = { "VERSION", "LICENSE", "CONTRIBUTING", "README" }
+--- DOCUMENTATION IS MARKDOWN HERE, and that is the whole file scope. `.rs`,
+--- `.luau` and `.toml` are deliberately absent; see the header.
+local TEXT_EXTENSIONS = { "md" }
+local TEXT_NAMES: { string } = {}
 
---- WHAT WAS THERE ON 2026-09-04, per file. Lower a number when you clean a file;
---- never raise one. An entry whose file is gone or already clean is reported as
---- slack to remove, because an allowance nobody has earned is a hole.
+--- WHAT THE PRIVATE NOTES UNDER `.artifacts/` CARRIED on 2026-09-04. Lower a
+--- number when you clean a file; never raise one. Nothing tracked appears here,
+--- and nothing tracked should: a tracked document's allowance is zero. An entry
+--- whose file is gone or already clean is reported as slack to remove, because
+--- an allowance nobody has earned is a hole.
 local CENSUS: { [string]: number } = {
 	[".artifacts/branching_strategy_and_scope_discipline.md"] = 178,
 	[".artifacts/drafts/CONTRIBUTING.md"] = 2,
@@ -85,51 +83,6 @@ local CENSUS: { [string]: number } = {
 	[".artifacts/repo_hygiene_and_release_strategy.md"] = 10,
 	[".artifacts/vision/aether_native_architecture_pivot.md"] = 395,
 	[".artifacts/vision/vision_chat_dump.md"] = 8,
-	["Cargo.toml"] = 3,
-	["README.md"] = 2,
-	["crates/raster/src/bitmap.rs"] = 2,
-	["crates/raster/src/canvas.rs"] = 8,
-	["crates/raster/src/hybrid_probe.rs"] = 1,
-	["crates/raster/src/lib.rs"] = 20,
-	["crates/raster/verify.luau"] = 1,
-	["crates/runtime/README.md"] = 1,
-	["crates/runtime/src/driver.rs"] = 3,
-	["crates/runtime/src/font.rs"] = 2,
-	["crates/runtime/src/frame.rs"] = 10,
-	["crates/runtime/src/lib.rs"] = 28,
-	["crates/runtime/src/modules.rs"] = 4,
-	["crates/runtime/src/painter.rs"] = 11,
-	["crates/runtime/src/raster.rs"] = 14,
-	["crates/runtime/src/requirer.rs"] = 4,
-	["crates/runtime/src/session.rs"] = 6,
-	["crates/runtime/src/vm.rs"] = 5,
-	["crates/runtime/tests/example.rs"] = 8,
-	["crates/runtime/tests/fixtures/app.luau"] = 1,
-	["crates/runtime/tests/fixtures/pressable.luau"] = 1,
-	["crates/runtime/tests/frame_contract.rs"] = 2,
-	["crates/runtime/tests/interaction.rs"] = 3,
-	["crates/runtime/tests/parity.rs"] = 8,
-	["crates/runtime/tests/render.rs"] = 12,
-	["crates/window/src/lib.rs"] = 8,
-	["crates/window/src/win32.rs"] = 9,
-	["docs/mod_contract.md"] = 20,
-	["host/Cargo.toml"] = 1,
-	["host/src/bin/datamodel_surface.rs"] = 67,
-	["host/src/capabilities.rs"] = 2,
-	["host/src/datamodel/input.rs"] = 472,
-	["host/src/datamodel/members.rs"] = 426,
-	["host/src/datamodel/mod.rs"] = 172,
-	["host/src/datamodel/render.rs"] = 67,
-	["host/src/datamodel/signal.rs"] = 423,
-	["host/src/main.rs"] = 29,
-	["host/src/manifest.rs"] = 3,
-	["host/src/mods.rs"] = 38,
-	["host/src/surface.rs"] = 3,
-	["host/src/tray.rs"] = 4,
-	["mods/calculator/calculator.luau"] = 6,
-	["mods/nameplate/nameplate.luau"] = 22,
-	["mods/timetracker/timetracker.luau"] = 7,
-	["mods/workspace/workspace.luau"] = 7,
 }
 
 local function isText(path: string): boolean
@@ -193,9 +146,9 @@ local KNOWN: { [number]: string } = {
 	[0x2705] = "check mark emoji -- write the word",
 }
 
---- One report per character, but only the first few per file: 472 box-drawing
---- rules in one file's comment headers is one problem, and printing it 472 times
---- buries the file that has a single smart quote in it.
+--- One report per character, but only the first few per file: 395 of them in one
+--- pasted chat log is one problem, and printing it 395 times buries the document
+--- with a single smart quote in it.
 local PER_FILE_REPORTS = 4
 
 local files = walk(".", {})

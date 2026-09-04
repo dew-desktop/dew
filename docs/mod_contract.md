@@ -12,14 +12,14 @@ return {
 
     mount = function(dew)
         local elapsed = source(0)
-        return create "Frame" { --[[ … ]] }
+        return create "Frame" { --[[ ... ]] }
     end,
 }
 ```
 
 Loading a mod **describes** it. It does not **do** anything.
 
-The previous shape was `dew.hud.registerComponent({ … })` — a call with effects,
+The previous shape was `dew.hud.registerComponent({ ... })` -- a call with effects,
 made during load. That ordering makes the host's job impossible: to find out what
 a mod is, it had to run the mod, and by then the mod had already reached for
 whatever it wanted. A declaration can be read, checked against `mod.json`, and
@@ -66,7 +66,7 @@ once are Dew's remit, and none of them is a property of the framework an author
 picked.
 
 **Declared, never sniffed.** Both flavours build a tree, and there is no artefact
-that reliably tells them apart — a heuristic on `require("@aether/api")` reads
+that reliably tells them apart -- a heuristic on `require("@aether/api")` reads
 source to decide how to execute it, and answers wrong for the first mod that
 requires the framework conditionally. And getting it wrong is not cosmetic: an
 Aether mod on the DataModel branch never opens a reactive scope, and a DataModel
@@ -75,7 +75,7 @@ mod on the Aether branch is handed no root. So it is one key, in a closed set, a
 
 **The root is a parameter, like `dew`.** A DataModel mod does not reach for a
 global, because what a mod may draw into is granted to it in the same way as what
-it may do. The root is a `ScreenGui` named `DewRoot` — **not `game`**, which is
+it may do. The root is a `ScreenGui` named `DewRoot` -- **not `game`**, which is
 what `Host.detect()` keys on (`typeof(game) == "Instance"`); installing one before
 the services and the member surface exist would flip every Aether mod in the same
 binary onto the Roblox branch. That name arrives when there is enough behind it to
@@ -83,7 +83,7 @@ be true.
 
 **No vocabulary for an Aether mod, deliberately.** Aether carries its own `UDim2`
 and `Color3` for off-engine hosts and publishes them with
-`if rawget(g, name) == nil` — first writer wins — so a partial host vocabulary
+`if rawget(g, name) == nil` -- first writer wins -- so a partial host vocabulary
 does not merge with Aether's, it *blocks* it. That the two branches install
 different globals is the reason the runtime is declared, not an inconsistency
 waiting to be tidied.
@@ -96,7 +96,7 @@ tree-and-lifecycle methods are there, and so is the signal model:
 `DescendantAdded`, `DescendantRemoving` and `Destroying`.
 
 Three things to know about them. **Assigning a property the value it already has
-fires nothing** — that is deliberate, and it is what lets the host draw a static
+fires nothing** -- that is deliberate, and it is what lets the host draw a static
 mod once instead of every frame. **`signal:Wait()` is not available**: it yields
 on the engine and Dew has no task scheduler, so it raises a message saying so
 rather than pretending; connect a handler. And **a handler that errors is
@@ -117,7 +117,7 @@ still dropped for this flavour.
 "permissions": ["storage", "audio", "notifications"]
 ```
 
-While `dew` was a global, that list was decoration — the whole surface was
+While `dew` was a global, that list was decoration -- the whole surface was
 reachable whatever the manifest said, and a mod that quietly used `clipboard`
 without declaring it worked exactly as well as one that declared it. Passing the
 capability table in makes the manifest load-bearing: what a mod cannot name, it
@@ -133,7 +133,7 @@ It returns a tree; it is not a per-frame `render`.
 The old `render` was called every frame and rebuilt the tree from scratch. Mods
 declared `source` and `derive` correctly and then discarded the result each
 frame, so the reactive graph was decorative and the rebuild did the work. That is
-slower, and it diverges from Roblox — where a mounted tree persists and the graph
+slower, and it diverges from Roblox -- where a mounted tree persists and the graph
 drives property updates.
 
 Under `mount`, a `source` written from a hotkey or a timer reaches the screen the
@@ -143,7 +143,7 @@ which is the property the whole stack exists to preserve.
 
 ## An Aether mod authors in Aether's own idiom
 
-`create`, `source`, `derive`, and Roblox's property vocabulary — `UDim2`,
+`create`, `source`, `derive`, and Roblox's property vocabulary -- `UDim2`,
 `Color3`, `BackgroundTransparency`. Not a Dew dialect.
 
 This is what keeps a widget's visual half **liftable**: the tree a mod builds is
@@ -165,8 +165,8 @@ Two authoring scopes existed: `registerComponent` took an Aether tree, and
 `registerWidget` took a data descriptor (`{ text, subtext, icon, color }`) that
 the host rendered in a house style.
 
-Both are worth having — the shorthand is most of what a small widget wants — but
-they must not be two paths through the renderer. `dew.hud.card { … }` is a Luau
+Both are worth having -- the shorthand is most of what a small widget wants -- but
+they must not be two paths through the renderer. `dew.hud.card { ... }` is a Luau
 helper that BUILDS an Aether tree, so the shorthand is a library function and the
 engine has one path to keep correct.
 
@@ -185,7 +185,7 @@ icon.ScaleType = Enum.ScaleType.Fit
 icon.Parent = root
 ```
 
-`mod://` resolves against **the directory the mod was loaded from** — the same
+`mod://` resolves against **the directory the mod was loaded from** -- the same
 directory `require` is allowed to reach, and for the same reason. A path that
 climbs out of it is refused rather than followed, so an image cannot become the
 way around the boundary the requirer already enforces. A `--script` run resolves
@@ -215,7 +215,7 @@ you are told which of the two of you decided that.
 ### An asset that will not resolve is a missing image, not an error
 
 `mod://` is the only scheme Dew resolves today. `rbxassetid://` needs a scheme
-registry, a permission and a fetch, and those arrive together — see ADR-003.
+registry, a permission and a fetch, and those arrive together -- see ADR-003.
 Until then, assigning one succeeds, the property keeps its value, the host names
 the URI on the console once, and the element is drawn as an empty marked box
 rather than as nothing at all.
@@ -245,7 +245,7 @@ surface = { kind = "window", title = "Time Tracker Settings" }
 
 **One `mount`, because the mod builds the same tree either way.** Chrome or none,
 in the taskbar or not, blitted into a rectangle or composited from its own alpha
-— every one of those is a property of the WINDOW, not of the widget. Two entry
+-- every one of those is a property of the WINDOW, not of the widget. Two entry
 points would mean two paths through the loader for a difference that is entirely
 window-creation flags, and would force a mod wanting both a HUD and a settings
 panel to be two mods.
@@ -264,7 +264,7 @@ Omitting `surface` gets a widget. Dew is a desktop applet platform; a default of
 surface = { kind = "overlay" }   -- topmost = true, clickThrough = false
 ```
 
-The screen supplies the size, so `size` in the declaration is ignored — a mod
+The screen supplies the size, so `size` in the declaration is ignored -- a mod
 cannot know the display it will land on, and one that guessed would be wrong on
 every machine but the author's.
 
@@ -281,7 +281,7 @@ screen-sized sheet of glass that swallows every click on the machine.
 ### A widget's shape is its own alpha
 
 On a widget surface the frame is cleared to NOTHING, so a pixel the tree did not
-paint is a pixel the window does not occupy — the desktop shows through it and
+paint is a pixel the window does not occupy -- the desktop shows through it and
 receives the click. A `UICorner` on the root frame is therefore the window's real
 silhouette, not a rounded shape drawn on a dark rectangle.
 
@@ -328,7 +328,7 @@ appearing in it.
 
 | | |
 | :--- | :--- |
-| **Aether** | layout, hit testing, pointer arbitration, focus, motion — *for a mod that chose it* |
+| **Aether** | layout, hit testing, pointer arbitration, focus, motion -- *for a mod that chose it* |
 | **`crates/runtime`** | the VM, require resolution, the frame loop, the display list |
 | **`crates/raster`** | the rasteriser |
 | **`crates/window`** | the window, input, the blit |

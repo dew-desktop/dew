@@ -70,8 +70,8 @@ return {
 
 No `require`, nothing imported, and every line of it would build the same tree
 inside Roblox. [`mods/nameplate`](mods/nameplate/) is the whole example. The
-runtime is declared rather than detected, and everything else — discovery, the
-manifest, capabilities, the surface — is identical either way.
+runtime is declared rather than detected, and everything else -- discovery, the
+manifest, capabilities, the surface -- is identical either way.
 
 ## Setup
 

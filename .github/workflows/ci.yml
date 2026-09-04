@@ -60,12 +60,12 @@ jobs:
       # built.
       - run: lune run scripts/verify_boundaries.luau
 
-      # PLAIN ASCII, CHECKED. CONTRIBUTING.md and the writing guide both require
-      # it and nothing enforced it, so it lost: 2758 characters across 60 files
-      # when this gate first ran, including a byte-order mark in `.gitignore` and
-      # in `VERSION` -- the same thing that stopped `commitlint.luau` parsing for
-      # months. The census in the script is the migration; new violations fail
-      # here on the commit that adds them.
+      # PLAIN ASCII IN DOCUMENTATION. CONTRIBUTING.md names three places --
+      # commits, pull requests and documentation. commitlint covers the first,
+      # this covers the third, and nothing covered either until six sprint
+      # records had drifted. Scoped to Markdown ON PURPOSE: source comments and
+      # what Dew prints at runtime are not documentation, and a gate that
+      # overreaches gets disabled and takes the real rule with it.
       - run: lune run scripts/verify_ascii.luau
 
       # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
