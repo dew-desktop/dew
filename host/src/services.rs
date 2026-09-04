@@ -17,8 +17,12 @@
 //! actually draw with" and "call me when the host draws a frame" are questions
 //! ABOUT THE HOST, and no amount of tree makes them answerable from Luau. On
 //! Roblox they are `TextService:GetTextSize` and `RunService.Heartbeat`, reached
-//! through `game`; `game` is not on this plan (see the roadmap's "Why `game` was
-//! dropped from step F"), so Dew has to spell them itself.
+//! through `game`, and Dew has to spell them itself -- `game` would not help even
+//! if it were here, because these are services behind it rather than the tree it
+//! names. (`game` itself came back into scope on 2026-09-04, for vide's gate and
+//! nothing else; see the roadmap's "Why `game` was dropped from step F, and why
+//! it came back". This comment used to cite the half of that section that was
+//! later corrected, for a claim the section never had to carry.)
 //!
 //! WHY A GLOBAL, AND NOT THE `dew` TABLE -- the design question this sprint owned
 //! Three homes were possible and the argument is in the sprint record; the fact
@@ -46,11 +50,18 @@
 //! name that is honestly Dew's cannot be mistaken for portable, and it sits
 //! beside `DewRoot`, which was named the same way for the same reason.
 //!
-//! THE STANDARD QUESTION IS FLAGGED, NOT ANSWERED. Whether a conforming host MUST
-//! expose text metrics and a frame clock, and under what names, is a `LAYOUT.md`
-//! change in Aether's repository and not this sprint's to make. This name is
-//! Dew's own answer and is expected to be renamed by that decision rather than to
-//! pre-empt it.
+//! THE STANDARD QUESTION IS ANSWERED, AND THE NAME IS STILL DEW'S. Whether a
+//! conforming host MUST expose text metrics and a frame clock was flagged here
+//! and answered YES on 2026-09-04, in `docs/host_services.md` -- its own
+//! hand-written half of the standard, not a section of the generated
+//! `datamodel_scope.md`, because neither service is a member of any class and
+//! regenerating that document after these landed produced a byte-identical file.
+//!
+//! What the standard requires is the SHAPE: synchronous measurement, a frame
+//! subscription that returns a disposer, a monotonic `now`, and no way for a
+//! guest to step a host that drives its own frames. It requires no name, so
+//! `DewHost` conforms as it stands and is still expected to be revisited only if
+//! the standard ever does specify one.
 
 use aether_raster::Font;
 use mlua::prelude::*;

@@ -402,17 +402,25 @@ impl Renderer {
 /// what the property surface has been measuring all along, finally reaching a
 /// pixel.
 ///
-/// `DewRoot` RATHER THAN `game`, and `game` IS NOT ON THE PLAN. This used to say
-/// it "arrives when there is enough behind it to be true", which was the plan
-/// until 2026-09-04 and is now simply wrong about it. `game` was DROPPED from
-/// step F by decision, not postponed: it was never a capability here, it was a
-/// SENTINEL that two independent consumers -- Aether and vide -- used as a cheap
-/// proxy for "are these four globals real", and Dew installs all four already.
-/// Installing one to satisfy a proxy is parity for its own sake. See the roadmap
-/// section "Why `game` was dropped from step F" for the measurement.
+/// `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS PATH RATHER THAN ABOUT
+/// the plan. A standalone script parents into a root; `DewRoot` names the root it
+/// was handed. What a guest reaches through `game` on the engine is the SERVICES
+/// behind it, and those are `DewHost`, installed above: the two things a guest
+/// framework genuinely could not compute for itself, and required of a conforming
+/// host by `docs/host_services.md` since 2026-09-04.
 ///
-/// What the services behind it became is `DewHost`, installed above: the two
-/// things a guest framework genuinely could not compute for itself.
+/// THIS COMMENT HAS BEEN WRONG IN BOTH DIRECTIONS AND IS NOW SCOPED SO IT CANNOT
+/// BE AGAIN. It first said `game` "arrives when there is enough behind it to be
+/// true"; it then said `game` was dropped from the plan, was never a capability,
+/// and was only a sentinel two consumers used as a proxy. That was right about
+/// Aether and had never been measured of vide, which reaches `typeof`, `Instance`,
+/// `Enum` and `Color3` THROUGH `game` as a truthiness gate -- so `game` came back
+/// into scope on 2026-09-04, for that one consumer, as sprint 6's item 0a. See
+/// the roadmap's "Why `game` was dropped from step F, and why it came back".
+///
+/// None of which changes this line: a `game` installed for vide's gate is an
+/// Aether-mod concern, and no version of it would be what a standalone script
+/// parents into.
 fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPainter), String> {
     let script = PathBuf::from(path);
     let dir = script

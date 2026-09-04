@@ -207,16 +207,23 @@ pub fn load(
         }
         // 3b ── no framework: the vocabulary, and a root to parent into.
         //
-        //       `DewRoot` RATHER THAN `game`, and `game` IS NOT ON THE PLAN.
-        //       This used to say the name "arrives in sprint 9, when the services
-        //       and the member surface behind it make it true" -- which was the
-        //       plan under the old numbering and is now wrong about it twice over.
-        //       `game` was DROPPED from step F by decision on 2026-09-04: it was
-        //       never a capability here but a SENTINEL, the proxy `Host.detect()`
-        //       uses for "are these four globals real", and Dew installs all four.
-        //       The roadmap's "Why `game` was dropped from step F" carries the
-        //       measurement. It is not forbidden forever; it is simply not what
-        //       makes a guest framework run here.
+        //       `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS ARM. A
+        //       DataModel mod is handed the root it parents into, and `DewRoot`
+        //       names it. It needs no vide, so it is not the arm any `game` would
+        //       be for.
+        //
+        //       THE COMMENT HERE HAS BEEN WRONG TWICE AND IS NOW SCOPED TO THIS
+        //       ARM SO IT CANNOT BE AGAIN. It said the name "arrives in sprint 9",
+        //       which was the old numbering; it then said `game` was DROPPED from
+        //       step F because it was never a capability but a sentinel two
+        //       consumers used as a proxy for "are these four globals real", and
+        //       Dew installs all four. That was right about Aether and had never
+        //       been measured of vide -- whose seven host modules read
+        //       `game and typeof or require "../test/mock".typeof`, so `game` is
+        //       the GATE the four names are reached through rather than one of
+        //       them. `game` came back into scope on 2026-09-04 for that consumer
+        //       alone, as sprint 6's item 0a. The roadmap's "Why `game` was
+        //       dropped from step F, and why it came back" carries both halves.
         //
         //       A `ScreenGui` because that is what a Roblox application expects
         //       to find above its tree, so the same mod has a chance of running
@@ -642,6 +649,24 @@ mod tests {
     fn a_datamodel_mod_is_handed_only_what_its_manifest_granted() {
         // The capability table reaches this branch too, and it is still built
         // from the permissions ONLY: `storage` is a table, `clipboard` is absent.
+        //
+        // AN ASSERTION WAS REMOVED FROM THIS FIXTURE ON 2026-09-04, and the reason
+        // is worth more than the line was. It read:
+        //
+        //     assert(rawget(_G, "game") == nil, "`game` is not on the plan; see the roadmap")
+        //
+        // It did its job -- it pinned a plan decision at the moment that decision
+        // was easy to drift away from -- and then the decision changed. `game` is
+        // back in scope for vide's truthiness gate, as sprint 6's item 0a, so a
+        // test demanding its absence enforces a position the roadmap no longer
+        // holds.
+        //
+        // IT IS NOT REPLACED WITH THE OPPOSITE. Where `game` gets installed, and
+        // for which runtime, is sprint 6's to decide: vide is an Aether-mod
+        // concern and this fixture is a DataModel mod, which needs no vide and
+        // would be the wrong place to pin either answer. It was also never about
+        // this test's subject, which is that a mod is handed only what its
+        // manifest granted.
         let fixture = Fixture::new(
             "caps",
             r#"{ "id": "plain", "runtime": "datamodel", "permissions": ["storage"] }"#,
@@ -652,7 +677,6 @@ mod tests {
                         assert(dew.storage ~= nil, "storage was granted")
                         assert(dew.clipboard == nil, "clipboard was not asked for")
                         assert(root.Name == "DewRoot", "the root is named DewRoot")
-                        assert(rawget(_G, "game") == nil, "`game` is not on the plan; see the roadmap")
                     end,
                 }
             "#,

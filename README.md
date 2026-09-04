@@ -73,6 +73,15 @@ inside Roblox. [`mods/nameplate`](mods/nameplate/) is the whole example. The
 runtime is declared rather than detected, and everything else -- discovery, the
 manifest, capabilities, the surface -- is identical either way.
 
+What "the same tree inside Roblox" means precisely is the DataModel Standard, and
+it is written down in two halves.
+[docs/datamodel_scope.md](docs/datamodel_scope.md) is what a host must ACCEPT --
+classes, properties, members -- and is generated from the engine's own reflection
+database. [docs/host_services.md](docs/host_services.md) is what a host must be
+able to DO: measure a string synchronously, and hand out a frame subscription.
+Neither of those two is a member of any class, which is why they have a document
+of their own rather than a hand-written appendix to a generated one.
+
 ## Setup
 
 ```sh
