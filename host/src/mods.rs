@@ -282,6 +282,36 @@ pub fn load(
                 .call((mount, width, height, dew))
                 .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
 
+            // WHICH HOST THE FRAMEWORK RESOLVED, SAID OUT LOUD.
+            //
+            // `Host.detect()` chooses between the DataModel host and the Luau
+            // test double, and BOTH OF THEM DRAW A CORRECT WIDGET. So "the three
+            // Aether mods still render" is true under either branch and is not
+            // evidence that either was taken -- the exact shape of green number
+            // this project keeps finding. The framework already knows the answer
+            // and had no way to say it; `Host.Name` is what is driven and
+            // `Host.Environment` is where its text metrics and frame clock came
+            // from, so the pair distinguishes every branch that exists.
+            //
+            // A LINE RATHER THAN AN ASSERTION, because the truthful answer on Dew
+            // today is `LuauDataModel/Luau` and the reasons are measured in
+            // milestone 2 sprint 8's record. Failing here would refuse to run
+            // three mods that work, over a claim no code in this file makes.
+            let host_tbl: Option<LuaTable> = result.get("Host").ok();
+            let (host_name, environment) = host_tbl
+                .map(|h| {
+                    (
+                        h.get::<String>("Name").unwrap_or_else(|_| "?".into()),
+                        h.get::<String>("Environment")
+                            .unwrap_or_else(|_| "?".into()),
+                    )
+                })
+                .unwrap_or_else(|| ("?".into(), "?".into()));
+            println!(
+                "[dew] {}: mounted through Aether's {host_name} host ({environment} services)",
+                manifest.id
+            );
+
             let session_tbl: LuaTable = result.get("Session").map_err(|e| e.to_string())?;
             let session = Session::from_lua(vm.lua(), &session_tbl)
                 .map_err(|e| format!("{}: {e}", manifest.id))?;

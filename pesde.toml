@@ -6,19 +6,25 @@ description = "Dew Native Luau Desktop HUD & Applet Ecosystem"
 environment = "roblox"
 lib = "scripts/init.luau"
 
-# WHAT DEW SUPPLIES TO AETHER, not what Dew builds with.
+# AETHER, AND WHAT DEW SUPPLIES TO IT.
 #
-# Aether is reached through Cargo (host/Cargo.toml), pinned by commit, and its
-# Luau source travels in that same checkout. What does NOT travel is Aether's own
-# `roblox_packages` -- it is generated, so a pinned checkout carries the framework
-# and none of its dependencies.
+# Aether is a GUEST FRAMEWORK, exactly like vide, and it is installed here rather
+# than through Cargo -- it was a Cargo dependency until ADR-004 moved the Rust to
+# this repository and left no Aether checkout for `luau_source_root()` to read.
+# What does NOT travel in a pinned install is Aether's own `roblox_packages`: it
+# is generated, so the package carries the framework and none of its dependencies.
 #
 # vide is that dependency. Dew installs it here and points `@vide` at it, which
 # is the seam VideCore exposes for exactly this. The version is Aether's declared
 # range; when Aether widens it, this widens with it.
+#
+# THE REVISION IS READ BY `pesde install` AND BY NOTHING ELSE AT RUN TIME, so a
+# bump is only real once the install has run: `aether_runtime::installed_package`
+# finds whatever is on disk under `roblox_packages/.pesde/`, not what this file
+# says. A stale checkout is a mod mounting against a framework nobody edited.
 [dependencies]
 vide = { wally = "centau/vide", version = "^0.4.0" }
-aether = { repo = "project-aether-ui/aether", rev = "a01a03412bee0d1c4e4c5e6a718bb2c64c6781f6" }
+aether = { repo = "project-aether-ui/aether", rev = "76f29ee42f7bfb95c8fe157941a8e28633bf5b6e" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"
