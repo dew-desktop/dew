@@ -23,7 +23,7 @@
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
-use crate::datamodel::services::{self, Clock, SharedClock};
+use crate::services::{self, Clock, SharedClock};
 use crate::manifest::{Manifest, Runtime};
 use crate::surface::Declared;
 use aether_runtime::{modules, Session, Vm};

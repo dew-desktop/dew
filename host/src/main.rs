@@ -22,14 +22,15 @@ mod capabilities;
 use dew_host::datamodel;
 mod manifest;
 mod mods;
+mod services;
 mod surface;
 mod tray;
 
 use aether_raster::Backend;
 use aether_runtime::{Driver, RasterPainter, Rgb};
 use aether_window::{Button, Event, Window};
+use crate::services::SharedClock;
 use dew_host::datamodel::input;
-use dew_host::datamodel::services::SharedClock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -63,7 +64,7 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     // id per call, so the painter and the measurement would have been two
     // registrations of the same file, and a measurement that does not describe the
     // pixels is worse than no measurement. One memo, one id, one face.
-    if let Some(font) = datamodel::services::face() {
+    if let Some(font) = services::face() {
         painter = painter.with_font(font);
     }
     Ok(painter)
@@ -165,7 +166,7 @@ impl Renderer {
         // pays one uncontended lock per frame, which is what keeps a clock nobody
         // asked for off the hot path entirely.
         if !self.clock().lock().expect("clock").idle() {
-            datamodel::services::tick(&self.clock().clone(), dt);
+            services::tick(&self.clock().clone(), dt);
         }
         match self {
             Renderer::Aether { driver, .. } => driver.frame(dt).map_err(|e| e.to_string()),
@@ -440,8 +441,8 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     // missing: `--script` draws one frame and exits, so there are no frames to be
     // called on. A script may still subscribe -- it simply never gets a tick,
     // which is the truthful answer for a renderer that runs once.
-    let clock: datamodel::services::SharedClock = Arc::new(Mutex::new(Default::default()));
-    datamodel::services::install(vm.lua(), &clock).map_err(|e| e.to_string())?;
+    let clock: services::SharedClock = Arc::new(Mutex::new(Default::default()));
+    services::install(vm.lua(), &clock).map_err(|e| e.to_string())?;
 
     // The surface the guest parents into. A `ScreenGui` because that is what a
     // Roblox application expects to find above its tree, so the same file has a

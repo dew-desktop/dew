@@ -1,5 +1,16 @@
 //! `DewHost`: the two services a guest framework needs and no guest can compute.
 //!
+//! WHERE THIS FILE LIVES, AND WHY IT MOVED BEFORE IT WAS EVER COMMITTED HERE
+//! It was written as `datamodel/services.rs` and `verify_boundaries` refused it,
+//! correctly: section 3 lets only the render bridge reach `aether_raster`, on the
+//! grounds that a DataModel module deferring to those crates would put a second
+//! implementation of the standard inside one host. Measuring a string needs a
+//! face, so the import was real -- and the right conclusion was that the FILE was
+//! in the wrong place rather than that the rule was too tight. Nothing here is a
+//! DataModel member; see the next paragraph, which said so before the checker
+//! did. It sits beside `capabilities.rs` instead, which is the other file
+//! answering "what is a mod given".
+//!
 //! WHAT THESE ARE, AND WHY THEY ARE NOT PROPERTIES
 //! Everything else in this module is a DataModel: instances, properties, events,
 //! a tree. These two are not. "How wide is this string in the face this host will
