@@ -124,8 +124,20 @@ impl Session {
     }
 
     pub fn snapshot(&self) -> LuaResult<Frame> {
-        let t: LuaTable = self.snapshot.call(())?;
-        Frame::from_lua(&t)
+        Frame::from_lua(&self.snapshot_table()?)
+    }
+
+    /// The snapshot BEFORE it is decoded.
+    ///
+    /// FOR ONE CALLER AND IT IS A TEST, which is why it exists at all:
+    /// `tests/frame_contract.rs` checks that a real display list carries no key
+    /// outside `Frame::CONTRACT_FIELDS`, and it cannot ask that of a `Frame` --
+    /// decoding is exactly the step that discards a key nobody claimed. A field
+    /// added in Live.luau and forgotten in `frame.rs` is invisible from every
+    /// other vantage point in this crate, and that is the failure the list was
+    /// written to prevent.
+    pub fn snapshot_table(&self) -> LuaResult<LuaTable> {
+        self.snapshot.call(())
     }
 
     /// What changed since the last call. Pass `true` for a full delta — every

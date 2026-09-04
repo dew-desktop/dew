@@ -23,16 +23,31 @@
 //! THIS IS THE DEMO PATH, NOT THE PARITY PATH, and the distinction is the whole
 //! reason it is affordable now. It resolves offset and scale against the parent,
 //! applies `AnchorPoint`, honours `Visible`, `ZIndex`, `ClipsDescendants`,
-//! `UICorner` and `UIStroke`, and draws text. It does NOT do `AutomaticSize`,
-//! `UIListLayout`, gradients, or any of the constraints. Those are
-//! `conformance/LAYOUT.md`'s subject and they arrive with the Rust conformance
-//! runner that can hold them to the engine's own answers -- `AutomaticSize` alone
-//! cost four wrong rules in Aether, each fitting every case that existed when it
-//! was written, and reimplementing it here from memory would be the fifth.
+//! `UICorner` and `UIStroke`, draws text, and draws an image. It does NOT do
+//! `AutomaticSize`, `UIListLayout`, gradients, or any of the constraints. Those
+//! are `conformance/LAYOUT.md`'s subject and they arrive with the Rust
+//! conformance runner that can hold them to the engine's own answers --
+//! `AutomaticSize` alone cost four wrong rules in Aether, each fitting every case
+//! that existed when it was written, and reimplementing it here from memory would
+//! be the fifth.
+//!
+//! WHAT AN IMAGE HONOURS, STATED THE SAME WAY. `Image`, `ImageContent`,
+//! `ImageColor3`, `ImageTransparency`, `ImageRectOffset`, `ImageRectSize`, and
+//! three of `Enum.ScaleType`'s five members -- `Stretch`, `Fit` and `Crop`.
+//!
+//! IT DOES NOT DO `Slice` OR `Tile`, and with them `SliceCenter`, `SliceScale`
+//! and `TileSize`. Both change what a drawn image looks like, and both need
+//! something the painter has no shape for yet: nine draws from one source for a
+//! nine-patch, and a repeat for a tile. They are resolved to `Stretch` -- and
+//! REPORTED BY NAME the first time an element asks for one, through
+//! `crate::assets::Assets::note_once`, because silently drawing everything as `Stretch`
+//! is exactly the failure this paragraph exists to prevent. An author whose
+//! nine-patch renders as a smear should be told which of the two of us decided
+//! that.
 //!
 //! So: enough to put a real tree on screen, and no claim beyond that.
 
-use aether_runtime::frame::{Align, Frame, Node, Rect, Rgb, Stroke};
+use aether_runtime::frame::{Align, Frame, Image, Node, Rect, Rgb, Scale, Stroke};
 use rbx_types::{Variant, Vector2};
 
 use super::{Dom, SharedDom};
@@ -58,6 +73,18 @@ fn is_modifier(class: &str) -> bool {
 /// Classes that draw text.
 fn draws_text(class: &str) -> bool {
     matches!(class, "TextLabel" | "TextButton" | "TextBox")
+}
+
+/// Classes that draw an image.
+///
+/// TWO, AND THE BACKLOG PAIRS MORE. `ScrollingFrame` has `TopImage`, `MidImage`
+/// and `BottomImage` for its scrollbar and `ImageButton` has `HoverImage` and
+/// `PressedImage`; each is the same asset naming under a different property, and
+/// each needs a state this pass does not have -- a scroll position, a hover, a
+/// press. `ImageLabel` and `ImageButton` need none of that, which is why they are
+/// the two that arrive first.
+fn draws_image(class: &str) -> bool {
+    matches!(class, "ImageLabel" | "ImageButton")
 }
 
 fn udim2(dom: &Dom, id: usize, key: &str) -> (f32, f32, f32, f32) {
@@ -167,6 +194,111 @@ fn corner_radius(dom: &Dom, id: usize) -> f32 {
         }
     }
     0.0
+}
+
+/// What this element names as its image, whichever generation it used.
+///
+/// TWO GENERATIONS OF ONE IDEA, AND A HOST TAKES BOTH. `Image` is the legacy
+/// `ContentId` -- a bare string -- and `ImageContent` is the modern `Content`, a
+/// URI; the backlog pairs them all the way down (`TopImage`/`TopImageContent`,
+/// `HoverImage`/`HoverImageContent`) and both name the same asset. A guest
+/// written this year assigns the second, a guest written five years ago assigns
+/// the first, and neither is wrong.
+///
+/// `ImageContent` WINS WHEN BOTH ARE SET, for one reason: it is the one the
+/// engine keeps. Roblox's own migration writes through `Image` into
+/// `ImageContent`, so the modern property is the more recent statement of intent
+/// whenever they disagree -- and an application that sets only `Image` never
+/// reaches the tie at all.
+fn image_uri(dom: &Dom, id: usize) -> Option<String> {
+    if let Some(Variant::Content(content)) = dom.property(id, "ImageContent") {
+        if let Some(uri) = content.as_uri() {
+            if !uri.is_empty() {
+                return Some(uri.to_string());
+            }
+        }
+    }
+    match dom.property(id, "Image") {
+        Some(Variant::ContentId(legacy)) if !legacy.as_str().is_empty() => {
+            Some(legacy.as_str().to_string())
+        }
+        _ => None,
+    }
+}
+
+/// `ImageRectOffset` and `ImageRectSize` as one source rectangle.
+///
+/// A ZERO `ImageRectSize` MEANS THE WHOLE IMAGE, which is the engine's own rule
+/// and also its default -- so the common case, where nobody set either property,
+/// arrives here as (0, 0) and must not be read as "sample nothing". Getting this
+/// backwards would blank every image in the tree while every other property
+/// looked right.
+fn image_source(dom: &Dom, id: usize) -> Option<Rect> {
+    let size = vector2(dom, id, "ImageRectSize");
+    if size.x <= 0.0 || size.y <= 0.0 {
+        return None;
+    }
+    let offset = vector2(dom, id, "ImageRectOffset");
+    Some(Rect {
+        x: offset.x,
+        y: offset.y,
+        w: size.x,
+        h: size.y,
+    })
+}
+
+/// `Enum.ScaleType`, as much of it as the painter can draw.
+///
+/// The two it cannot are reported by name rather than mapped in silence; see
+/// this module's own header for what that costs and why it is not free.
+fn image_scale(dom: &mut Dom, id: usize) -> Scale {
+    let Some(Variant::Enum(raw)) = dom.property(id, "ScaleType") else {
+        return Scale::Stretch;
+    };
+    let Some(item) = super::enums::item_by_value("ScaleType", raw.to_u32()) else {
+        return Scale::Stretch;
+    };
+    match item.name {
+        "Fit" => Scale::Fit,
+        "Crop" => Scale::Crop,
+        "Stretch" => Scale::Stretch,
+        other => {
+            let name = dom.name_of(id).unwrap_or_default();
+            dom.assets.note_once(
+                format!("ScaleType.{other}"),
+                &format!(
+                    "{name}: Enum.ScaleType.{other} is not drawn yet and is being stretched \
+                     instead — with it, SliceCenter, SliceScale and TileSize are ignored"
+                ),
+            );
+            Scale::Stretch
+        }
+    }
+}
+
+/// The image this element draws, resolved to pixels where they could be found.
+///
+/// `None` MEANS THE ELEMENT NAMES NO IMAGE, and that is a different thing from an
+/// image that did not resolve. An `ImageLabel` with an empty `Image` is a plain
+/// rectangle -- the same as it is in Roblox -- and drawing a "missing" marker on
+/// it would put one on every image element in every tree before its asset was
+/// assigned. An element that DID name something the host could not produce keeps
+/// its `Image` with `bitmap: None`, reaches the painter, and is drawn as missing.
+fn image_of(dom: &mut Dom, id: usize) -> Option<Image> {
+    let uri = image_uri(dom, id)?;
+    let tint = colour(dom, id, "ImageColor3");
+    let alpha = alpha_from(dom, id, "ImageTransparency");
+    let source = image_source(dom, id);
+    let scale = image_scale(dom, id);
+    let bitmap = dom.assets.resolve(&uri);
+    Some(Image {
+        bitmap,
+        uri,
+        tint,
+        alpha,
+        source,
+        scale,
+    })
 }
 
 fn stroke_of(dom: &Dom, id: usize) -> Option<Stroke> {
@@ -283,9 +415,22 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
 }
 
 /// Turn one placed element into the display list node the painter consumes.
-fn node(dom: &Dom, placed: &Placed, sequence: u64) -> Node {
+///
+/// `&mut Dom` FOR ONE REASON, AND IT IS WORTH THE SIGNATURE. Resolving an image
+/// reads a file, decodes it, and remembers the answer; without the remembering,
+/// a mod with an icon would decode that icon on every frame it is drawn. The
+/// cache lives on the DOM because it is per-mod, so building a node writes to it.
+/// `display_list` is still `&Dom` and `input::hit` still reads the same
+/// placement, which is the property that mattered.
+fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
     let id = placed.id;
     let class = dom.class_of(id).unwrap_or_default();
+    let image = if draws_image(&class) {
+        image_of(dom, id)
+    } else {
+        None
+    };
+    let dom = &*dom;
     Node {
         id: sequence,
         name: dom.name_of(id).unwrap_or_default(),
@@ -315,15 +460,22 @@ fn node(dom: &Dom, placed: &Placed, sequence: u64) -> Node {
         text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
         text_colour: colour(dom, id, "TextColor3"),
+        image,
     }
 }
 
 /// Build the display list for the subtree under `root`.
-pub fn frame(dom: &Dom, root: usize, width: f32, height: f32) -> Frame {
+pub fn frame(dom: &mut Dom, root: usize, width: f32, height: f32) -> Frame {
     // THE SEQUENCE NUMBER IS ASSIGNED AFTER THE SORT, and it was assigned before
     // it when this walk built `Node`s inline. Nothing read it, so nothing broke;
     // it is now what it claims to be, a paint index.
-    let nodes = display_list(dom, root, width, height)
+    //
+    // THE PLACEMENT PASS IS COLLECTED BEFORE THE NODES ARE BUILT, which it was
+    // anyway, and now has to be: building a node may resolve an image and so
+    // needs the DOM mutably, while `display_list` reads it. One pass then the
+    // other keeps both borrows to themselves without a second walk.
+    let placed = display_list(dom, root, width, height);
+    let nodes = placed
         .iter()
         .enumerate()
         .map(|(i, placed)| node(dom, placed, i as u64 + 1))
@@ -378,7 +530,7 @@ pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
 pub fn frame_of(dom: &SharedDom, root: usize, width: f32, height: f32) -> Frame {
     let mut guard = dom.lock().expect("dom");
     commit_geometry(&mut guard, root, width, height);
-    frame(&guard, root, width, height)
+    frame(&mut guard, root, width, height)
 }
 
 #[cfg(test)]
@@ -403,6 +555,60 @@ mod tests {
             .expect("root");
         lua.load(src).exec().expect("guest");
         frame_of(&dom, root, width, height)
+    }
+
+    /// The same, with a directory of real assets for `mod://` to resolve against.
+    ///
+    /// A REAL FILE ON A REAL DISK, DECODED BY THE REAL DECODER. Handing the DOM a
+    /// pre-built `Bitmap` would test the display list and skip the half this
+    /// sprint added — the scheme, the path check, and turning bytes into pixels.
+    /// The files are written and removed here so the suite carries no fixture
+    /// that could drift from what the tests believe it contains.
+    fn render_with_assets(src: &str, files: &[(&str, Vec<u8>)], width: f32, height: f32) -> Frame {
+        let dir = std::env::temp_dir().join(format!(
+            "dew-render-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        for (name, bytes) in files {
+            std::fs::write(dir.join(name), bytes).expect("asset");
+        }
+
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = {
+            let mut guard = dom.lock().expect("dom");
+            guard.assets.set_root(dir.clone());
+            guard.insert("Folder".into(), "Root".into())
+        };
+        lua.globals()
+            .set("root", crate::datamodel::handle(&dom, root))
+            .expect("root");
+        lua.load(src).exec().expect("guest");
+        let frame = frame_of(&dom, root, width, height);
+        let _ = std::fs::remove_dir_all(&dir);
+        frame
+    }
+
+    /// A solid PNG of a known size and colour, encoded rather than committed.
+    fn png(width: u32, height: u32, rgba: [u8; 4]) -> Vec<u8> {
+        let pixels: Vec<u8> = rgba
+            .iter()
+            .copied()
+            .cycle()
+            .take((width * height * 4) as usize)
+            .collect();
+        let img = image::RgbaImage::from_raw(width, height, pixels).expect("raw");
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buffer, image::ImageFormat::Png)
+            .expect("encode");
+        buffer.into_inner()
     }
 
     #[test]
@@ -606,6 +812,304 @@ mod tests {
             f.nodes[0].clip.is_none(),
             "the clipper itself is not clipped"
         );
+    }
+
+    // ── Images ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn an_image_reaches_the_display_list_as_decoded_pixels() {
+        // THE SPRINT'S OWN DONE-TEST. `Image` and `ImageContent` were accepted by
+        // the DataModel and there was no route from either to a pixel on any
+        // path; this is that route, from Luau to a bitmap a painter can draw.
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 40, 0, 40)
+            i.ImageContent = Content.fromUri("mod://dot.png")
+            i.Parent = root
+        "#,
+            &[("dot.png", png(4, 2, [10, 20, 30, 255]))],
+            100.0,
+            100.0,
+        );
+        let image = f.nodes[0]
+            .image
+            .as_ref()
+            .expect("the node carries an image");
+        assert_eq!(image.uri, "mod://dot.png");
+        let bitmap = image.bitmap.as_ref().expect("the asset resolved to pixels");
+        assert_eq!((bitmap.width, bitmap.height), (4, 2));
+        assert_eq!(&bitmap.rgba[..4], &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn the_legacy_and_the_modern_property_name_the_same_asset() {
+        // TWO GENERATIONS OF ONE IDEA. `Image` is a `ContentId` string and
+        // `ImageContent` is a `Content` URI; a host takes both, and a mod written
+        // five years ago must not need editing to draw.
+        let asset = &[("dot.png", png(2, 2, [7, 8, 9, 255]))];
+        let legacy = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.Image = "mod://dot.png"
+            i.Parent = root
+        "#,
+            asset,
+            50.0,
+            50.0,
+        );
+        let modern = render_with_assets(
+            r#"
+            local i = Instance.new("ImageButton")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.ImageContent = Content.fromUri("mod://dot.png")
+            i.Parent = root
+        "#,
+            asset,
+            50.0,
+            50.0,
+        );
+
+        for (which, frame) in [("Image", &legacy), ("ImageContent", &modern)] {
+            let image = frame.nodes[0]
+                .image
+                .as_ref()
+                .unwrap_or_else(|| panic!("{which} produced no image node"));
+            assert_eq!(image.uri, "mod://dot.png", "{which}");
+            let bitmap = image.bitmap.as_ref().expect("resolved");
+            assert_eq!(&bitmap.rgba[..4], &[7, 8, 9, 255], "{which}");
+        }
+    }
+
+    #[test]
+    fn image_content_wins_when_a_guest_sets_both() {
+        // The engine's own migration writes through `Image` into `ImageContent`,
+        // so the modern property is the more recent statement of intent.
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.Image = "mod://old.png"
+            i.ImageContent = Content.fromUri("mod://new.png")
+            i.Parent = root
+        "#,
+            &[
+                ("old.png", png(1, 1, [1, 1, 1, 255])),
+                ("new.png", png(1, 1, [2, 2, 2, 255])),
+            ],
+            50.0,
+            50.0,
+        );
+        let image = f.nodes[0].image.as_ref().expect("image");
+        assert_eq!(image.uri, "mod://new.png");
+    }
+
+    #[test]
+    fn image_colour_and_transparency_reach_the_display_list() {
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.ImageContent = Content.fromUri("mod://dot.png")
+            i.ImageColor3 = Color3.fromRGB(240, 186, 96)
+            i.ImageTransparency = 0.25
+            i.Parent = root
+        "#,
+            &[("dot.png", png(1, 1, [255, 255, 255, 255]))],
+            50.0,
+            50.0,
+        );
+        let image = f.nodes[0].image.as_ref().expect("image");
+        assert_eq!(image.tint, Some(Rgb(240, 186, 96)));
+        // Inverted at the source, like every other transparency in this file.
+        assert_eq!(image.alpha, 0.75);
+    }
+
+    #[test]
+    fn a_rect_offset_and_size_become_the_source_rectangle() {
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.ImageContent = Content.fromUri("mod://sheet.png")
+            i.ImageRectOffset = Vector2.new(8, 4)
+            i.ImageRectSize = Vector2.new(16, 16)
+            i.Parent = root
+        "#,
+            &[("sheet.png", png(32, 32, [1, 2, 3, 255]))],
+            50.0,
+            50.0,
+        );
+        let source = f.nodes[0]
+            .image
+            .as_ref()
+            .expect("image")
+            .source
+            .expect("a source rectangle");
+        assert_eq!(
+            (source.x, source.y, source.w, source.h),
+            (8.0, 4.0, 16.0, 16.0)
+        );
+    }
+
+    #[test]
+    fn an_unset_rect_size_means_the_whole_image_rather_than_none_of_it() {
+        // THE DEFAULT IS (0, 0) AND IT MEANS EVERYTHING. Reading it as "sample
+        // nothing" would blank every image in every tree while every other
+        // property still looked right.
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.ImageContent = Content.fromUri("mod://dot.png")
+            i.Parent = root
+        "#,
+            &[("dot.png", png(4, 4, [1, 2, 3, 255]))],
+            50.0,
+            50.0,
+        );
+        assert!(f.nodes[0].image.as_ref().expect("image").source.is_none());
+    }
+
+    #[test]
+    fn the_three_scale_types_that_are_drawn_arrive_as_themselves() {
+        for (member, expected) in [
+            ("Stretch", Scale::Stretch),
+            ("Fit", Scale::Fit),
+            ("Crop", Scale::Crop),
+        ] {
+            let f = render_with_assets(
+                &format!(
+                    r#"
+                    local i = Instance.new("ImageLabel")
+                    i.Size = UDim2.new(0, 10, 0, 10)
+                    i.ImageContent = Content.fromUri("mod://dot.png")
+                    i.ScaleType = Enum.ScaleType.{member}
+                    i.Parent = root
+                "#
+                ),
+                &[("dot.png", png(1, 1, [1, 2, 3, 255]))],
+                50.0,
+                50.0,
+            );
+            assert_eq!(
+                f.nodes[0].image.as_ref().expect("image").scale,
+                expected,
+                "Enum.ScaleType.{member}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_scale_type_this_pass_cannot_draw_falls_back_to_stretch() {
+        // WRITTEN DOWN RATHER THAN SILENT. `Slice` and `Tile` are not drawn yet,
+        // this module's header says so, and asking for one prints a line naming
+        // it. The assertion here is the fallback; the report is what stops the
+        // fallback from being a lie by omission.
+        for member in ["Slice", "Tile"] {
+            let f = render_with_assets(
+                &format!(
+                    r#"
+                    local i = Instance.new("ImageLabel")
+                    i.Size = UDim2.new(0, 10, 0, 10)
+                    i.ImageContent = Content.fromUri("mod://dot.png")
+                    i.ScaleType = Enum.ScaleType.{member}
+                    i.Parent = root
+                "#
+                ),
+                &[("dot.png", png(1, 1, [1, 2, 3, 255]))],
+                50.0,
+                50.0,
+            );
+            assert_eq!(
+                f.nodes[0].image.as_ref().expect("image").scale,
+                Scale::Stretch,
+                "Enum.ScaleType.{member}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unresolvable_content_is_a_rendering_outcome_and_not_a_property_error() {
+        // ADR-003, as a test. The assignment succeeds, the node reaches the
+        // painter, it remembers what it asked for, and it has no pixels. Sprint 5
+        // is what makes `rbxassetid://` resolve; until then this is what a Roblox
+        // application moved to Dew looks like, and it is not a broken one.
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.ImageContent = Content.fromUri("rbxassetid://12345")
+            i.Parent = root
+        "#,
+            &[],
+            50.0,
+            50.0,
+        );
+        let image = f.nodes[0].image.as_ref().expect("the node is still drawn");
+        assert_eq!(image.uri, "rbxassetid://12345");
+        assert!(image.bitmap.is_none(), "nothing should have resolved");
+    }
+
+    #[test]
+    fn an_element_that_names_no_image_carries_none_at_all() {
+        // NOT THE SAME AS AN UNRESOLVED ONE, and the painter draws them
+        // differently: this is a plain rectangle, and a missing asset is a marked
+        // box. An `ImageLabel` before its asset is assigned must not wear the
+        // marker.
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.BackgroundColor3 = Color3.fromRGB(1, 2, 3)
+            i.Parent = root
+        "#,
+            &[],
+            50.0,
+            50.0,
+        );
+        assert!(f.nodes[0].image.is_none());
+        assert_eq!(f.nodes[0].fill, Some(Rgb(1, 2, 3)));
+    }
+
+    #[test]
+    fn only_the_classes_that_draw_images_get_one() {
+        // A `Frame` has no `Image` property at all, so this also exercises the
+        // reflection database refusing it -- which is why the assignment is
+        // wrapped and expected to fail.
+        let f = render_with_assets(
+            r#"
+            local f = Instance.new("Frame")
+            f.Size = UDim2.new(0, 10, 0, 10)
+            f.Parent = root
+            assert(pcall(function()
+                f.Image = "mod://dot.png"
+            end) == false, "a Frame has no Image property")
+        "#,
+            &[("dot.png", png(1, 1, [1, 2, 3, 255]))],
+            50.0,
+            50.0,
+        );
+        assert!(f.nodes[0].image.is_none());
+    }
+
+    #[test]
+    fn a_mod_cannot_reach_outside_its_own_directory_with_an_image() {
+        // The same boundary `Capabilities::require_roots` draws for `require`.
+        // Images must not become the way around it.
+        let f = render_with_assets(
+            r#"
+            local i = Instance.new("ImageLabel")
+            i.Size = UDim2.new(0, 10, 0, 10)
+            i.Image = "mod://../escape.png"
+            i.Parent = root
+        "#,
+            &[("escape.png", png(1, 1, [1, 2, 3, 255]))],
+            50.0,
+            50.0,
+        );
+        assert!(f.nodes[0].image.as_ref().expect("image").bitmap.is_none());
     }
 
     #[test]

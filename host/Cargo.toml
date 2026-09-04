@@ -78,6 +78,15 @@ rbx_types = "3"
 rbx_reflection = "7"
 rbx_reflection_database = "3"
 
+# DECODING AN ASSET IS THE HOST'S JOB, and this is the one line that says so.
+#
+# `crates/raster` has carried `image` since it was written and uses it for ONE
+# thing -- writing a PNG out. It deliberately gains no decoder: a rasteriser that
+# decoded assets would be deciding what a `Content` resolves to, which is the
+# scheme, the permission and the cache, and all three are the host's. So the host
+# turns bytes into pixels and hands the rasteriser pixels.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

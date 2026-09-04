@@ -364,13 +364,19 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .unwrap_or_else(|| PathBuf::from("."));
 
     let caps = aether_runtime::Capabilities {
-        require_roots: vec![dir],
+        require_roots: vec![dir.clone()],
         print: true,
         aliases: HashMap::new(),
     };
     let vm = aether_runtime::Vm::new(caps).map_err(|e| e.to_string())?;
 
     let dom = datamodel::SharedDom::default();
+    // `mod://` RESOLVES BESIDE THE SCRIPT, which is the same directory the
+    // requirer was just given. A standalone script has no mod directory and no
+    // manifest, but it does have a file, and "beside the thing that named the
+    // asset" is the rule in both cases rather than two rules that agree by
+    // accident.
+    dom.lock().expect("dom").assets.set_root(dir.clone());
     datamodel::install(vm.lua(), &dom).map_err(|e| e.to_string())?;
     datamodel::install_vocabulary(vm.lua()).map_err(|e| e.to_string())?;
 

@@ -12,9 +12,10 @@
 //! A windowed painter reuses the same node traversal from `painter.rs` and swaps
 //! only how the canvas is obtained and presented.
 
-use crate::frame::{Align, Delta, Gradient, Node, Rect, Rgb};
+use crate::frame::{Align, Delta, Gradient, Image, Node, Rect, Rgb};
 use crate::painter::Painter;
-use aether_raster::{Backend, Canvas, Font};
+use aether_raster::{Backend, Bitmap, Canvas, Font};
+use std::collections::HashMap;
 
 pub struct RasterPainter {
     canvas: Canvas,
@@ -22,6 +23,25 @@ pub struct RasterPainter {
     /// list carries no font name yet, so pretending to select one would be a
     /// second place for text to diverge between hosts.
     font: Option<Font>,
+    /// Images already uploaded to the rasteriser, by `frame::Bitmap::id`.
+    ///
+    /// THE DISPLAY LIST CARRIES PIXELS AND THE RASTERISER WANTS THEM
+    /// PREMULTIPLIED, so something has to convert, and the only question is how
+    /// often. Once per draw would premultiply a whole asset per node per frame —
+    /// a 256x256 icon is 65,536 pixels of arithmetic to redraw a picture that did
+    /// not change — and this is the memo that makes it once per asset instead.
+    ///
+    /// KEYED ON `Bitmap::id`, NOT ON THE `Arc`'S ADDRESS. An address is reused
+    /// the moment an allocation is freed, so a dropped asset and a newly resolved
+    /// one can share one, and the symptom would be a stale picture appearing
+    /// under a name that had just changed. The id is a counter and never repeats.
+    ///
+    /// It grows with the number of DISTINCT assets a mod draws, which is bounded
+    /// by what the mod ships, and entries are freed with the painter. A host that
+    /// streams a new bitmap per frame would grow it without bound; that host does
+    /// not exist yet, and the cache that would answer for it is Sprint 5's, which
+    /// is where an asset's lifetime is decided rather than guessed at here.
+    uploaded: HashMap<u64, Bitmap>,
 }
 
 impl RasterPainter {
@@ -29,6 +49,7 @@ impl RasterPainter {
         Some(RasterPainter {
             canvas: Canvas::new(width, height, backend)?,
             font: None,
+            uploaded: HashMap::new(),
         })
     }
 
@@ -228,6 +249,47 @@ impl Painter for RasterPainter {
             radius,
             gradient.rotation,
             &stops,
+        );
+    }
+
+    /// Upload on first sight, then map the source rectangle onto the destination.
+    ///
+    /// THE TRAIT'S DEFAULT WOULD HAVE DRAWN A GREY BOX HERE, which is what a
+    /// painter that cannot do images owes a node — see
+    /// [`Painter::draw_image`](crate::painter::Painter::draw_image). This one
+    /// can, so it does, and the fallback stays available for the painter that
+    /// cannot rather than being the thing everybody gets.
+    ///
+    /// AN UPLOAD THAT FAILS DRAWS THE MISSING BOX rather than nothing. The pixels
+    /// existed and the rasteriser would not take them, which is a different
+    /// failure from an asset that never resolved and is exactly as invisible if
+    /// it draws nothing at all.
+    fn draw_image(&mut self, image: &Image, src: Rect, dst: Rect) {
+        let Some(bitmap) = image.bitmap.as_ref() else {
+            return;
+        };
+        let uploaded = match self.uploaded.entry(bitmap.id) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                match Bitmap::upload(&bitmap.rgba, bitmap.width, bitmap.height) {
+                    Some(uploaded) => slot.insert(uploaded),
+                    None => {
+                        self.draw_missing_image(image, dst, 0.0);
+                        return;
+                    }
+                }
+            }
+        };
+
+        // WHITE IS THE UNTINTED COLOUR, because the tint multiplies through the
+        // source and white is that multiply's identity. The alpha rides along in
+        // the same tuple as every other draw call in this file.
+        let tint = image.tint.unwrap_or(Rgb(255, 255, 255));
+        self.canvas.draw_image(
+            uploaded,
+            (src.x, src.y, src.w, src.h),
+            (dst.x, dst.y, dst.w, dst.h),
+            rgba(tint, image.alpha),
         );
     }
 

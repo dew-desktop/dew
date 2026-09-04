@@ -20,8 +20,9 @@
 
 use crate::{
     ar_begin, ar_begin_alpha, ar_begin_rect_alpha, ar_bgra, ar_clip_pop, ar_clip_push,
-    ar_fill_gradient, ar_fill_rect, ar_fill_text, ar_font_load, ar_png, ar_stroke_rect,
-    ar_surface_free, ar_surface_new_backend, ar_text_ascent, ar_text_width, Surface,
+    ar_draw_image, ar_fill_gradient, ar_fill_rect, ar_fill_text, ar_font_load, ar_image_free,
+    ar_image_size, ar_image_upload, ar_png, ar_stroke_rect, ar_surface_free,
+    ar_surface_new_backend, ar_text_ascent, ar_text_width, Surface,
 };
 
 /// Which rasteriser paints.
@@ -67,6 +68,54 @@ impl Font {
     /// Distance from the top of the line box to the baseline.
     pub fn ascent(self, size: f32) -> f32 {
         ar_text_ascent(self.0, size)
+    }
+}
+
+/// An uploaded image, by the id the store handed back.
+///
+/// OWNED, UNLIKE [`Font`], and the difference is the lifetime of the thing behind
+/// it. A face is loaded once and used for the life of the process; an image
+/// belongs to whatever asset a guest happened to reference, and a desktop that
+/// ran for a week having never released one would hold every icon every mod ever
+/// showed. So this frees on drop, and the id cannot be copied out to outlive it.
+///
+/// NOT A ZERO DEFAULT, for the reason [`Font`] gives: `ar_image_upload` answers 0
+/// for pixels it would not take, and a type that can only be built from a
+/// successful upload keeps "draw image 0" unavailable.
+#[derive(Debug)]
+pub struct Bitmap {
+    id: u32,
+    width: u32,
+    height: u32,
+}
+
+impl Bitmap {
+    /// Upload straight (non-premultiplied) RGBA, row-major, `width * height * 4`
+    /// bytes.
+    pub fn upload(rgba: &[u8], width: u32, height: u32) -> Option<Bitmap> {
+        let id = ar_image_upload(rgba.as_ptr(), rgba.len() as u32, width, height);
+        (id != 0).then_some(Bitmap { id, width, height })
+    }
+
+    pub fn width(&self) -> u32 {
+        self.width
+    }
+
+    pub fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// What the rasteriser believes it is holding, which is the check that tells
+    /// a wrong decode from a wrong rectangle.
+    pub fn stored_size(&self) -> Option<(u32, u32)> {
+        let mut out = [0u32; 2];
+        (ar_image_size(self.id, out.as_mut_ptr()) != 0).then_some((out[0], out[1]))
+    }
+}
+
+impl Drop for Bitmap {
+    fn drop(&mut self) {
+        ar_image_free(self.id);
     }
 }
 
@@ -212,6 +261,29 @@ impl Canvas {
             rgba.3,
             text.as_ptr(),
             text.len() as u32,
+        ) != 0
+    }
+
+    /// Draw the source rectangle of an uploaded image into a destination
+    /// rectangle. `rgba` is `ImageColor3` with `ImageTransparency` already
+    /// inverted into the alpha; pass opaque white for an untinted draw.
+    ///
+    /// TWO RECTANGLES AND NO SCALE MODE, deliberately: `ScaleType`,
+    /// `ImageRectOffset` and `ImageRectSize` are resolved into these two by
+    /// `aether_runtime::frame::Image::placement`, so no backend re-decides them.
+    ///
+    /// Returns false when nothing was drawn — an unknown id, a degenerate
+    /// rectangle, or an armed poison.
+    pub fn draw_image(
+        &mut self,
+        image: &Bitmap,
+        src: (f32, f32, f32, f32),
+        dst: (f32, f32, f32, f32),
+        rgba: (u8, u8, u8, u8),
+    ) -> bool {
+        ar_draw_image(
+            self.ptr, image.id, src.0, src.1, src.2, src.3, dst.0, dst.1, dst.2, dst.3, rgba.0,
+            rgba.1, rgba.2, rgba.3,
         ) != 0
     }
 

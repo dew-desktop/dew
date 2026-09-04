@@ -134,6 +134,12 @@ pub fn load(
     //      guest on Roblox and on Dew alike, and an application that had to be
     //      handed it would not be the application that runs on both.
     let dom = datamodel::SharedDom::default();
+    //      AND `mod://` POINTS AT THE MOD'S OWN DIRECTORY, which is the same
+    //      boundary `require_roots` draws one statement above. A mod reaches its
+    //      own files and no others, whether it asks for them with `require` or
+    //      with an `Image` property; images arriving later must not become the
+    //      way around a rule the requirer already enforces.
+    dom.lock().expect("dom").assets.set_root(dir.to_path_buf());
     datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;

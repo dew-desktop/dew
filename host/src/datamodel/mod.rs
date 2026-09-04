@@ -97,6 +97,14 @@ pub struct Dom {
     /// marking it dirty would make the render pass re-dirty the tree it just
     /// rendered, which is a repaint loop wearing the costume of a fix.
     dirty: bool,
+    /// What this guest's `Image` and `ImageContent` properties resolve to.
+    ///
+    /// PER DOM, WHICH IS PER MOD, and that is the same isolation the require
+    /// roots enforce for files: `mod://` means "beside THIS mod", and a store
+    /// shared between two guests would make one mod's assets reachable by name
+    /// from another. It also makes the decoded cache die with the mod, which is
+    /// what a `Destroy` of the last node holding an image should cost.
+    pub assets: crate::assets::Assets,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -109,6 +117,7 @@ impl Default for Dom {
             slots: Vec::new(),
             handlers: Vec::new(),
             dirty: true,
+            assets: crate::assets::Assets::default(),
         }
     }
 }

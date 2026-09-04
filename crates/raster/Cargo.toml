@@ -16,6 +16,17 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 skrifa = "0.44"
 tiny-skia = "0.11"
 vello_cpu = "0.2.0"
+
+# `Tint`, AND NOTHING ELSE. `ImageColor3` multiplies a colour through an image's
+# own pixels, and vello_cpu's `RenderContext::set_tint` does exactly that for an
+# image paint -- but `Tint` and `TintMode` are the two names in that call's
+# signature which vello_cpu does not re-export. This is vello_cpu's own
+# dependency at its own version, resolved to one copy by the workspace lock, so
+# it is the same type the renderer is already using rather than a second one.
+#
+# THE ALTERNATIVE WAS TINTING THE PIXELS OURSELVES, per node per frame, which is
+# the arithmetic `bitmap.rs` exists to do once.
+vello_common = "0.2.0"
 vello_hybrid = { version = "0.2.0", optional = true }
 wgpu = { version = "29", optional = true }
 

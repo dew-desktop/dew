@@ -170,6 +170,62 @@ they must not be two paths through the renderer. `dew.hud.card { … }` is a Lua
 helper that BUILDS an Aether tree, so the shorthand is a library function and the
 engine has one path to keep correct.
 
+## A mod's images live beside it, under `mod://`
+
+An `ImageLabel` or an `ImageButton` names an asset the way a Roblox application
+does, with either generation of the property:
+
+```luau
+local icon = Instance.new("ImageLabel")
+icon.Size = UDim2.new(0, 44, 0, 44)
+icon.BackgroundTransparency = 1
+icon.ImageContent = Content.fromUri("mod://droplet.png")   -- modern: a Content
+-- icon.Image = "mod://droplet.png"                        -- legacy: a ContentId
+icon.ScaleType = Enum.ScaleType.Fit
+icon.Parent = root
+```
+
+`mod://` resolves against **the directory the mod was loaded from** — the same
+directory `require` is allowed to reach, and for the same reason. A path that
+climbs out of it is refused rather than followed, so an image cannot become the
+way around the boundary the requirer already enforces. A `--script` run resolves
+`mod://` beside the script.
+
+**Both properties name the same asset and Dew takes either.** `Image` is the
+legacy `ContentId` string and `ImageContent` is the modern `Content` URI; a mod
+written five years ago needs no editing to draw here. When a guest sets both,
+`ImageContent` wins, because that is the one the engine's own migration keeps.
+
+### What is honoured
+
+| | |
+| :--- | :--- |
+| `Image`, `ImageContent` | the asset, either generation |
+| `ImageColor3` | multiplied through the asset's pixels, not replacing them |
+| `ImageTransparency` | inverted into alpha, like every other transparency |
+| `ImageRectOffset`, `ImageRectSize` | a sub-rectangle of the source, for sprite sheets |
+| `Enum.ScaleType` | `Stretch`, `Fit` and `Crop` |
+
+**`Enum.ScaleType.Slice` and `.Tile` are NOT drawn yet**, and with them
+`SliceCenter`, `SliceScale` and `TileSize`. They are stretched instead, and the
+host says so by name on the console the first time an element asks for one. The
+properties still assign and still read back; what is missing is the drawing, and
+you are told which of the two of you decided that.
+
+### An asset that will not resolve is a missing image, not an error
+
+`mod://` is the only scheme Dew resolves today. `rbxassetid://` needs a scheme
+registry, a permission and a fetch, and those arrive together — see ADR-003.
+Until then, assigning one succeeds, the property keeps its value, the host names
+the URI on the console once, and the element is drawn as an empty marked box
+rather than as nothing at all.
+
+That last part is deliberate. A blank space is indistinguishable from an element
+that was never created, was positioned off-screen, or was made invisible, and an
+author would check all three before suspecting the asset. A Roblox application
+moved to Dew with an asset it cannot reach is a correct application missing an
+image, not a broken one.
+
 ## Widgets and windows are one API, not two
 
 A mod declares the surface it wants beside its size:

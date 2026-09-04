@@ -163,6 +163,35 @@ return {
 		dotCorner.CornerRadius = UDim.new(1, 0)
 		dotCorner.Parent = dot
 
+		--- AN IMAGE, AND THE WHOLE POINT OF MILESTONE 2's SPRINT 4.
+		---
+		--- `ImageContent` IS THE MODERN PROPERTY and `Image` is the legacy
+		--- `ContentId` beside it; both name the same asset and this host takes
+		--- either. `Image = "mod://droplet.png"` renders identically — the render
+		--- pass prefers `ImageContent` only when both are set, because that is the
+		--- one the engine's own migration keeps.
+		---
+		--- `mod://` RESOLVES BESIDE THIS FILE, which is `mods/nameplate/`. It is
+		--- the only scheme this host resolves today: `rbxassetid://` needs the
+		--- scheme registry, the permission and the fetch that are Sprint 5, and
+		--- until then it reports itself by name and draws as a missing box rather
+		--- than as nothing. That is ADR-003's rule — an unresolvable `Content` is
+		--- a rendering outcome, not a property error.
+		---
+		--- `ScaleType.Fit` KEEPS THE ASPECT RATIO. The asset is square and so is
+		--- the box, so it changes nothing here and says which rule is in force;
+		--- `Slice` and `Tile` are not drawn yet and say so out loud when asked for.
+		local droplet = Instance.new("ImageLabel")
+		droplet.Name = "Droplet"
+		droplet.Size = UDim2.new(0, 44, 0, 44)
+		droplet.Position = UDim2.new(1, -18, 0, 46)
+		droplet.AnchorPoint = Vector2.new(1, 0)
+		droplet.BackgroundTransparency = 1
+		droplet.ImageContent = Content.fromUri("mod://droplet.png")
+		droplet.ScaleType = Enum.ScaleType.Fit
+		droplet.ZIndex = 4
+		droplet.Parent = card
+
 		--- A BUTTON, AND THE WHOLE POINT OF SPRINT 9.
 		---
 		--- A `TextButton` RATHER THAN A `Frame`, and the class is the decision:
@@ -204,6 +233,15 @@ return {
 			dot.BackgroundColor3 = if clicks % 2 == 1
 				then Color3.fromRGB(240, 186, 96)
 				else Color3.fromRGB(96, 208, 148)
+			--- AND THE IMAGE IS TINTED THE SAME WAY, which is `ImageColor3`
+			--- multiplying through the asset's own pixels rather than replacing
+			--- them: the droplet's white highlight takes the tint and its
+			--- transparent corners stay transparent. Sitting in the click handler
+			--- rather than in the mount is deliberate — a property that is only
+			--- ever set once cannot show that it reaches the painter on a REPAINT.
+			droplet.ImageColor3 = if clicks % 2 == 1
+				then Color3.fromRGB(240, 186, 96)
+				else Color3.fromRGB(255, 255, 255)
 		end)
 
 		--- HOVER, ON A FRAME, WHICH NEEDS ONE LINE OF CONSENT.

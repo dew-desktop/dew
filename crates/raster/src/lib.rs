@@ -32,12 +32,14 @@
 //! a wrong offset becomes a crash rather than an error, and the native host has
 //! already avoided it once on the Win32 side.
 
+pub mod bitmap;
 #[cfg(feature = "gpu")]
 pub mod hybrid_probe;
 pub mod text;
 #[cfg(feature = "gpu")]
 pub mod windowed;
 
+use bitmap::BitmapStore;
 use std::collections::HashMap;
 use text::FontStore;
 use tiny_skia::{
@@ -48,10 +50,18 @@ use vello_cpu::color::{AlphaColor, DynamicColor, Srgb};
 use vello_cpu::kurbo::{
     BezPath, Point as VPoint, Rect as VRect, RoundedRect, Shape, Stroke as VStroke,
 };
-use vello_cpu::peniko::{ColorStop, Gradient as VGradient};
-use vello_cpu::{
-    CompositeMode, Pixmap as VPixmap, RasterizerSettings, RenderContext, RenderMode, Resources,
+use vello_cpu::peniko::{
+    ColorStop, Extend as VExtend, Gradient as VGradient, ImageQuality, ImageSampler,
 };
+use vello_cpu::{
+    CompositeMode, Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap,
+    RasterizerSettings, RenderContext, RenderMode, Resources,
+};
+// `Tint` and `TintMode` ONLY. See `Cargo.toml`: vello_cpu takes them in
+// `set_tint`'s signature and does not re-export them, so they come from its own
+// dependency at its own version rather than from a second copy.
+use vello_common::paint::Color as VColor;
+use vello_common::paint::{Tint, TintMode};
 
 /// The loaded fonts, shared by every surface.
 ///
@@ -65,6 +75,14 @@ fn with_fonts<R>(f: impl FnOnce(&mut FontStore) -> R) -> R {
     f(guard.get_or_insert_with(FontStore::default))
 }
 
+/// The uploaded images, shared by every surface. See `bitmap.rs`.
+static BITMAPS: std::sync::Mutex<Option<BitmapStore>> = std::sync::Mutex::new(None);
+
+fn with_bitmaps<R>(f: impl FnOnce(&mut BitmapStore) -> R) -> R {
+    let mut guard = BITMAPS.lock().expect("bitmap store poisoned");
+    f(guard.get_or_insert_with(BitmapStore::default))
+}
+
 /// Load a font file. Returns an id, or 0 on failure.
 ///
 /// Zero rather than a panic: a missing font is a deployment problem the host can
@@ -72,7 +90,7 @@ fn with_fonts<R>(f: impl FnOnce(&mut FontStore) -> R) -> R {
 /// A safe Rust surface over the C ABI below. See `canvas.rs` for why it wraps
 /// these functions rather than replacing them.
 pub mod canvas;
-pub use canvas::{Backend, Canvas, Font};
+pub use canvas::{Backend, Bitmap, Canvas, Font};
 
 #[no_mangle]
 pub extern "C" fn ar_font_load(path: *const u8, len: u32, index: u32) -> u32 {
@@ -986,6 +1004,225 @@ pub extern "C" fn ar_fill_gradient(
         Transform::identity(),
         mask,
     );
+}
+
+/// Upload straight (non-premultiplied) RGBA pixels. Returns an id, or 0.
+///
+/// ZERO ON FAILURE, like `ar_font_load`, and for the same reason: an asset that
+/// could not be uploaded is a content problem the host reports and draws around,
+/// not a reason to take a desktop down. The caller must not treat 0 as an id.
+///
+/// NO DECODER HERE. A PNG, a JPEG or a sprite sheet becomes pixels wherever
+/// `Content` is resolved, which is the host's business and is where the scheme,
+/// the permission and the cache live. This takes pixels.
+#[no_mangle]
+pub extern "C" fn ar_image_upload(rgba: *const u8, len: u32, width: u32, height: u32) -> u32 {
+    if rgba.is_null() {
+        return 0;
+    }
+    let pixels = unsafe { std::slice::from_raw_parts(rgba, len as usize) };
+    with_bitmaps(|b| b.upload(pixels, width, height))
+}
+
+/// Release an uploaded image. Unknown ids are ignored.
+#[no_mangle]
+pub extern "C" fn ar_image_free(id: u32) {
+    with_bitmaps(|b| b.free(id));
+}
+
+/// The uploaded size of an image. Writes two ints and returns 1, or returns 0.
+///
+/// A CALLER SHOULD NOT NEED THIS TO LAY ANYTHING OUT — `ar_draw_image` takes a
+/// source AND a destination rectangle precisely so that fitting, cropping and
+/// sub-rect sampling are decided before the ABI is reached. It exists so a host
+/// can confirm what it uploaded is what it thinks it uploaded, which is the check
+/// that distinguishes "the asset decoded wrong" from "the rectangle is wrong".
+#[no_mangle]
+pub extern "C" fn ar_image_size(id: u32, out: *mut u32) -> u32 {
+    if out.is_null() {
+        return 0;
+    }
+    match with_bitmaps(|b| b.get(id)) {
+        Some(image) => {
+            unsafe {
+                *out = image.width as u32;
+                *out.add(1) = image.height as u32;
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// Draw the source rectangle of an uploaded image into a destination rectangle.
+///
+/// TWO RECTANGLES, AND NO SCALE MODE. `Enum.ScaleType`, `ImageRectOffset` and
+/// `ImageRectSize` are resolved by `aether_runtime::frame::Image::placement`
+/// before anything reaches here, for the reason that file gives: three backends
+/// deciding independently what `Fit` means is three chances to disagree, and the
+/// disagreement shows up on one backend only. This maps one rectangle onto the
+/// other and does nothing else.
+///
+/// `r`, `g`, `b` are `ImageColor3`, multiplied through the source pixels, and
+/// `alpha` is `ImageTransparency` already inverted. An untinted draw passes white.
+///
+/// Returns 1 when something was drawn.
+#[no_mangle]
+pub extern "C" fn ar_draw_image(
+    ptr: *mut Surface,
+    id: u32,
+    sx: f32,
+    sy: f32,
+    sw: f32,
+    sh: f32,
+    dx: f32,
+    dy: f32,
+    dw: f32,
+    dh: f32,
+    r: u8,
+    g: u8,
+    b: u8,
+    alpha: u8,
+) -> u32 {
+    let s = match unsafe { ptr.as_mut() } {
+        Some(s) => s,
+        None => return 0,
+    };
+    // The same two poisons every other draw call honours. A gate whose assertions
+    // are all negative is satisfied by a backend that draws nothing, and an image
+    // is the easiest thing in this list to omit unnoticed.
+    if poisoned("blank") || poisoned("blackout") {
+        return 0;
+    }
+    if sw <= 0.0 || sh <= 0.0 || dw <= 0.0 || dh <= 0.0 {
+        return 0;
+    }
+    let image = match with_bitmaps(|store| store.get(id)) {
+        Some(image) => image,
+        None => return 0,
+    };
+
+    // ONE AFFINE, SHARED BY BOTH BACKENDS. It maps the SOURCE rectangle onto the
+    // destination, so the pixels outside the source land outside the destination
+    // and are cut away by the fill below rather than by a clip either backend
+    // would have to push and pop.
+    let (kx, ky) = (dw / sw, dh / sh);
+    let (tx, ty) = (dx - sx * kx, dy - sy * ky);
+
+    if s.which == Which::VelloCpu {
+        let paint = VImage {
+            image: VImageSource::Pixmap(image.vello.clone()),
+            sampler: ImageSampler {
+                // PAD RATHER THAN REPEAT, and it is load bearing at the seam: a
+                // bilinear sample at the destination's edge reaches half a pixel
+                // past the source, and `Repeat` answers with the opposite edge —
+                // a one-pixel stripe of the far side of the asset around every
+                // drawn image, which reads as a bad decode.
+                x_extend: VExtend::Pad,
+                y_extend: VExtend::Pad,
+                quality: ImageQuality::Medium,
+                // NOT `sampler.alpha`, AND IT IS NOT A STYLE CHOICE.
+                // `ImageSampler` carries an alpha multiplier and vello_cpu 0.2
+                // does not implement it: the encoder reaches
+                // `todo!("Applying opacity to image commands")` and takes the
+                // process down. `ImageTransparency` rides in the tint below
+                // instead, which is the same arithmetic -- see there.
+                alpha: 1.0,
+            },
+        };
+        let Some(path) = Surface::vello_path(dx, dy, dw, dh, 0.0) else {
+            return 0;
+        };
+        // ONE TINT CARRIES BOTH `ImageColor3` AND `ImageTransparency`.
+        //
+        // `TintMode::Multiply` multiplies the PREMULTIPLIED source by the
+        // PREMULTIPLIED tint, componentwise, alpha included. Writing the image's
+        // alpha into the tint colour therefore lands exactly where a separate
+        // opacity pass would: the result's alpha is `source.a * alpha`, and its
+        // colour is `source.rgb * tint.rgb` premultiplied by that product. An
+        // untinted, opaque draw passes white at 255, which is that multiply's
+        // identity, and is skipped entirely rather than applied as a no-op.
+        let tint = ((r, g, b, alpha) != (255, 255, 255, 255)).then(|| Tint {
+            color: VColor::from_rgba8(r, g, b, alpha),
+            mode: TintMode::Multiply,
+        });
+        let Some(v) = s.vello.as_mut() else {
+            return 0;
+        };
+        v.ctx.set_paint(paint);
+        v.ctx.set_paint_transform(vello_cpu::kurbo::Affine::new([
+            kx as f64, 0.0, 0.0, ky as f64, tx as f64, ty as f64,
+        ]));
+        v.ctx.set_tint(tint);
+        v.ctx.fill_path(&path);
+        // BACK TO A SOLID PAINT, an identity paint transform and no tint. The
+        // gradient path already learned this one the expensive way: a recorded
+        // scene keeps the state it was left in, so the next flat fill would be
+        // painted with this image, scaled by this transform, in this colour.
+        v.ctx.reset_paint_transform();
+        v.ctx.set_tint(None);
+        v.ctx
+            .set_paint(AlphaColor::<Srgb>::from_rgba8(0, 0, 0, 255));
+        return 1;
+    }
+
+    // tiny-skia samples through a Pattern shader, which is the same mapping
+    // written with the other library's names. THE TINT IS NOT FREE HERE: there is
+    // no equivalent of vello's tint pass, so a tinted draw multiplies into a
+    // scratch copy. Untinted -- which is every image that does not set
+    // `ImageColor3` -- borrows the stored pixmap and copies nothing.
+    let tinted;
+    let source = if (r, g, b) == (255, 255, 255) {
+        image.skia.as_ref()
+    } else {
+        let mut copy = image.skia.clone();
+        for px in copy.pixels_mut() {
+            let mul = |c: u8, k: u8| (((c as u32 * k as u32) + 127) / 255) as u8;
+            *px = tiny_skia::PremultipliedColorU8::from_rgba(
+                mul(px.red(), r),
+                mul(px.green(), g),
+                mul(px.blue(), b),
+                px.alpha(),
+            )
+            .unwrap_or(*px);
+        }
+        tinted = copy;
+        tinted.as_ref()
+    };
+
+    let shader = tiny_skia::Pattern::new(
+        source,
+        tiny_skia::SpreadMode::Pad,
+        tiny_skia::FilterQuality::Bilinear,
+        alpha as f32 / 255.0,
+        Transform::from_row(kx, 0.0, 0.0, ky, tx, ty),
+    );
+    let Some(rect) = Rect::from_xywh(dx, dy, dw, dh) else {
+        return 0;
+    };
+    let mut paint = Paint {
+        shader,
+        ..Default::default()
+    };
+    paint.anti_alias = true;
+
+    let cuts = s.clip_cuts(dx, dy, dw, dh, 0.0);
+    if cuts {
+        s.ensure_mask();
+    }
+    let Surface {
+        pixmap,
+        masks,
+        clips,
+        ..
+    } = s;
+    let mask = if cuts {
+        clips.last().and_then(|k| masks.get(k))
+    } else {
+        None
+    };
+    pixmap.fill_rect(rect, &paint, Transform::identity(), mask);
+    1
 }
 
 /// Push a clip rectangle. Nested clips INTERSECT, which is what a display list's

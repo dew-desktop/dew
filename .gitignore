@@ -24,6 +24,13 @@ Thumbs.db
 # rendered widget snapshots
 *.png
 
+# A MOD'S OWN ASSETS ARE NOT SNAPSHOTS, and the rule above cannot tell them
+# apart. `--snapshot` output is a build artefact that lands anywhere; a file a mod
+# SHIPS is source, and `mod://` resolves against the mod's directory, so it has to
+# be in the clone or the mod draws a missing-image box for everyone but its author.
+# Milestone 2 sprint 4 added the first one.
+!mods/*/*.png
+
 
 # pesde install output
 roblox_packages/
