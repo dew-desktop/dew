@@ -60,6 +60,14 @@ jobs:
       # built.
       - run: lune run scripts/verify_boundaries.luau
 
+      # PLAIN ASCII, CHECKED. CONTRIBUTING.md and the writing guide both require
+      # it and nothing enforced it, so it lost: 2758 characters across 60 files
+      # when this gate first ran, including a byte-order mark in `.gitignore` and
+      # in `VERSION` -- the same thing that stopped `commitlint.luau` parsing for
+      # months. The census in the script is the migration; new violations fail
+      # here on the commit that adds them.
+      - run: lune run scripts/verify_ascii.luau
+
       # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
       # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
       # them. Pinned here to the version this repository is developed against.

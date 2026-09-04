@@ -1,4 +1,4 @@
-﻿# Rust / Cargo
+# Rust / Cargo
 target/
 **/target/
 # Cargo.lock IS TRACKED. Dew is an application, not a library: the lockfile is
