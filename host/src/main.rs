@@ -1,9 +1,12 @@
 //! 💧 Dew — a desktop applet platform.
 //!
 //! WHAT IS NOT IN THIS CRATE, and deliberately: text measurement,
-//! rasterisation, the Luau VM, and the frame loop. Those come from Aether, which
-//! is also what the Roblox host uses — so a widget's visual half behaves the same
-//! in both places, and a rendering fix reaches both at once.
+//! rasterisation, the Luau VM, and the frame loop. Those are in `crates/raster`,
+//! `crates/runtime` and `crates/window` — Dew's, one workspace along, and a
+//! rendering change belongs there rather than upstream. They lived in Aether's
+//! repository until ADR-004 measured what they were: no Rust there reached a
+//! Luau consumer, and the only two dependents were this host and a CLI that
+//! retires. The crates still carry Aether's names; the rename is its own commit.
 //!
 //! LAYOUT, HIT TESTING AND POINTER ARBITRATION USED TO BE ON THAT LIST, and for
 //! the Aether arm they still are: `Driver::pointer` hands an event to the
@@ -699,55 +702,39 @@ fn flag(name: &str) -> Option<String> {
     None
 }
 
-/// The installed vide's `src`, whatever version pesde resolved.
-///
-/// GLOBBED rather than spelled out: pesde writes the version into the path, so
-/// naming one here would go stale on the next resolve and report itself as "no
-/// vide" rather than as "a different vide".
-fn find_vide() -> Option<PathBuf> {
-    //--- WALKS UP, like `mods` does. `cargo run` from `host/` finds the mods
-    //--- directory and then failed here, because this looked only in the current
-    //--- one -- so the host reported "no mods loaded" from a directory it had
-    //--- just found, which points at everything except the actual cause.
-    let base = find_dir("roblox_packages")?.join(".pesde");
-    for entry in std::fs::read_dir(base).ok()?.flatten() {
-        if entry.file_name().to_string_lossy().contains("vide") {
-            let src = entry.path().join("vide").join("src");
-            if src.is_dir() {
-                return Some(src);
-            }
-        }
-    }
-    None
-}
-
 /// What every mod VM is given: Aether's source, and the aliases that name it.
 ///
 /// NOTHING IS WRITTEN TO DISK. An earlier version generated a `.luaurc`, and it
-/// could not work: aliases resolve by walking up from the requiring FILE, and
-/// Aether's source lives in Cargo's package cache — a config file in this
-/// repository is never on that path. `Capabilities.aliases` reaches the resolver
-/// directly instead, so it applies wherever the requiring module happens to be.
+/// could not work: aliases resolve by walking up from the requiring FILE, and a
+/// package's source lives under `roblox_packages/.pesde/` — a config file at the
+/// root of this repository is never on that path. `Capabilities.aliases` reaches
+/// the resolver directly instead, so it applies wherever the requiring module
+/// happens to be.
 ///
-/// BOTH PATHS COME FROM THE PIN. `luau_source_root()` reports the checkout Cargo
-/// made for the revision in host/Cargo.toml, so the Luau a mod requires is the
-/// same commit as the Rust driving it.
+/// BOTH PATHS COME FROM THE SAME INSTALL, AND AETHER IS NOW ONE OF THEM. It used
+/// to come from Cargo: `luau_source_root()` reported the checkout made for the
+/// revision in `host/Cargo.toml`, so the Luau a mod required was the same commit
+/// as the Rust driving it. ADR-004 moved that Rust here, so there is no Aether
+/// checkout to read it out of — and Aether was never Dew's Rust dependency in the
+/// first place, it is a GUEST FRAMEWORK, exactly like vide. It is pinned by
+/// commit in `pesde.toml` and installed beside vide, and both are found the same
+/// way.
 fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
-    let root = aether_runtime::luau_source_root().ok_or(
-        "aether_runtime could not locate Aether's Luau source beside itself —          a vendoring layout this does not understand",
+    let root = aether_runtime::installed_package("aether").ok_or(
+        "no installed aether — run `pesde install`; `pesde.toml` pins the revision          Dew's mods are written against",
     )?;
 
     let mut aliases = HashMap::new();
     aliases.insert("aether".to_string(), root.join("src"));
 
-    // AETHER'S OWN DEPENDENCY, SUPPLIED BY US. A pinned checkout carries the
-    // framework's source and NOT its `roblox_packages`, which is generated — so
-    // vide is installed here by pesde and handed over through the `@vide` seam
-    // VideCore exposes. Without it the framework loads and then reports "no
+    // AETHER'S OWN DEPENDENCY, SUPPLIED BY US. pesde installs each package's own
+    // tree without its generated `roblox_packages`, so the framework arrives
+    // without the vide it declares — which is handed over through the `@vide`
+    // seam VideCore exposes. Without it the framework loads and then reports "no
     // installed vide reachable" from a checkout that is otherwise perfect.
-    match find_vide() {
+    match aether_runtime::installed_package("vide") {
         Some(vide) => {
-            aliases.insert("vide".to_string(), vide);
+            aliases.insert("vide".to_string(), vide.join("src"));
         }
         None => eprintln!("[dew] no vide installed — run `pesde install`; widgets will not mount"),
     }

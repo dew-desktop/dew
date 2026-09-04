@@ -18,6 +18,7 @@ lib = "scripts/init.luau"
 # range; when Aether widens it, this widens with it.
 [dependencies]
 vide = { wally = "centau/vide", version = "^0.4.0" }
+aether = { repo = "project-aether-ui/aether", rev = "a01a03412bee0d1c4e4c5e6a718bb2c64c6781f6" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"

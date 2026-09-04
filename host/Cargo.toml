@@ -1,7 +1,7 @@
 [package]
 name = "dew-host"
 version = "0.1.0"
-description = "Dew: the desktop applet platform — mods, capabilities, hotkeys and windows over Aether"
+description = "Dew: the desktop applet platform — mods, capabilities, hotkeys and windows over its own DataModel"
 authors = ["Dew Team"]
 edition = "2021"
 license = "GPL-3.0-only"
@@ -11,23 +11,20 @@ license = "GPL-3.0-only"
 # anyone who had been running the command for weeks.
 default-run = "dew-host"
 
-# EVERYTHING THAT DRAWS OR EXECUTES COMES FROM AETHER, and nothing here
-# reimplements it. Dew's own code is mod discovery, manifests, capabilities and
-# placement; when a rendering change is needed it belongs upstream, where the
-# Roblox host gets it too.
+# EVERYTHING THAT DRAWS OR EXECUTES IS DEW'S, and lives beside this file.
 #
-# PINNED BY COMMIT. A path dependency is "whatever is on that disk right now" --
-# it changes under you when the other checkout moves, and neither a teammate nor
-# this machine tomorrow can reproduce it. A revision is a fact.
+# It used to come from Aether by git pin, and the pin's own comment argued the
+# case well: a path dependency is "whatever is on that disk right now", and a
+# revision is a fact. That argument was right about pinning and wrong about
+# whose code it was. ADR-004 measured it -- `pesde.toml` ships `src/**`, so no
+# Rust in that repository reaches a Luau consumer, and the only two dependents
+# were Dew and aether-cli, both hosts, one retiring. The display list, the
+# painter, the rasteriser and the window are Dew's rendering stack, and they now
+# live in `crates/` where a path dependency is not a floating pin but the same
+# working tree.
 #
-# The URL is the REMOTE, never a local path. A file:// pin looks like pinning and
-# is not: the revision it names exists on exactly one machine, so a lockfile
-# built from it is unusable to everyone else and the dependency is still, in
-# practice, a directory on this disk.
-#
-# Bump these deliberately, as their own `chore(deps)` commit, when a change in
-# Aether is wanted here. That is the whole point of the split -- Dew upgrades
-# when Dew chooses.
+# WHAT STILL COMES FROM AETHER IS LUAU, and it comes through pesde: see
+# `pesde.toml`, where `aether` is pinned by commit exactly as it was here.
 [lib]
 name = "dew_host"
 path = "src/lib.rs"
@@ -44,9 +41,13 @@ name = "datamodel-surface"
 path = "src/bin/datamodel_surface.rs"
 
 [dependencies]
-aether_runtime = { git = "https://github.com/project-aether-ui/aether", rev = "a01a03412bee0d1c4e4c5e6a718bb2c64c6781f6", features = ["raster"] }
-aether_raster = { git = "https://github.com/project-aether-ui/aether", rev = "a01a03412bee0d1c4e4c5e6a718bb2c64c6781f6" }
-aether_window = { git = "https://github.com/project-aether-ui/aether", rev = "a01a03412bee0d1c4e4c5e6a718bb2c64c6781f6" }
+# THE NAMES ARE STILL AETHER'S, AND THAT IS THIS SPRINT REFUSING TO DO TWO
+# THINGS AT ONCE. A move and a rename in one diff is a diff nobody can review:
+# every line would be touched and none of them would say which change it was.
+# The rename is its own commit.
+aether_runtime = { path = "../crates/runtime", features = ["raster"] }
+aether_raster = { path = "../crates/raster" }
+aether_window = { path = "../crates/window" }
 
 # WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
 # from a platform -- surfaces and input -- and a tray icon is neither. It presents
@@ -82,17 +83,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6.0"
 
-# OPTIMISE THE DEPENDENCIES EVEN IN A DEBUG BUILD.
-#
-# `cargo run` was unusable and it read as a Dew problem: dragging a window in the
-# workspace mod felt sluggish, and the frame budget looked like the suspect.
-# Measured, a debug frame cost 54ms against release's 1.7ms — 18fps versus 575 —
-# and every microsecond of the difference was in dependencies.
-#
-# vello_cpu rasterises per pixel and mlua interprets per opcode; both are
-# pathological unoptimised, and `aether_raster` only asks for opt-level 3 in its
-# RELEASE profile. Dew's own code stays at opt-level 0, so it is still debuggable
-# and still rebuilds fast — it is thousands of lines against their hundreds of
-# thousands, and it is not where the time goes.
-[profile.dev.package."*"]
-opt-level = 3
+# `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.
+# Cargo reads profiles only from a root and ignores them in a member, so leaving
+# it here would have silently restored the 18fps debug build the note there
+# describes.

@@ -1,0 +1,68 @@
+# ONE WORKSPACE, ONE `target/`.
+#
+# Dew's Rust was one package until the rendering stack moved in (ADR-004, sprint
+# 1 of milestone 2). Four packages built independently grow four target
+# directories for what is largely the SAME dependency tree -- mlua, vello,
+# tiny-skia and wgpu compiled once per crate that mentions them. Aether's
+# workspace was created after that filled a 465 GB disk and stopped the build
+# with `os error 112`, which reads as a machine problem and is a layout problem.
+# The lesson travels with the crates.
+#
+# A workspace also pins one resolved version per dependency across all four, so
+# the host cannot quietly link a different `windows` crate than the window layer
+# it drives.
+[workspace]
+resolver = "2"
+members = [
+    "host",
+    "crates/raster",
+    "crates/runtime",
+    "crates/window",
+]
+
+# OPTIMISE THE DEPENDENCIES EVEN IN A DEBUG BUILD.
+#
+# `cargo run` was unusable and it read as a Dew problem: dragging a window in the
+# workspace mod felt sluggish, and the frame budget looked like the suspect.
+# Measured, a debug frame cost 54ms against release's 1.7ms — 18fps versus 575 —
+# and every microsecond of the difference was in dependencies.
+#
+# vello_cpu rasterises per pixel and mlua interprets per opcode; both are
+# pathological unoptimised. Dew's own code stays at opt-level 0, so it is still
+# debuggable and still rebuilds fast — it is thousands of lines against their
+# hundreds of thousands, and it is not where the time goes.
+#
+# HERE RATHER THAN IN `host/Cargo.toml`, AND THAT IS LOAD-BEARING. Cargo reads
+# `[profile]` only from a workspace root and ignores it in a member, with a
+# warning. Leaving this behind when the workspace appeared would have handed back
+# the 18fps debug build silently.
+[profile.dev.package."*"]
+opt-level = 3
+
+# AND THE THREE THAT ARE NO LONGER DEPENDENCIES.
+#
+# `package."*"` MEANS "every dependency, but not a workspace member", and that
+# is the whole trap in this sprint's diff. The rasteriser and the runtime were
+# git dependencies and so were covered by the glob above; moving them into the
+# workspace took them out of it, and they started building at opt-level 0 with
+# nothing failing. It cost 7x on the live window -- `--mod nameplate --stats`
+# read 420 fps against sprint 9's 3029, on the same machine, in the same hour --
+# and it would have been invisible to `cargo test`, to clippy and to every
+# snapshot, because all three are still CORRECT at opt-level 0. Only `--stats`
+# says so, which is why the sprint's done-test asks for it.
+[profile.dev.package.aether_raster]
+opt-level = 3
+
+[profile.dev.package.aether_runtime]
+opt-level = 3
+
+[profile.dev.package.aether_window]
+opt-level = 3
+
+# AETHER'S `[profile.release]` DID NOT TRAVEL WITH THE CRATES, deliberately.
+#
+# It read `opt-level = 3`, `lto = true`, `panic = "abort"` and applied to builds
+# made INSIDE Aether's workspace. Dew consumed these crates as git dependencies,
+# so it never applied here: adopting it now would change Dew's release binary in
+# the same commit that claims to move code and nothing else. It is a decision to
+# make on its own, against a measurement.

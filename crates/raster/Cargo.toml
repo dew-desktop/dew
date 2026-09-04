@@ -1,0 +1,76 @@
+[package]
+name = "aether_raster"
+version = "0.0.1"
+edition = "2021"
+description = "Aether's rasterizer: a C ABI over tiny-skia, consumed by zune.ffi"
+
+[lib]
+name = "aether_raster"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+bytemuck = { version = "1.25.2", optional = true }
+pollster = { version = "1.0.1", optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"] }
+skrifa = "0.44"
+tiny-skia = "0.11"
+vello_cpu = "0.2.0"
+vello_hybrid = { version = "0.2.0", optional = true }
+wgpu = { version = "29", optional = true }
+
+[features]
+# The GPU experiment, OFF by default.
+#
+# `vello_hybrid` drags in wgpu -- a 2000-line lock file, a minutes-long first
+# build, and a GPU driver at runtime. Measuring it was worth doing once; paying
+# for it on every clone is not, especially while the answer is that the headless
+# form does not pay for itself.
+#
+# Kept behind a flag rather than deleted so the measurement stays reproducible:
+#     cargo test --release --features gpu_probe -- --nocapture hybrid_headless_cost
+# Deliberate sabotage, for proving the GATES can fail. OFF by default and absent
+# from a release build entirely: `ar_poison` does not exist as a symbol unless
+# this is enabled, so a shipped library cannot be talked into drawing nothing.
+#
+#     cargo build --release --features poison
+#     lune run scripts/poison_matrix.luau
+poison = []
+
+gpu = ["dep:vello_hybrid", "dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:raw-window-handle"]
+# The old name for the same set, kept so the recorded probe command still works.
+gpu_probe = ["gpu"]
+
+# CLIPPY DEBT THAT ARRIVED WITH THE CODE, NAMED AND COUNTED.
+#
+# ADR-004 moved this crate from Aether to Dew unchanged. Dew's bar is
+# `cargo clippy --all-targets -- -D warnings` clean; Aether's CI never ran
+# clippy, and said why: "It reports thirty-two warnings today, and a job that is
+# red on its first run teaches everyone to ignore the badge. Triage them, then
+# add it."
+#
+# Re-measured on arrival: 27 in this crate, 4 in `aether_window`, 1 in
+# `aether_runtime` -- 32, the same number Aether's CI note recorded. They
+# are allowed BY NAME rather than by a blanket `-A clippy::all`, so a lint this
+# crate has never tripped still fails on the commit that trips it, and each line
+# below is deleted by triaging that one lint rather than by lowering the bar.
+#
+# NOT FIXED IN THE MOVE COMMIT ON PURPOSE. Rewriting 2,900 lines of rasteriser in
+# the diff that claims to relocate them is how a real regression hides in a
+# review nobody can read.
+#
+#   not_unsafe_ptr_arg_deref (21)  every `ar_*` entry point. This crate IS a C
+#                                  ABI -- see `verify.luau` -- so a raw pointer
+#                                  in a `pub extern "C" fn` is the interface,
+#                                  not an oversight. Marking them `unsafe` is
+#                                  the likely answer and it changes 21 public
+#                                  signatures.
+#   chunks_exact_to_as_chunks (2)  a lint that did not exist when this was
+#                                  written.
+#   field_reassign_with_default (2)
+#   too_many_arguments (2)         8/7, in the fill and stroke entry points.
+[lints.clippy]
+not_unsafe_ptr_arg_deref = "allow"
+chunks_exact_to_as_chunks = "allow"
+field_reassign_with_default = "allow"
+too_many_arguments = "allow"

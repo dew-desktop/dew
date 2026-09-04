@@ -7,7 +7,7 @@ would run on inside Roblox.
 ## Running it
 
 ```sh
-cargo run --manifest-path host/Cargo.toml -- --mod timetracker
+cargo run -p dew-host -- --mod timetracker
 ```
 
 From inside `host/`, plain `cargo run -- --mod timetracker` works too: the host
@@ -75,12 +75,19 @@ manifest, capabilities, the surface — is identical either way.
 
 ## Setup
 
-Aether is pinned by commit in [`host/Cargo.toml`](host/Cargo.toml). Both the Rust
-crates and the Luau source come from that one revision, so no sibling checkout is
-needed.
+```sh
+pesde install
+```
 
-Run `pesde install` once, for vide. Aether declares it and a pinned checkout does
-not carry it, so this host supplies it.
+That is the whole of it, and it installs two GUEST packages: Aether and the vide
+it declares. Both are pinned by commit in [`pesde.toml`](pesde.toml), and no
+sibling checkout is needed.
+
+Aether used to arrive through Cargo instead, because the rendering stack lived in
+its repository and the Luau travelled in the same checkout. It does not any more:
+`crates/raster`, `crates/runtime` and `crates/window` are Dew's, and Aether is a
+framework Dew's guests may choose, exactly like any other Luau package. ADR-004
+is the reasoning; `scripts/verify_boundaries.luau` is what keeps it true.
 
 ## Contributing
 

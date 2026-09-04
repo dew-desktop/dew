@@ -272,11 +272,17 @@ appearing in it.
 
 | | |
 | :--- | :--- |
-| **Aether** | layout, hit testing, pointer arbitration, focus, motion |
-| **`aether_runtime`** | the VM, require resolution, the frame loop, the display list |
-| **`aether_window`** | the window, input, the blit |
-| **Dew** | mod discovery, manifests, capabilities, hotkeys, tray, storage, multi-window placement |
+| **Aether** | layout, hit testing, pointer arbitration, focus, motion — *for a mod that chose it* |
+| **`crates/runtime`** | the VM, require resolution, the frame loop, the display list |
+| **`crates/raster`** | the rasteriser |
+| **`crates/window`** | the window, input, the blit |
+| **Dew** | mod discovery, manifests, capabilities, hotkeys, tray, storage, multi-window placement, and its own DataModel |
 
-Dew contains no layout code and no drawing code. When something here needs a
-rendering change, it belongs upstream in Aether, where the Roblox host gets it
-too.
+**THE BOTTOM FOUR ROWS ARE ALL DEW.** They used to be one row and three crates
+borrowed from Aether's repository, and this section said "when something here
+needs a rendering change, it belongs upstream in Aether, where the Roblox host
+gets it too". That was wrong, and it was the sentence that made adding an image
+node to the display list look like changing a public framework contract. It is a
+host editing its own renderer. ADR-004 measured it and moved the crates; a
+rendering change belongs in `crates/`, and a Roblox author never sees it because
+they never had it.

@@ -52,6 +52,13 @@ local config: CommitLintConfig = {
     allowedScopes = {
         "core",      -- host/src, the platform itself
         "host",      -- host/, build and wiring
+        --- crates/ -- the rendering stack: raster, runtime, window. It arrived
+        --- from Aether in milestone 2's first sprint (ADR-004) and is a
+        --- top-level directory of this repository like any other, so it gets a
+        --- scope like any other. `host` would have covered it and would have
+        --- said the wrong thing: these are four packages now, not one with
+        --- wiring.
+        "crates",    -- crates/, the rendering stack
         "mods",      -- mods/
         "types",     -- types/
         "docs",      -- docs/, CONTRIBUTING, README

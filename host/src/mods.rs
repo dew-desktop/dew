@@ -322,7 +322,7 @@ mod tests {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
             // A DataModel mod never reads Aether's source; the path is still a
             // require root, and pointing it at the mod's own directory keeps this
-            // test from depending on a checkout Cargo made.
+            // test from depending on an install having been run.
             load(&self.0, &self.0, &Default::default(), &state)
         }
     }
