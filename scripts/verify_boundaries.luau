@@ -72,7 +72,7 @@ local RENDER_CRATES = {
 	"aether_window",
 }
 
---- What retires with `Headless.luau`, and ADR-004 made it nameable.
+--- What retires with `LuauDataModel.luau`, and ADR-004 made it nameable.
 ---
 --- These exist to consume what Aether's `Live.luau` emits. Under ADR-001 an
 --- Aether guest on Dew builds DataModel instances instead, exactly as it does on
@@ -275,7 +275,7 @@ for _, path in ipairs(HOST_LUAU_ALLOWED) do
 	end
 end
 
---- The decoding half, which retires with `Headless.luau` in sprint 6.
+--- The decoding half, which retires with `LuauDataModel.luau` in sprint 6.
 local retiring: { string } = {}
 for _, path in ipairs(DECODES_A_LUAU_DISPLAY_LIST) do
 	if fs.isFile(path) then
@@ -286,7 +286,7 @@ if #retiring > 0 then
 	table.insert(
 		outstanding,
 		`crates/runtime -> {table.concat(retiring, ", ")} decode what Live.luau emits; `
-			.. `they retire with Headless.luau`
+			.. `they retire with LuauDataModel.luau`
 	)
 end
 
