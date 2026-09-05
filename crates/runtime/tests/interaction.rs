@@ -8,7 +8,7 @@
 //! A pressable that renders and does not respond passes every one of those
 //! suites, which is how this went unnoticed.
 
-use aether_runtime::{Application, Capabilities, Pointer};
+use dew_runtime::{Application, Capabilities, Pointer};
 use mlua::Function;
 use std::path::PathBuf;
 
@@ -19,7 +19,7 @@ use std::path::PathBuf;
 /// `../..` is now Dew's own root, so the framework is found where every other
 /// guest package is found: the pesde install, pinned by commit in `pesde.toml`.
 fn aether_root() -> PathBuf {
-    aether_runtime::installed_package("aether")
+    dew_runtime::installed_package("aether")
         .expect("no installed aether — run `pesde install` at the repository root")
 }
 
@@ -35,7 +35,7 @@ fn caps() -> Capabilities {
     let root = aether_root();
     let mut caps = Capabilities::cli(root.clone());
     caps.aliases.insert("aether".to_string(), root.join("src"));
-    match aether_runtime::installed_package("vide") {
+    match dew_runtime::installed_package("vide") {
         Some(vide) => {
             caps.aliases.insert("vide".to_string(), vide.join("src"));
         }

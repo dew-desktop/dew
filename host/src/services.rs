@@ -2,7 +2,7 @@
 //!
 //! WHERE THIS FILE LIVES, AND WHY IT MOVED BEFORE IT WAS EVER COMMITTED HERE
 //! It was written as `datamodel/services.rs` and `verify_boundaries` refused it,
-//! correctly: section 3 lets only the render bridge reach `aether_raster`, on the
+//! correctly: section 3 lets only the render bridge reach `dew_raster`, on the
 //! grounds that a DataModel module deferring to those crates would put a second
 //! implementation of the standard inside one host. Measuring a string needs a
 //! face, so the import was real -- and the right conclusion was that the FILE was
@@ -63,7 +63,7 @@
 //! `DewHost` conforms as it stands and is still expected to be revisited only if
 //! the standard ever does specify one.
 
-use aether_raster::Font;
+use dew_raster::Font;
 use mlua::prelude::*;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -83,7 +83,7 @@ use std::time::Instant;
 pub fn face() -> Option<Font> {
     static FACE: OnceLock<Option<Font>> = OnceLock::new();
     *FACE.get_or_init(|| {
-        let path = aether_runtime::font::system_font()?;
+        let path = dew_runtime::font::system_font()?;
         Font::load(&path.to_string_lossy(), 0)
     })
 }

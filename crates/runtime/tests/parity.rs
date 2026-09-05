@@ -6,7 +6,7 @@
 //! application runs on both hosts" is a property of the build rather than an
 //! intention.
 
-use aether_runtime::{Application, Capabilities};
+use dew_runtime::{Application, Capabilities};
 use std::path::PathBuf;
 
 /// Aether's checkout, and it is no longer a directory above this crate.
@@ -16,7 +16,7 @@ use std::path::PathBuf;
 /// `../..` is now Dew's own root, so the framework is found where every other
 /// guest package is found: the pesde install, pinned by commit in `pesde.toml`.
 fn aether_root() -> PathBuf {
-    aether_runtime::installed_package("aether")
+    dew_runtime::installed_package("aether")
         .expect("no installed aether — run `pesde install` at the repository root")
 }
 
@@ -32,7 +32,7 @@ fn caps() -> Capabilities {
     let root = aether_root();
     let mut caps = Capabilities::cli(root.clone());
     caps.aliases.insert("aether".to_string(), root.join("src"));
-    match aether_runtime::installed_package("vide") {
+    match dew_runtime::installed_package("vide") {
         Some(vide) => {
             caps.aliases.insert("vide".to_string(), vide.join("src"));
         }
@@ -91,7 +91,7 @@ fn a_frame_carries_the_tree_the_application_declared() {
 /// pins the default at the seam so a painter never has to decide it again.
 #[test]
 fn unset_text_alignment_decodes_as_centre() {
-    use aether_runtime::frame::Align;
+    use dew_runtime::frame::Align;
 
     let app = load();
     let session = app.session().unwrap();
@@ -164,7 +164,7 @@ fn the_guest_has_no_escape_hatches() {
 /// slides over.
 #[test]
 fn the_extended_length_prefix_is_stripped() {
-    use aether_runtime::strip_extended_prefix;
+    use dew_runtime::strip_extended_prefix;
     use std::path::PathBuf;
 
     // BUILT FROM CHARACTERS, not written as a literal. The prefix is four

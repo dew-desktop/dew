@@ -1,5 +1,5 @@
 [package]
-name = "aether_runtime"
+name = "dew_runtime"
 version = "0.0.1"
 edition = "2021"
 description = "Rust-owned host runtime for Aether: an embedded Luau guest, driven frame by frame"
@@ -18,7 +18,7 @@ mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 # OPTIONAL, so `painter::Painter` stays free of any backend. A consumer that only
 # needs the display list -- a test, a headless diff, a transport -- should not
 # compile a rasteriser to get it.
-aether_raster = { path = "../raster", optional = true }
+dew_raster = { path = "../raster", optional = true }
 
 [dev-dependencies]
 # Reading a written PNG back, so the pixel assertions go through the same writer a
@@ -28,9 +28,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 [features]
 default = []
 
-# The CPU painter over aether_raster. Deliberately NOT default: it is the first
+# The CPU painter over dew_raster. Deliberately NOT default: it is the first
 # implementation of the trait, not a privileged one.
-raster = ["dep:aether_raster"]
+raster = ["dep:dew_raster"]
 
 # CLIPPY DEBT THAT ARRIVED WITH THE CODE, NAMED AND COUNTED. The reasoning is in
 # `crates/raster/Cargo.toml`; this is the one this crate contributes.

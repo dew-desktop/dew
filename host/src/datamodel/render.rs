@@ -47,7 +47,7 @@
 //!
 //! So: enough to put a real tree on screen, and no claim beyond that.
 
-use aether_runtime::frame::{Align, Frame, Image, Node, Rect, Rgb, Scale, Stroke};
+use dew_runtime::frame::{Align, Frame, Image, Node, Rect, Rgb, Scale, Stroke};
 use rbx_types::{Variant, Vector2};
 
 use super::{Dom, SharedDom};

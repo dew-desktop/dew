@@ -2,7 +2,7 @@
 //!
 //! WHY THIS IS NOT UNDER `datamodel/`, WHICH IS WHERE IT WAS FIRST WRITTEN
 //! `scripts/verify_boundaries.luau` section 3 refused it there, and correctly:
-//! only the render bridge may touch `aether_runtime`'s display list, because a
+//! only the render bridge may touch `dew_runtime`'s display list, because a
 //! DataModel module deferring to the render IR is how the standard ends up with
 //! two implementations inside one host. Resolving a `Content` PRODUCES render IR
 //! -- a `frame::Bitmap` -- so it is part of the bridge and not part of the
@@ -40,7 +40,7 @@
 //! NAME once, and is drawn as a missing-image box. A Roblox application moved to
 //! Dew before Sprint 5 is a correct application missing an image.
 
-use aether_runtime::frame::Bitmap;
+use dew_runtime::frame::Bitmap;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -159,7 +159,7 @@ impl Assets {
         };
 
         // STRAIGHT RGBA, because that is what the display list carries and what
-        // `aether_raster` premultiplies once on upload. Converting here would put
+        // `dew_raster` premultiplies once on upload. Converting here would put
         // the lossy step in front of the seam rather than behind it.
         let decoded = match image::load_from_memory(&bytes) {
             Ok(decoded) => decoded.to_rgba8(),

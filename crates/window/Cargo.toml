@@ -1,5 +1,5 @@
 [package]
-name = "aether_window"
+name = "dew_window"
 version = "0.0.1"
 edition = "2021"
 description = "A native window and message pump for Aether's off-engine hosts"

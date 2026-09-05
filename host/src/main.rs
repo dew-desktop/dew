@@ -28,11 +28,11 @@ mod surface;
 mod tray;
 
 use crate::services::SharedClock;
-use aether_raster::Backend;
-use aether_runtime::{Driver, RasterPainter, Rgb};
-#[cfg(windows)]
-use aether_window::{Button, Event, Window};
 use dew_host::datamodel::input;
+use dew_raster::Backend;
+use dew_runtime::{Driver, RasterPainter, Rgb};
+#[cfg(windows)]
+use dew_window::{Button, Event, Window};
 use mlua::Lua;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -131,7 +131,7 @@ impl Renderer {
 
 /// Which mouse button, in the DataModel's spelling.
 ///
-/// TWO ENUMS RATHER THAN ONE SHARED ONE. `aether_window::Button` is what the
+/// TWO ENUMS RATHER THAN ONE SHARED ONE. `dew_window::Button` is what the
 /// platform reports and `input::Button` is what the DataModel fires as; making
 /// Dew's host depend on the window crate's enum inside the datamodel would put an
 /// Aether type in `dew_host`, which is exactly the boundary ADR-004's checker
@@ -204,7 +204,7 @@ impl Renderer {
                     return Ok(false);
                 }
                 let frame = datamodel::render::frame_of(dom, *root, *width, *height);
-                aether_runtime::Painter::paint_frame(painter, &frame, *background);
+                dew_runtime::Painter::paint_frame(painter, &frame, *background);
 
                 //--- HOVER IS RECONCILED AFTER A PAINT, and this is the case a
                 //--- naive implementation gets wrong silently. `MouseEnter` and
@@ -246,7 +246,7 @@ impl Renderer {
     fn moved(&mut self, x: f32, y: f32) -> Result<(), String> {
         match self {
             Renderer::Aether { driver, .. } => driver
-                .pointer(aether_runtime::Pointer::Move, x, y)
+                .pointer(dew_runtime::Pointer::Move, x, y)
                 .map_err(|e| e.to_string()),
             Renderer::DataModel {
                 dom,
@@ -287,7 +287,7 @@ impl Renderer {
                     return Ok(());
                 }
                 driver
-                    .pointer(aether_runtime::Pointer::Down, x, y)
+                    .pointer(dew_runtime::Pointer::Down, x, y)
                     .map_err(|e| e.to_string())
             }
             Renderer::DataModel {
@@ -323,7 +323,7 @@ impl Renderer {
                     return Ok(());
                 }
                 driver
-                    .pointer(aether_runtime::Pointer::Up, x, y)
+                    .pointer(dew_runtime::Pointer::Up, x, y)
                     .map_err(|e| e.to_string())
             }
             Renderer::DataModel {
@@ -437,12 +437,12 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."));
 
-    let caps = aether_runtime::Capabilities {
+    let caps = dew_runtime::Capabilities {
         require_roots: vec![dir.clone()],
         print: true,
         aliases: HashMap::new(),
     };
-    let vm = aether_runtime::Vm::new(caps).map_err(|e| e.to_string())?;
+    let vm = dew_runtime::Vm::new(caps).map_err(|e| e.to_string())?;
 
     let dom = datamodel::SharedDom::default();
     // `mod://` RESOLVES BESIDE THE SCRIPT, which is the same directory the
@@ -485,13 +485,13 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     let frame = datamodel::render::frame_of(&dom, root, width as f32, height as f32);
     let drawn = frame.nodes.len();
     let mut surface = painter(width, height)?;
-    aether_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
+    dew_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
     Ok((format!("{drawn} node(s)"), surface))
 }
 
 fn create_renderer(
     mounted: mods::Mounted,
-    vm: &aether_runtime::Vm,
+    vm: &dew_runtime::Vm,
     clock: &SharedClock,
     surface: &surface::Declared,
     width: u32,
@@ -1023,7 +1023,7 @@ fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), Str
             vm,
         } = active;
 
-        let screen = aether_window::screen_size();
+        let screen = dew_window::screen_size();
         if surface.fills_screen() {
             width = screen.0.max(1) as u32;
             height = screen.1.max(1) as u32;
@@ -1464,7 +1464,7 @@ return process
         target_dir.clone()
     } else if let Some(d) = find_dir("aether") {
         d
-    } else if let Some(p) = aether_runtime::installed_package("aether") {
+    } else if let Some(p) = dew_runtime::installed_package("aether") {
         p
     } else {
         target_dir.clone()
@@ -1488,7 +1488,7 @@ return process
         }
     }
     if vide_src.is_none() {
-        if let Some(vide_pkg) = aether_runtime::installed_package("vide") {
+        if let Some(vide_pkg) = dew_runtime::installed_package("vide") {
             vide_src = Some(vide_pkg.join("src"));
         }
     }
@@ -1518,13 +1518,13 @@ return process
             aliases.insert("vide".to_string(), v.clone());
         }
 
-        let caps = aether_runtime::Capabilities {
+        let caps = dew_runtime::Capabilities {
             require_roots: roots,
             print: true,
             aliases,
         };
 
-        let vm = match aether_runtime::Vm::new(caps.clone()) {
+        let vm = match dew_runtime::Vm::new(caps.clone()) {
             Ok(v) => v,
             Err(e) => {
                 failed += 1;
@@ -1623,7 +1623,7 @@ return process
             eprintln!("  Game gate installation failed: {e}");
             continue;
         }
-        if let Err(e) = aether_runtime::modules::install(&vm, &caps) {
+        if let Err(e) = dew_runtime::modules::install(&vm, &caps) {
             failed += 1;
             eprintln!("::error::{suite_name}");
             eprintln!("  Require installation failed: {e}");
@@ -1640,7 +1640,7 @@ return process
             }
         };
 
-        let mut stem = aether_runtime::strip_extended_prefix(
+        let mut stem = dew_runtime::strip_extended_prefix(
             suite_path
                 .canonicalize()
                 .unwrap_or_else(|_| suite_path.to_path_buf()),
@@ -1816,7 +1816,7 @@ fn icon_path() -> Option<PathBuf> {
 /// commit in `pesde.toml` and installed beside vide, and both are found the same
 /// way.
 fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
-    let root = aether_runtime::installed_package("aether").ok_or(
+    let root = dew_runtime::installed_package("aether").ok_or(
         "no installed aether — run `pesde install`; `pesde.toml` pins the revision          Dew's mods are written against",
     )?;
 
@@ -1828,7 +1828,7 @@ fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
     // without the vide it declares — which is handed over through the `@vide`
     // seam VideCore exposes. Without it the framework loads and then reports "no
     // installed vide reachable" from a checkout that is otherwise perfect.
-    match aether_runtime::installed_package("vide") {
+    match dew_runtime::installed_package("vide") {
         Some(vide) => {
             aliases.insert("vide".to_string(), vide.join("src"));
         }

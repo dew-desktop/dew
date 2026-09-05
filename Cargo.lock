@@ -9,38 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "aether_raster"
-version = "0.0.1"
-dependencies = [
- "bytemuck",
- "image",
- "pollster",
- "raw-window-handle",
- "skrifa",
- "tiny-skia",
- "vello_common",
- "vello_cpu",
- "vello_hybrid",
- "wgpu",
-]
-
-[[package]]
-name = "aether_runtime"
-version = "0.0.1"
-dependencies = [
- "aether_raster",
- "image",
- "mlua",
-]
-
-[[package]]
-name = "aether_window"
-version = "0.0.1"
-dependencies = [
- "windows 0.59.0",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -367,9 +335,9 @@ dependencies = [
 name = "dew-host"
 version = "0.1.0"
 dependencies = [
- "aether_raster",
- "aether_runtime",
- "aether_window",
+ "dew_raster",
+ "dew_runtime",
+ "dew_window",
  "dirs",
  "image",
  "mlua",
@@ -378,6 +346,38 @@ dependencies = [
  "rbx_types",
  "serde",
  "serde_json",
+ "windows 0.59.0",
+]
+
+[[package]]
+name = "dew_raster"
+version = "0.0.1"
+dependencies = [
+ "bytemuck",
+ "image",
+ "pollster",
+ "raw-window-handle",
+ "skrifa",
+ "tiny-skia",
+ "vello_common",
+ "vello_cpu",
+ "vello_hybrid",
+ "wgpu",
+]
+
+[[package]]
+name = "dew_runtime"
+version = "0.0.1"
+dependencies = [
+ "dew_raster",
+ "image",
+ "mlua",
+]
+
+[[package]]
+name = "dew_window"
+version = "0.0.1"
+dependencies = [
  "windows 0.59.0",
 ]
 

@@ -13,8 +13,8 @@
 
 #![cfg(feature = "raster")]
 
-use aether_raster::{Backend, Font};
-use aether_runtime::{Application, Capabilities, Driver, Rgb};
+use dew_raster::{Backend, Font};
+use dew_runtime::{Application, Capabilities, Driver, Rgb};
 use mlua::Function;
 use std::path::PathBuf;
 
@@ -25,7 +25,7 @@ use std::path::PathBuf;
 /// `../..` is now Dew's own root, so the framework is found where every other
 /// guest package is found: the pesde install, pinned by commit in `pesde.toml`.
 fn aether_root() -> PathBuf {
-    aether_runtime::installed_package("aether")
+    dew_runtime::installed_package("aether")
         .expect("no installed aether — run `pesde install` at the repository root")
 }
 
@@ -41,7 +41,7 @@ fn caps() -> Capabilities {
     let root = aether_root();
     let mut caps = Capabilities::cli(root.clone());
     caps.aliases.insert("aether".to_string(), root.join("src"));
-    match aether_runtime::installed_package("vide") {
+    match dew_runtime::installed_package("vide") {
         Some(vide) => {
             caps.aliases.insert("vide".to_string(), vide.join("src"));
         }
@@ -59,13 +59,12 @@ fn app() -> Application {
         .expect("the shared example should load through its desktop entry")
 }
 
-fn driver() -> Driver<aether_runtime::RasterPainter> {
+fn driver() -> Driver<dew_runtime::RasterPainter> {
     let app = app();
     let session = app.session().expect("session");
 
-    let mut painter =
-        aether_runtime::RasterPainter::new(240, 96, Backend::VelloCpu).expect("surface");
-    if let Some(path) = aether_runtime::font::system_font() {
+    let mut painter = dew_runtime::RasterPainter::new(240, 96, Backend::VelloCpu).expect("surface");
+    if let Some(path) = dew_runtime::font::system_font() {
         if let Some(font) = Font::load(&path.to_string_lossy(), 0) {
             painter = painter.with_font(font);
         }

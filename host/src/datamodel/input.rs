@@ -527,7 +527,7 @@ impl Pointer {
         Self::fire_all(surface, batch)
     }
 
-    /// The wheel turned. Positive scrolls the content up, as `aether_window`
+    /// The wheel turned. Positive scrolls the content up, as `dew_window`
     /// reports it and as `Live.Session` reads it.
     pub fn wheel(&mut self, surface: &Surface, x: f32, y: f32, delta: f32) -> LuaResult<()> {
         // A ZERO DELTA IS NOT A DIRECTION. Neither event is the honest answer, and

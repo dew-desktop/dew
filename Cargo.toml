@@ -50,13 +50,13 @@ opt-level = 3
 # and it would have been invisible to `cargo test`, to clippy and to every
 # snapshot, because all three are still CORRECT at opt-level 0. Only `--stats`
 # says so, which is why the sprint's done-test asks for it.
-[profile.dev.package.aether_raster]
+[profile.dev.package.dew_raster]
 opt-level = 3
 
-[profile.dev.package.aether_runtime]
+[profile.dev.package.dew_runtime]
 opt-level = 3
 
-[profile.dev.package.aether_window]
+[profile.dev.package.dew_window]
 opt-level = 3
 
 # AETHER'S `[profile.release]` DID NOT TRAVEL WITH THE CRATES, deliberately.

@@ -1,11 +1,11 @@
 [package]
-name = "aether_raster"
+name = "dew_raster"
 version = "0.0.1"
 edition = "2021"
 description = "Aether's rasterizer: a C ABI over tiny-skia, consumed by zune.ffi"
 
 [lib]
-name = "aether_raster"
+name = "dew_raster"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]

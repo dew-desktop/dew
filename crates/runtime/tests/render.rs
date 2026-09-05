@@ -2,7 +2,7 @@
 //!
 //! `parity.rs` proves the display list is correct. This proves something is
 //! actually DRAWN from it — which is the part a display-list assertion cannot
-//! reach, and the exact gap the poison gates in `aether_raster` exist for: a
+//! reach, and the exact gap the poison gates in `dew_raster` exist for: a
 //! backend that draws nothing satisfies every "the wrong thing is absent" check
 //! ever written.
 //!
@@ -16,8 +16,8 @@
 
 #![cfg(feature = "raster")]
 
-use aether_raster::{Backend, Canvas, Font};
-use aether_runtime::{Application, Capabilities, Painter, RasterPainter, Rgb};
+use dew_raster::{Backend, Canvas, Font};
+use dew_runtime::{Application, Capabilities, Painter, RasterPainter, Rgb};
 use std::path::PathBuf;
 
 const WIDTH: u32 = 200;
@@ -30,7 +30,7 @@ const HEIGHT: u32 = 80;
 /// `../..` is now Dew's own root, so the framework is found where every other
 /// guest package is found: the pesde install, pinned by commit in `pesde.toml`.
 fn aether_root() -> PathBuf {
-    aether_runtime::installed_package("aether")
+    dew_runtime::installed_package("aether")
         .expect("no installed aether — run `pesde install` at the repository root")
 }
 
@@ -46,7 +46,7 @@ fn caps() -> Capabilities {
     let root = aether_root();
     let mut caps = Capabilities::cli(root.clone());
     caps.aliases.insert("aether".to_string(), root.join("src"));
-    match aether_runtime::installed_package("vide") {
+    match dew_runtime::installed_package("vide") {
         Some(vide) => {
             caps.aliases.insert("vide".to_string(), vide.join("src"));
         }
@@ -66,10 +66,10 @@ fn load() -> Application {
 /// on the machine running this, and a suite that fails on a bare CI container has
 /// told you about the container rather than about the renderer.
 fn system_font() -> Option<Font> {
-    // The candidate list moved into `aether_runtime::font`, where both native
+    // The candidate list moved into `dew_runtime::font`, where both native
     // shells reach it. A test carrying its own copy is a test that can pass while
     // the shells fail on a machine it never tried.
-    let path = aether_runtime::font::system_font()?;
+    let path = dew_runtime::font::system_font()?;
     Font::load(&path.to_string_lossy(), 0)
 }
 

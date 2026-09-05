@@ -1,7 +1,7 @@
 //! Dew's tray icon and its menu.
 //!
 //! A MESSAGE-ONLY WINDOW OF OUR OWN, not the widget's. A tray icon delivers its
-//! clicks to a window procedure, and `aether_window` owns the widget's — it is a
+//! clicks to a window procedure, and `dew_window` owns the widget's — it is a
 //! surface for painting Aether, and giving it a second job would put Dew's
 //! furniture inside the crate that must stay useful to hosts which have none.
 //!

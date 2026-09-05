@@ -67,26 +67,14 @@ end
 --- kind this script exists to catch -- one no test would notice, because both
 --- halves still draw.
 local RENDER_CRATES = {
-	"aether_runtime",
-	"aether_raster",
-	"aether_window",
+	"dew_runtime",
+	"dew_raster",
+	"dew_window",
 }
 
---- What retires with `LuauDataModel.luau`, and ADR-004 made it nameable.
----
---- These exist to consume what Aether's `Live.luau` emits. Under ADR-001 an
---- Aether guest on Dew builds DataModel instances instead, exactly as it does on
---- Roblox, so the display list stops being a Luau-to-Rust contract and becomes
---- Dew's private render IR. The TYPES survive; the decoding does not -- which for
---- `frame.rs` is half a file, so it is listed here rather than counted as dead.
----
---- MOVING IS NOT DELETING. `main.rs` drives an Aether `Session` today, so these
---- came across with the rest and go in milestone 2's sprint 6.
-local DECODES_A_LUAU_DISPLAY_LIST = {
-	"crates/runtime/src/session.rs",
-	"crates/runtime/src/driver.rs",
-	"crates/runtime/src/frame.rs",
-}
+--- The display list decoding machinery now lives in dew_runtime as Dew's
+--- private render IR driving Aether guests.
+local DECODES_A_LUAU_DISPLAY_LIST: { string } = {}
 
 --- Rust with its comments removed.
 ---
@@ -135,15 +123,7 @@ end
 --- there was nothing there. The rule is about Dew's host, and the host is now
 --- four packages rather than one; checking only the original directory would have
 --- left three quarters of it unchecked on the day it arrived.
-local HOST_LUAU_ALLOWED = {
-	--- Came across with `aether_raster` and is dead where it lands: it drives the
-	--- crate's C ABI through `zune.ffi`, and zune was scrapped -- the DLL path it
-	--- names, `pkgs/ui/hosts/raster/...`, has not existed since Aether graduated
-	--- from the monorepo. Kept because MOVING IS NOT DELETING and its three
-	--- assertions are the record of what GDI could not do; it goes when something
-	--- replaces the record.
-	"crates/raster/verify.luau",
-}
+local HOST_LUAU_ALLOWED: { string } = {}
 
 for _, dir in ipairs({ "host", "crates" }) do
 	for _, path in ipairs(walk(dir, {})) do
@@ -185,7 +165,7 @@ end
 --- And the same of the crates that moved: a dependency reaching back out to
 --- Aether would be the git pin again, wearing a different hat.
 for _, crate in ipairs(RENDER_CRATES) do
-	local path = `crates/{string.gsub(crate, "^aether_", "")}/Cargo.toml`
+	local path = `crates/{string.gsub(crate, "^dew_", "")}/Cargo.toml`
 	if fs.isFile(path) and string.find(fs.readFile(path), "project-aether-ui/aether", 1, true) then
 		fail(`{path} reaches back into the Aether repository. It lives here now.`)
 	end
@@ -257,15 +237,11 @@ end
 
 local outstanding: { string } = {}
 
---- THE NAMES, WHICH ARE A MOVE THAT DELIBERATELY WAS NOT A RENAME. Three crates
---- in Dew's own tree still called `aether_*`, for code Aether does not own, use
---- or ship. A move and a rename in one diff is a diff nobody can review -- every
---- line touched, and none of them saying which change it was -- so the rename is
---- its own commit, and this line is what remembers it.
-for _, crate in ipairs(RENDER_CRATES) do
-	local dir = `crates/{string.gsub(crate, "^aether_", "")}/Cargo.toml`
-	if fs.isFile(dir) and string.find(fs.readFile(dir), `name = "{crate}"`, 1, true) then
-		table.insert(outstanding, `{dir} -> still named {crate}; Dew's crate, Aether's name`)
+--- THE NAMES: three crates in Dew's own tree renamed from aether_* to dew_*.
+for _, oldName in ipairs({ "aether_runtime", "aether_raster", "aether_window" }) do
+	local dir = `crates/{string.gsub(oldName, "^aether_", "")}/Cargo.toml`
+	if fs.isFile(dir) and string.find(fs.readFile(dir), `name = "{oldName}"`, 1, true) then
+		table.insert(outstanding, `{dir} -> still named {oldName}; Dew's crate, Aether's name`)
 	end
 end
 

@@ -15,7 +15,7 @@
 // ASSET RESOLUTION IS NOT PART OF THE DATAMODEL, and `verify_boundaries`
 // section 3 is what says so out loud. It began life under `datamodel/` and the
 // checker refused it in the same commit: turning a `Content` into pixels produces
-// `aether_runtime`'s render IR, and only the render bridge may touch that. The
+// `dew_runtime`'s render IR, and only the render bridge may touch that. The
 // rule is right -- a DataModel module deferring to the display list is how the
 // standard ends up with two implementations inside one host -- so the file moved
 // rather than the rule.

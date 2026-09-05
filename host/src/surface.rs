@@ -20,7 +20,7 @@
 //! enforced.
 
 #[cfg(windows)]
-use aether_window::Surface;
+use dew_window::Surface;
 use mlua::prelude::*;
 
 /// Which corner a widget measures its offset from.

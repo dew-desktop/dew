@@ -380,7 +380,7 @@ impl Window {
     /// the click.
     ///
     /// PREMULTIPLIED is required, not preferred: `AC_SRC_ALPHA` says the colour
-    /// channels are already scaled by alpha. `aether_raster` produces exactly
+    /// channels are already scaled by alpha. `dew_raster` produces exactly
     /// that, so nothing converts on the way.
     fn present_layered(&self, bgra: &[u8], width: u32, height: u32) {
         if bgra.len() < (width * height * 4) as usize {

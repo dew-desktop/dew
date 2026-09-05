@@ -4,7 +4,7 @@
 //! this proves the same of the thing added in Milestone 2's sprint 4, and it
 //! asserts on PIXELS for the reason that file gives: a display-list assertion
 //! cannot tell a backend that drew the image from a backend that drew nothing,
-//! and `aether_raster`'s poison gates exist because a backend that drew nothing
+//! and `dew_raster`'s poison gates exist because a backend that drew nothing
 //! once scored 100% pixel parity.
 //!
 //! THE FRAMES ARE BUILT IN RUST HERE, deliberately, and that is not a shortcut
@@ -17,9 +17,9 @@
 
 #![cfg(feature = "raster")]
 
-use aether_raster::{Backend, Canvas};
-use aether_runtime::frame::{Bitmap, Image, Scale};
-use aether_runtime::{Frame, Node, Painter, RasterPainter, Rect, Rgb};
+use dew_raster::{Backend, Canvas};
+use dew_runtime::frame::{Bitmap, Image, Scale};
+use dew_runtime::{Frame, Node, Painter, RasterPainter, Rect, Rgb};
 use std::sync::Arc;
 
 const W: u32 = 40;

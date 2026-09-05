@@ -1,4 +1,4 @@
-//! A [`Painter`] over `aether_raster`.
+//! A [`Painter`] over `dew_raster`.
 //!
 //! FEATURE-GATED, so the trait stays free of it. `painter.rs` deliberately knows
 //! no backend — a snapshot painter writing a PNG, a GPU painter owning a
@@ -14,7 +14,7 @@
 
 use crate::frame::{Align, Delta, Gradient, Image, Node, Rect, Rgb};
 use crate::painter::Painter;
-use aether_raster::{Backend, Bitmap, Canvas, Font};
+use dew_raster::{Backend, Bitmap, Canvas, Font};
 use std::collections::HashMap;
 
 pub struct RasterPainter {

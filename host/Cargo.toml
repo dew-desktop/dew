@@ -49,9 +49,9 @@ path = "src/bin/datamodel_surface.rs"
 # THINGS AT ONCE. A move and a rename in one diff is a diff nobody can review:
 # every line would be touched and none of them would say which change it was.
 # The rename is its own commit.
-aether_runtime = { path = "../crates/runtime", features = ["raster"] }
-aether_raster = { path = "../crates/raster" }
-aether_window = { path = "../crates/window" }
+dew_runtime = { path = "../crates/runtime", features = ["raster"] }
+dew_raster = { path = "../crates/raster" }
+dew_window = { path = "../crates/window" }
 
 # THE DATAMODEL SURFACE, from Roblox's own API dump.
 #

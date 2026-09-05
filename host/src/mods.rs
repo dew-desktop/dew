@@ -26,7 +26,7 @@ use crate::datamodel;
 use crate::manifest::{Manifest, Runtime};
 use crate::services::{self, Clock, SharedClock};
 use crate::surface::Declared;
-use aether_runtime::{modules, Session, Vm};
+use dew_runtime::{modules, Session, Vm};
 use mlua::prelude::*;
 use std::path::{Path, PathBuf};
 
@@ -192,7 +192,7 @@ pub fn load(
     //      else. Two roots rather than one: a mod requiring a sibling mod's files
     //      is not a thing this platform supports, and the resolver is where that
     //      is enforced rather than checked for later.
-    let caps = aether_runtime::Capabilities {
+    let caps = dew_runtime::Capabilities {
         require_roots: vec![dir.to_path_buf(), aether_root.to_path_buf()],
         // A mod's `print` is the author's own debugging and goes to the console
         // the host was launched from.
@@ -508,9 +508,9 @@ mod tests {
         /// same dependency for the same reason.
         fn load_aether(&self) -> Result<Mod, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-            let root = aether_runtime::installed_package("aether")
+            let root = dew_runtime::installed_package("aether")
                 .expect("no installed aether -- run `pesde install` at the repository root");
-            let vide = aether_runtime::installed_package("vide")
+            let vide = dew_runtime::installed_package("vide")
                 .expect("no installed vide -- run `pesde install` at the repository root");
             let mut aliases = std::collections::HashMap::new();
             aliases.insert("aether".to_string(), root.join("src"));
