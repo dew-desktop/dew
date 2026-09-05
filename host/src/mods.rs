@@ -100,6 +100,73 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
     }
 }
 
+/// Install `game`, for vide's truthiness gate and for nothing else.
+///
+/// # What this is
+///
+/// `game = true`. A boolean. Not a DataModel, not a service locator, not a tree,
+/// and not something any Aether code path reads.
+///
+/// # Why anything named `game` exists on this host at all
+///
+/// vide ships twenty-three modules and seven of them open with one line:
+///
+/// ```luau
+/// local typeof = game and typeof or require "../test/mock".typeof
+/// ```
+///
+/// `game` is NOT one of the four names vide declares its host boundary in --
+/// those are `typeof`, `Instance`, `Enum` and `Color3`, and Dew installed all
+/// four long before this. It is the CONDITION those names are reached through,
+/// and it is read for truthiness alone. With `game` nil the expression never
+/// evaluates the real `typeof` however real it is: it evaluates the fallback, and
+/// the fallback is a require of `test/mock`, which the wally and pesde artifacts
+/// do not ship. Measured on this host in milestone 2's sprint 8: `create`,
+/// `apply`, `defaults`, `mount`, `cleanup`, `changed` and `lib` all failed to
+/// require, with `Instance` present. Aether's DataModel host takes four of those
+/// straight from vide, so without this line it has nothing to take.
+///
+/// It is a gate in a dependency neither this repository nor Aether's can edit.
+///
+/// # Why `true` and not something that looks more like a DataModel
+///
+/// Because every property a bigger `game` could have is one somebody would come
+/// to depend on, and ADR-001's 2026-09-04 amendment draws the bound in as many
+/// words: not a DataModel, not a service locator, and not reachable by any Aether
+/// code path. A boolean satisfies the gate and satisfies nothing else.
+///
+/// It also FAILS LOUDLY in the one direction worth failing loudly in. `typeof`
+/// answers `"boolean"`, so the vendor test this project spent four days
+/// unpicking -- `typeof(game) == "Instance"` -- still answers false here, which
+/// is the truth: Dew is not Roblox. And anything reaching for `game:GetService`
+/// gets "attempt to index boolean", at the call site, naming the line. A table
+/// with a `GetService` returning nil would be a service locator that answers
+/// every question with silence, which is the shape of failure this project keeps
+/// finding rather than a new one.
+///
+/// vide's own `lib.luau` is the demonstration: it reads
+/// `game and game:GetService("RunService").Heartbeat`, so a truthy `game` makes
+/// it error at load rather than quietly wire a frame source to nothing. Aether's
+/// `VideCore` assembles vide from its modules and never requires `lib.luau`,
+/// which is why that error is a property of this design rather than a bug in it.
+///
+/// # Why here and not beside `Instance`
+///
+/// `Instance` and the vocabulary are installed for every guest because they are
+/// the language of the platform: a guest has them on Roblox and on Dew alike, and
+/// an application that had to be handed them would not be the application that
+/// runs on both. This is not that. It is a gate ONE DEPENDENCY OF ONE RUNTIME
+/// reads, so it is installed for that runtime, at the point where that runtime's
+/// ceremony begins, and a `runtime = "datamodel"` mod never sees it.
+///
+/// That scoping is the whole safeguard. `game` was load-bearing for four days
+/// because one line in ADR-001 made it the conformance test; if anything other
+/// than vide's gate starts reading it, that is a regression of the amendment and
+/// not a convenience.
+fn install_gate(lua: &Lua) -> LuaResult<()> {
+    lua.globals().set("game", true)
+}
+
 pub fn load(
     dir: &Path,
     aether_root: &Path,
@@ -165,26 +232,33 @@ pub fn load(
     let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
     services::install(vm.lua(), &clock).map_err(|e| format!("{}: {e}", manifest.id))?;
 
+    //      AND THE VALUE VOCABULARY, FOR BOTH RUNTIMES SINCE SPRINT 6. `UDim2`,
+    //      `Color3`, `Enum` and the rest are the language of the platform on the
+    //      same terms as `Instance`, and this line used to be in the DataModel arm
+    //      alone because a PARTIAL host vocabulary is worse than none: Aether
+    //      publishes its own with `if rawget(g, name) == nil` -- first writer wins
+    //      -- so Dew's five types did not merge with Aether's eleven, they BLOCKED
+    //      them, and `Color3.fromHex` going missing stopped all three mods.
+    //
+    //      WHAT MADE IT SAFE IS NOT THAT THE CONFLICT WAS RESOLVED, IT IS THAT THE
+    //      SECOND WRITER LEFT. Under Aether's DataModel host `InstallVocabulary`
+    //      is `function() end` -- what a host says when the environment already
+    //      supplies the vocabulary, exactly as on Roblox -- so nothing publishes a
+    //      second one and there is nothing to win a race against. The other half
+    //      is that the host's `available()` probe REQUIRES the vocabulary to be
+    //      here: with these names missing the DataModel host is not selected at
+    //      all, so this call is not an optimisation, it is the precondition.
+    //
+    //      Which is why the gap had to close first, in `vocabulary.rs`: whatever
+    //      is absent here is now absent everywhere, and it surfaces as a nil index
+    //      in a component rather than as anything naming this decision.
+    datamodel::install_vocabulary(vm.lua()).map_err(|e| format!("{}: {e}", manifest.id))?;
+
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     // 3 ── whatever the declared runtime needs in place BEFORE the mod's own
     //      module is loaded. Both arms below produce something step 6 mounts
     //      with, and neither runs a line of the mod.
-    //
-    //      `Instance` ONLY FOR AN AETHER MOD, NOT THE VOCABULARY. Aether carries
-    //      its own `UDim2`, `Color3` and the rest for off-engine hosts and
-    //      publishes them with `if rawget(g, name) == nil` -- first writer wins --
-    //      so a partial host vocabulary does not merge with Aether's, it blocks
-    //      it. Installing the five host types for an Aether mod took
-    //      `Color3.fromHex` away and all three mods stopped loading, in either
-    //      order. `datamodel::install_vocabulary` says what closing that costs;
-    //      it is the change where Aether consumes the host's vocabulary rather
-    //      than carrying one, and it retires `Headless.luau` at the same time.
-    //
-    //      A DATAMODEL MOD HAS NO SUCH CONFLICT and needs the vocabulary to write
-    //      a single line, so it gets it. That the two arms differ here is not an
-    //      inconsistency to tidy away later: it is the whole reason the runtime is
-    //      declared rather than sniffed.
     enum Ceremony {
         /// Aether's desktop host table, ready to `Mount` through.
         Aether(LuaTable),
@@ -198,32 +272,27 @@ pub fn load(
         //       reactive scope and opening a session are identical for every
         //       off-engine host, so they live in Aether where the CLI gets them
         //       too.
+        //
+        //       AND `game`, WHICH IS ONE LINE AND OWES AN EXPLANATION LONGER THAN
+        //       ITSELF. See `install_gate` below: it is here rather than beside
+        //       `Instance` because it is not part of the language of the platform,
+        //       it is a gate ONE DEPENDENCY OF THIS RUNTIME reads, and a DataModel
+        //       mod -- which has no vide -- must not be given it.
         Runtime::Aether => {
+            install_gate(vm.lua()).map_err(|e| format!("{}: {e}", manifest.id))?;
             let desktop: LuaTable =
                 modules::load_entry(&vm, &aether_root.join("src/host/Desktop.luau"))
                     .and_then(|f| f.call(()))
                     .map_err(|e| format!("{}: loading Aether's desktop host: {e}", manifest.id))?;
             Ceremony::Aether(desktop)
         }
-        // 3b ── no framework: the vocabulary, and a root to parent into.
+        // 3b ── no framework: just a root to parent into.
         //
         //       `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS ARM. A
         //       DataModel mod is handed the root it parents into, and `DewRoot`
-        //       names it. It needs no vide, so it is not the arm any `game` would
-        //       be for.
-        //
-        //       THE COMMENT HERE HAS BEEN WRONG TWICE AND IS NOW SCOPED TO THIS
-        //       ARM SO IT CANNOT BE AGAIN. It said the name "arrives in sprint 9",
-        //       which was the old numbering; it then said `game` was DROPPED from
-        //       step F because it was never a capability but a sentinel two
-        //       consumers used as a proxy for "are these four globals real", and
-        //       Dew installs all four. That was right about Aether and had never
-        //       been measured of vide -- whose seven host modules read
-        //       `game and typeof or require "../test/mock".typeof`, so `game` is
-        //       the GATE the four names are reached through rather than one of
-        //       them. `game` came back into scope on 2026-09-04 for that consumer
-        //       alone, as sprint 6's item 0a. The roadmap's "Why `game` was
-        //       dropped from step F, and why it came back" carries both halves.
+        //       names it. It needs no vide, so it is not the arm the gate above is
+        //       for and it does not get one -- which is the whole of what keeps
+        //       `game` from becoming a sentinel a second time.
         //
         //       A `ScreenGui` because that is what a Roblox application expects
         //       to find above its tree, so the same mod has a chance of running
@@ -236,7 +305,6 @@ pub fn load(
         //       the same argument that keeps `dew` off the globals table — what a
         //       mod is GIVEN is visible at its own call site.
         Runtime::DataModel => {
-            datamodel::install_vocabulary(vm.lua()).map_err(|e| format!("{}: {e}", manifest.id))?;
             let root = dom
                 .lock()
                 .expect("dom")
@@ -300,10 +368,10 @@ pub fn load(
             // `Host.Environment` is where its text metrics and frame clock came
             // from, so the pair distinguishes every branch that exists.
             //
-            // A LINE RATHER THAN AN ASSERTION, because the truthful answer on Dew
-            // today is `LuauDataModel/Luau` and the reasons are measured in
-            // milestone 2 sprint 8's record. Failing here would refuse to run
-            // three mods that work, over a claim no code in this file makes.
+            // A LINE RATHER THAN AN ASSERTION, because it reports rather than
+            // requires: which host a guest framework resolves is the framework's
+            // decision, and a mod that draws correctly through the other one is
+            // not a mod this file should refuse to run.
             let host_tbl: Option<LuaTable> = result.get("Host").ok();
             let (host_name, environment) = host_tbl
                 .map(|h| {
@@ -314,8 +382,39 @@ pub fn load(
                     )
                 })
                 .unwrap_or_else(|| ("?".into(), "?".into()));
+
+            // AND WHAT IT BUILT WITH, WHICH IS A SECOND QUESTION AND THE ONE THIS
+            // HOST CAN ANSWER FOR ITSELF.
+            //
+            // The name above is the framework's own account of its decision, and
+            // sprint 6 measured it being TRUE AND NOT ENOUGH: with Aether's
+            // `Deps.luau` picking its vide by `typeof(game) == "Instance"`,
+            // independently of `Host.detect()`, this line read
+            // `DataModel (Dew services)` over a tree of the test double's mock
+            // instances. Every mod rendered, every suite passed, and the one thing
+            // the sprint existed to change had not changed.
+            //
+            // A tree root that borrows as an `InstanceRef` is a node in THIS
+            // host's arena -- a handle this process issued, holding an id into a
+            // `Dom` this file created. Nothing the guest can construct passes it,
+            // and the test double's mocks are Luau tables, so the two answers
+            // cannot be confused. It is the difference between asking the guest
+            // what it did and reading what arrived.
+            let built = match result.get::<LuaValue>("Tree") {
+                Ok(LuaValue::UserData(ud)) => match ud.borrow::<datamodel::InstanceRef>() {
+                    Ok(node) => match node.class_name() {
+                        Some(class) => format!("a {class} in this host's DataModel"),
+                        None => "a destroyed instance".to_string(),
+                    },
+                    Err(_) => "userdata this host did not issue".to_string(),
+                },
+                Ok(LuaValue::Table(_)) => "a Luau table, not this host's DataModel".to_string(),
+                _ => "nothing this host recognises".to_string(),
+            };
+
             println!(
-                "[dew] {}: mounted through Aether's {host_name} host ({environment} services)",
+                "[dew] {}: mounted through Aether's {host_name} host ({environment} services), \
+                 built {built}",
                 manifest.id
             );
 
@@ -331,7 +430,8 @@ pub fn load(
         //      back. Handing a root over and then reading a returned tree would
         //      be two answers to the same question.
         Ceremony::DataModel { root } => {
-            let handle = datamodel::handle(&dom, root);
+            let handle = datamodel::handle(vm.lua(), &dom, root)
+                .map_err(|e| format!("{}: {e}", manifest.id))?;
             mount
                 .call::<()>((dew, handle))
                 .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
@@ -397,6 +497,25 @@ mod tests {
             // require root, and pointing it at the mod's own directory keeps this
             // test from depending on an install having been run.
             load(&self.0, &self.0, &Default::default(), &state)
+        }
+
+        /// The same fixture, loaded against the INSTALLED Aether and vide.
+        ///
+        /// This one does depend on `pesde install` having run, which the loader
+        /// above deliberately does not -- and it has to: what it is testing is
+        /// the framework's own behaviour on this host, so there is nothing to
+        /// stand in for the framework. `crates/runtime`'s parity tests take the
+        /// same dependency for the same reason.
+        fn load_aether(&self) -> Result<Mod, String> {
+            let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+            let root = aether_runtime::installed_package("aether")
+                .expect("no installed aether -- run `pesde install` at the repository root");
+            let vide = aether_runtime::installed_package("vide")
+                .expect("no installed vide -- run `pesde install` at the repository root");
+            let mut aliases = std::collections::HashMap::new();
+            aliases.insert("aether".to_string(), root.join("src"));
+            aliases.insert("vide".to_string(), vide.join("src"));
+            load(&self.0, &root, &aliases, &state)
         }
     }
 
@@ -629,6 +748,184 @@ mod tests {
             .eval()
             .expect("eval");
         assert!(got);
+    }
+
+    /// An Aether mod that leaves the one node it built where the host can read
+    /// it back. Deliberately minimal: what is under test is the seam, not a
+    /// widget.
+    ///
+    /// `_G` IS THE FIXTURE'S OWN DOING, not a hole in the loader. Each mod gets
+    /// its own VM, this one is built and dropped inside a single test, and the
+    /// alternative -- teaching `load` to hand back the tree -- would be
+    /// production code shaped by a test. `Desktop.Mount` does return it, and
+    /// `mods.rs` reads it for the mount line; what it does not do is keep it.
+    const AETHER_MOD: &str = r##"
+        local Aether = require("@aether/api")
+        local create = Aether.create
+
+        return {
+            id = "plain",
+            size = { width = 100, height = 60 },
+            mount = function(dew)
+                local node = create "Frame" {
+                    Name = "Body",
+                    Size = UDim2.new(0.5, 4, 0.25, -2),
+                    BackgroundColor3 = Color3.fromHex("#336699"),
+                }
+                _G.__dew_test_tree = node
+                --- READ BACK HERE AND NOT LATER, because `Live.Session` commits a
+                --- layout pass before `Desktop.Mount` returns and `Host.SetBounds`
+                --- overwrites `Size` with the solved rectangle. That is the solver
+                --- doing its job; it is also the only window in which the AUTHORED
+                --- value is still the stored one.
+                _G.__dew_test_size = node.Size
+                return node
+            end,
+        }
+    "##;
+
+    #[test]
+    fn an_aether_mod_mounts_through_the_datamodel_host() {
+        // THE COMPLETION TEST OF STEP G, AS A TEST RATHER THAN AS A LOG LINE.
+        //
+        // `Host.Name` alone is not enough and this project has the measurement:
+        // with Aether's `Deps.luau` choosing its vide by `typeof(game)`,
+        // independently of `Host.detect()`, the framework reported `DataModel`
+        // over a tree of the test double's mock instances. Both halves are
+        // asserted here for that reason -- which host was resolved, AND that what
+        // it built is in this host's own arena.
+        let fixture = Fixture::new(
+            "aetherhost",
+            r#"{ "id": "plain", "runtime": "aether" }"#,
+            AETHER_MOD,
+        );
+        let loaded = fixture.load_aether().expect("the mod loads");
+        assert_eq!(loaded.mounted.runtime(), Runtime::Aether);
+
+        // WHICH HOST THE FRAMEWORK RESOLVED, asked of the framework in the mod's
+        // own VM. `Host.detect` is memoised per process, so this is the decision
+        // the mount above was made under rather than a fresh one.
+        let (host_name, environment): (String, String) = loaded
+            .vm
+            .lua()
+            .load(
+                r#"
+                local host = require("@aether/api").Host.detect()
+                return host.Name, host.Environment
+            "#,
+            )
+            .eval()
+            .expect("asking the framework which host it chose");
+        assert_eq!(
+            host_name, "DataModel",
+            "the test double is still on the path"
+        );
+        assert_eq!(environment, "Dew");
+
+        // AND THAT IT BUILT WITH IT. The pair is the point: the name above was
+        // true and insufficient once already.
+        let built_here: bool = loaded
+            .vm
+            .lua()
+            .load(r#"return typeof(_G.__dew_test_tree) == "Instance""#)
+            .eval()
+            .expect("reading the built node back");
+        assert!(built_here, "the framework built with something else");
+
+        let globals = loaded.vm.lua().globals();
+        // The gate, and what it is allowed to be. A boolean satisfies vide and
+        // satisfies nothing else; `typeof(game) == "Instance"` -- the vendor test
+        // this replaced -- still correctly answers false.
+        let gate: LuaValue = globals.get("game").expect("game");
+        assert!(
+            matches!(gate, LuaValue::Boolean(true)),
+            "`game` must be a truthy value that is not a DataModel, got {gate:?}"
+        );
+    }
+
+    #[test]
+    fn a_udim2_this_host_built_survives_aether_create() {
+        // VERIFIED RATHER THAN ASSUMED, and it is the reason this was deferred
+        // through the whole of milestone 1: Aether's own vocabulary is Luau
+        // TABLES that its `create` consumes, and this host's are USERDATA. The
+        // worry was that substituting one for the other was the hard part.
+        //
+        // It is not, and the reason is worth stating because it retires the
+        // worry rather than confirming it: under the DataModel host `create` is
+        // vide's own, vide's `create` writes properties onto instances the
+        // environment made, and this host's instances take this host's userdata.
+        // There was never a translation step on that path -- only on the test
+        // double's, which builds Luau tables and therefore needs Luau values.
+        //
+        // ALL FOUR NUMBERS, AND A NEGATIVE OFFSET. `as_f32` once refused an
+        // integer here, so every literal offset in every UDim2 was zero and no
+        // test noticed, because none read one back.
+        let fixture = Fixture::new(
+            "aethervalues",
+            r#"{ "id": "plain", "runtime": "aether" }"#,
+            AETHER_MOD,
+        );
+        let loaded = fixture.load_aether().expect("the mod loads");
+
+        let survived: bool = loaded
+            .vm
+            .lua()
+            .load(
+                r##"
+                local node = _G.__dew_test_tree
+                local size = _G.__dew_test_size
+                return typeof(node) == "Instance"
+                    and node.ClassName == "Frame"
+                    and node.Name == "Body"
+                    and typeof(size) == "UDim2"
+                    and size.X.Scale == 0.5 and size.X.Offset == 4
+                    and size.Y.Scale == 0.25 and size.Y.Offset == -2
+                    and node.BackgroundColor3 == Color3.fromHex("#336699")
+            "##,
+            )
+            .eval()
+            .expect("reading the built node back");
+        assert!(
+            survived,
+            "a value this host built did not survive Aether's create"
+        );
+
+        // AND LAYOUT RAN WITHOUT EATING ITS OWN INPUT, which is the other half and
+        // is the bug this sprint actually found.
+        //
+        // `Live.Session` commits a layout pass during the mount, and the framework
+        // reports the solved rectangle through `Host.SetBounds`. That used to
+        // write it into `Position` and `Size` -- the properties the solver READS
+        // -- so every frame it added the parent's offset to an offset it had
+        // already made absolute. On `mods/timetracker` a label walked 286 pixels
+        // right per frame and the widget repainted 305 times a second doing
+        // nothing. It passed every test in both repositories, because nothing
+        // off-engine had ever driven that host before.
+        //
+        // BOTH HALVES, because either alone is satisfied by something broken. A
+        // rectangle with area says layout ran; the authored `Size` still reading
+        // `(0.5, 4, 0.25, -2)` says it ran without overwriting what it was
+        // solving from.
+        let (w, h, intact): (f32, f32, bool) = loaded
+            .vm
+            .lua()
+            .load(
+                r##"
+                local node = _G.__dew_test_tree
+                local host = require("@aether/api").Host.detect()
+                local _, _, w, h = host.Scene.Bounds(node)
+                local size = node.Size
+                return w, h, size.X.Scale == 0.5 and size.X.Offset == 4
+                    and size.Y.Scale == 0.25 and size.Y.Offset == -2
+            "##,
+            )
+            .eval()
+            .expect("reading the solved rectangle back");
+        assert!(w > 0.0 && h > 0.0, "layout produced no rectangle: {w}x{h}");
+        assert!(
+            intact,
+            "the layout pass overwrote the authored Size it solves from"
+        );
     }
 
     #[test]

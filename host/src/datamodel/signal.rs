@@ -328,7 +328,7 @@ pub fn leaving(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
         if !alive(dom, node) {
             continue;
         }
-        let value = handle(dom, node).into_lua(lua)?;
+        let value = handle(lua, dom, node)?.into_lua(lua)?;
         for ancestor in &uphill {
             if alive(dom, *ancestor) {
                 fire(
@@ -341,7 +341,7 @@ pub fn leaving(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
         }
     }
     if alive(dom, parent) && alive(dom, id) {
-        let value = handle(dom, id).into_lua(lua)?;
+        let value = handle(lua, dom, id)?.into_lua(lua)?;
         fire(dom, parent, &Kind::ChildRemoved, &[value]);
     }
     Ok(())
@@ -354,7 +354,7 @@ pub fn arrived(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
         return Ok(());
     };
     if alive(dom, parent) && alive(dom, id) {
-        let value = handle(dom, id).into_lua(lua)?;
+        let value = handle(lua, dom, id)?.into_lua(lua)?;
         fire(dom, parent, &Kind::ChildAdded, &[value]);
     }
     let uphill = ancestors(dom, id);
@@ -362,7 +362,7 @@ pub fn arrived(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
         if !alive(dom, node) {
             continue;
         }
-        let value = handle(dom, node).into_lua(lua)?;
+        let value = handle(lua, dom, node)?.into_lua(lua)?;
         for ancestor in &uphill {
             if alive(dom, *ancestor) {
                 fire(

@@ -24,7 +24,7 @@ lib = "scripts/init.luau"
 # says. A stale checkout is a mod mounting against a framework nobody edited.
 [dependencies]
 vide = { wally = "centau/vide", version = "^0.4.0" }
-aether = { repo = "project-aether-ui/aether", rev = "76f29ee42f7bfb95c8fe157941a8e28633bf5b6e" }
+aether = { repo = "project-aether-ui/aether", rev = "3ebb707f016edb698ad3ea3c5f9ca1247a1d760e" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"

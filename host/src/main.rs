@@ -459,9 +459,10 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .lock()
         .expect("dom")
         .insert("ScreenGui".into(), "DewRoot".into());
+    let root_handle = datamodel::handle(vm.lua(), &dom, root).map_err(|e| e.to_string())?;
     vm.lua()
         .globals()
-        .set("DewRoot", datamodel::handle(&dom, root))
+        .set("DewRoot", root_handle)
         .map_err(|e| e.to_string())?;
 
     let source =

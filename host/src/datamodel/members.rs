@@ -319,7 +319,7 @@ fn ancestors(dom: &super::Dom, id: usize) -> Vec<usize> {
 /// entire reason `FindFirstChild` is spelled differently from `.Child`.
 fn found(lua: &Lua, this: &InstanceRef, id: Option<usize>) -> LuaResult<LuaValue> {
     match id {
-        Some(id) => handle(&this.dom, id).into_lua(lua),
+        Some(id) => handle(lua, &this.dom, id)?.into_lua(lua),
         None => Ok(LuaValue::Nil),
     }
 }
@@ -409,9 +409,14 @@ pub fn lookup(
             if dom.node(this.id).is_none() {
                 return Err(dead());
             }
+            // THE LOCK GOES FIRST. `handle` takes the same `Mutex` to prune
+            // destroyed ids and it is not reentrant, so the ids come out and the
+            // guard goes before any handle is built.
+            let children = dom.children(this.id);
+            drop(dom);
             let out = lua.create_table()?;
-            for (i, child) in dom.children(this.id).into_iter().enumerate() {
-                out.set(i + 1, handle(&this.dom, child))?;
+            for (i, child) in children.into_iter().enumerate() {
+                out.set(i + 1, handle(lua, &this.dom, child)?)?;
             }
             Ok(out)
         })?,
@@ -420,9 +425,11 @@ pub fn lookup(
             if dom.node(this.id).is_none() {
                 return Err(dead());
             }
+            let all = descendants(&dom, this.id);
+            drop(dom);
             let out = lua.create_table()?;
-            for (i, node) in descendants(&dom, this.id).into_iter().enumerate() {
-                out.set(i + 1, handle(&this.dom, node))?;
+            for (i, node) in all.into_iter().enumerate() {
+                out.set(i + 1, handle(lua, &this.dom, node)?)?;
             }
             Ok(out)
         })?,
@@ -440,6 +447,8 @@ pub fn lookup(
                 let hit = pool
                     .into_iter()
                     .find(|c| dom.name_of(*c).as_deref() == Some(name.as_str()));
+                // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+                drop(dom);
                 found(lua, &this, hit)
             },
         )?,
@@ -453,6 +462,8 @@ pub fn lookup(
                     .children(this.id)
                     .into_iter()
                     .find(|c| dom.class_of(*c).as_deref() == Some(class.as_str()));
+                // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+                drop(dom);
                 found(lua, &this, hit)
             })?
         }
@@ -470,6 +481,8 @@ pub fn lookup(
                 let hit = pool
                     .into_iter()
                     .find(|c| dom.class_of(*c).is_some_and(|k| class_is_a(&k, &class)));
+                // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+                drop(dom);
                 found(lua, &this, hit)
             },
         )?,
@@ -482,6 +495,8 @@ pub fn lookup(
                 let hit = descendants(&dom, this.id)
                     .into_iter()
                     .find(|c| dom.name_of(*c).as_deref() == Some(name.as_str()));
+                // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+                drop(dom);
                 found(lua, &this, hit)
             })?
         }
@@ -493,6 +508,8 @@ pub fn lookup(
             let hit = ancestors(&dom, this.id)
                 .into_iter()
                 .find(|a| dom.name_of(*a).as_deref() == Some(name.as_str()));
+            // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+            drop(dom);
             found(lua, &this, hit)
         })?,
         "FindFirstAncestorOfClass" => {
@@ -504,6 +521,8 @@ pub fn lookup(
                 let hit = ancestors(&dom, this.id)
                     .into_iter()
                     .find(|a| dom.class_of(*a).as_deref() == Some(class.as_str()));
+                // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+                drop(dom);
                 found(lua, &this, hit)
             })?
         }
@@ -516,6 +535,8 @@ pub fn lookup(
                 let hit = ancestors(&dom, this.id)
                     .into_iter()
                     .find(|a| dom.class_of(*a).is_some_and(|k| class_is_a(&k, &class)));
+                // THE LOCK GOES FIRST, for `handle`'s sake. See `GetChildren`.
+                drop(dom);
                 found(lua, &this, hit)
             })?
         }

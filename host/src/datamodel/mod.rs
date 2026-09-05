@@ -105,6 +105,14 @@ pub struct Dom {
     /// from another. It also makes the decoded cache die with the mod, which is
     /// what a `Destroy` of the last node holding an image should cost.
     pub assets: crate::assets::Assets,
+    /// Ids whose slot has been emptied and whose guest handle can be forgotten.
+    ///
+    /// A LIST RATHER THAN A CALL, because [`Dom::destroy`] has no `&Lua` and the
+    /// handle cache is a Lua table. [`handle`] drains this before it answers, so
+    /// the cache is pruned by the next thing that needs it. Bounded by the nodes
+    /// destroyed since the last handle was asked for, and the whole VM goes when
+    /// the mod does.
+    released: Vec<usize>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -118,6 +126,7 @@ impl Default for Dom {
             handlers: Vec::new(),
             dirty: true,
             assets: crate::assets::Assets::default(),
+            released: Vec::new(),
         }
     }
 }
@@ -311,6 +320,10 @@ impl Dom {
                     *slot = None;
                 }
             }
+            // AND ITS GUEST HANDLE, once something with a `&Lua` comes past.
+            // Ids are never recycled -- `insert` pushes -- so a cache entry that
+            // outlives this by a moment cannot come to mean a different instance.
+            self.released.push(current);
             stack.extend(node.children);
         }
         self.dirty = true;
@@ -355,6 +368,21 @@ pub(crate) fn dead_instance() -> LuaError {
 pub struct InstanceRef {
     dom: SharedDom,
     id: usize,
+}
+
+impl InstanceRef {
+    /// The class of the node this handle points at, or `None` once it is
+    /// destroyed.
+    ///
+    /// FOR THE HOST TO REPORT WHAT A GUEST BUILT, and it exists because "which
+    /// host did the framework resolve" and "what did the framework build with"
+    /// turned out to be two questions. A guest framework can report the first
+    /// truthfully and still be assembling a tree out of something else entirely;
+    /// this is the only side of that pair the HOST can answer for itself, because
+    /// a handle it did not issue cannot be borrowed as one of these.
+    pub fn class_name(&self) -> Option<String> {
+        self.dom.lock().ok()?.class_of(self.id)
+    }
 }
 
 /// Look up a property on a class or any of its ancestors.
@@ -413,9 +441,17 @@ pub(crate) fn number(value: &LuaValue) -> Option<f64> {
 
 /// A whole number of pixels, refusing a fraction rather than truncating.
 ///
-/// `Offset`, `ZIndex` and `LayoutOrder` are integers in the engine. Truncating
-/// 10.7 to 10 produces a UI that is subtly wrong everywhere and blames nobody, so
-/// this asks instead.
+/// `ZIndex` and `LayoutOrder` are integers in the engine. Truncating 10.7 to 10
+/// produces a UI that is subtly wrong everywhere and blames nobody, so this asks
+/// instead.
+///
+/// THIS USED TO GUARD THE VOCABULARY CONSTRUCTORS TOO, AND IT WAS WRONG THERE.
+/// See [`pixel_i32`]: the engine accepts a fraction in `UDim.new` and truncates
+/// it, so refusing one is a divergence rather than a stricter reading. What is
+/// left here is the PROPERTY path -- writing an `Int32`-typed member -- and
+/// whether the engine coerces or refuses there has NOT been measured, so it is
+/// deliberately left alone. Two different questions that happened to share a
+/// function.
 pub(crate) fn whole_i32(value: f64, what: &str) -> LuaResult<i32> {
     if value.fract() != 0.0 {
         return Err(LuaError::runtime(format!(
@@ -423,6 +459,48 @@ pub(crate) fn whole_i32(value: f64, what: &str) -> LuaResult<i32> {
         )));
     }
     Ok(value as i32)
+}
+
+/// A `UDim` offset, truncated towards zero the way the engine truncates it.
+///
+/// # Why this is not [`whole_i32`], which is what it was until sprint 6
+///
+/// `UDim.Offset` is an `i32`, and the rule above read that as "a fraction is a
+/// mistake worth reporting". The engine reads it as "a fraction is a number that
+/// has to become an `i32`", and converts. Measured against lune's implementation
+/// of the datatype, which is built on the same `rbx_types` this host is and is
+/// what every one of Aether's suites is calibrated against:
+///
+/// ```text
+/// UDim2.fromOffset(0, 8.7138671875).Y.Offset  ->   8
+/// UDim.new(0, -2.5).Offset                    ->  -2
+/// ```
+///
+/// Truncation towards zero, which is what `as i32` does.
+///
+/// # What refusing cost
+///
+/// A whole class of correct program. The fraction that found this was
+/// `8.7138671875`, and it came from a TEXT MEASUREMENT -- the height of one line
+/// in the face that will draw it -- travelling through Aether's layout solver
+/// into `Host.SetBounds`. Text metrics are fractional by nature, so a host that
+/// refuses a fractional offset cannot be told the result of laying out text; the
+/// mod that hit it renders in Roblox and could not mount here.
+///
+/// The original argument is not wrong about authors, and it is not what this
+/// function is for: it was written about a guest typing `10.7` into a literal,
+/// and it was applied to every number that reaches a constructor including the
+/// ones a solver computed. A host is entitled to be stricter than the engine
+/// about very little, and ADR-001 sets the bar exactly here -- either the same
+/// code runs on both, or the DataModel is not faithful yet.
+///
+/// # What is not fixed by this
+///
+/// The offset a guest reads back is still an integer, because it always was, so
+/// a fractional offset does not round-trip on this host or on the engine. This
+/// changes where that is discovered, not whether it is true.
+pub(crate) fn pixel_i32(value: f64) -> i32 {
+    value as i32
 }
 
 /// Turn a Lua value into a `Variant` of the declared type, or say why not.
@@ -743,14 +821,19 @@ impl UserData for InstanceRef {
                 "ClassName" => return lua.create_string(&node.class)?.into_lua(lua),
                 "Name" => return lua.create_string(&node.name)?.into_lua(lua),
                 "Parent" => {
-                    return match node.parent {
-                        Some(parent) => InstanceRef {
-                            dom: this.dom.clone(),
-                            id: parent,
-                        }
-                        .into_lua(lua),
+                    // THROUGH THE CACHE, so `child.Parent` read twice is one
+                    // object. See `handle` for why that has to be true.
+                    //
+                    // AND THE LOCK GOES FIRST, exactly as the child-name arm
+                    // below does it: `handle` takes the same `Mutex` to prune
+                    // destroyed ids, and this one is not reentrant. Reading the
+                    // id out and dropping the guard is the whole of it.
+                    let parent = node.parent;
+                    drop(dom);
+                    return match parent {
+                        Some(parent) => handle(lua, &this.dom, parent)?.into_lua(lua),
                         None => Ok(LuaValue::Nil),
-                    }
+                    };
                 }
                 _ => {}
             }
@@ -805,7 +888,7 @@ impl UserData for InstanceRef {
                     // is something the guest may immediately call back into, and
                     // this `Mutex` is not reentrant.
                     drop(dom);
-                    return handle(&this.dom, child).into_lua(lua);
+                    return handle(lua, &this.dom, child)?.into_lua(lua);
                 }
                 return Err(LuaError::runtime(format!(
                     "{} is not a valid member of {}",
@@ -1010,16 +1093,77 @@ impl UserData for InstanceRef {
     }
 }
 
-/// A guest-facing handle onto an instance the HOST made.
+/// Where the one-userdata-per-instance table lives in a VM's registry.
+const HANDLES: &str = "dew.datamodel.handles";
+
+/// The guest-facing handle onto an instance, and the SAME one every time.
 ///
-/// The renderer needs a root to lay out against and a guest needs something to
-/// parent into. Both want the same handle, and it is not `Instance.new`'s job to
-/// hand out one for a node the host created.
-pub fn handle(dom: &SharedDom, id: usize) -> InstanceRef {
-    InstanceRef {
+/// # Why this is a cache and not a constructor
+///
+/// It was a constructor: every read of `Parent`, every `GetChildren`, every
+/// `FindFirstChild` built a fresh userdata around the same arena id. `__eq`
+/// made `a == b` answer true, so nothing looked wrong -- and Luau indexes a
+/// table by RAW identity, never through `__eq`, so `t[a]` and `t[b]` were two
+/// different keys.
+///
+/// In the engine an Instance is a reference with one identity, and a guest
+/// memoising anything per node relies on that. Aether does, in the place where
+/// it costs the most: `Live.luau` assigns each node a stable display id through
+/// a weak-keyed table, so a fresh handle per frame meant every node was a NEW
+/// node every frame, the delta reported the entire tree as changed, and a static
+/// widget repainted at the full frame rate. Measured at `painted 827` against
+/// `827 fps` on an idle calculator -- the exact shape of regression `--stats`
+/// exists to catch, and it was invisible to all 268 tests and to the eye.
+///
+/// Nothing about that is Aether's mistake to fix. `t[instance] = x` is ordinary
+/// Luau against a DataModel, and a host on which it silently fails to memoise is
+/// a host the standard's own pass-or-fail is about.
+///
+/// # Strong, and pruned rather than weak
+///
+/// Weak values would collect a handle nothing else holds, and what holds these
+/// BETWEEN frames is a weak table on the guest's side -- so the identity would
+/// survive a garbage collection only by luck, which is worse than not surviving
+/// it at all: a repaint storm that appears under memory pressure is one nobody
+/// reproduces. The entry lives as long as the instance instead, and `destroy`
+/// records the ids to forget.
+///
+/// ONE DOM PER VM, which is what lets this key by id alone. `install` is called
+/// once per guest, `mods.rs` builds one `Dom` per mod, and two guests sharing a
+/// tree is the thing that isolation forbids in the first place.
+pub fn handle(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<LuaAnyUserData> {
+    let cache: LuaTable = match lua.named_registry_value::<LuaValue>(HANDLES)? {
+        LuaValue::Table(existing) => existing,
+        _ => {
+            let fresh = lua.create_table()?;
+            lua.set_named_registry_value(HANDLES, &fresh)?;
+            fresh
+        }
+    };
+
+    // Destroyed nodes first, so a handle is never handed out for a slot the
+    // arena has emptied and then re-answered from the cache.
+    // NIL THE KEY, NEVER `raw_remove`. The ids are integers, so `raw_remove`
+    // takes the `table.remove` path and SHIFTS every entry above it down one --
+    // which does not empty a slot, it renumbers the whole cache, and the next
+    // `Instance.new` is answered with somebody else's handle. It presented as
+    // `available()` passing in `Host.detect` and failing one call later inside
+    // `DataModel.new`, which is a fine description of a cache that answers a
+    // question with the previous question's answer.
+    let released = std::mem::take(&mut dom.lock().expect("dom").released);
+    for gone in released {
+        cache.raw_set(gone, LuaValue::Nil)?;
+    }
+
+    if let Ok(LuaValue::UserData(existing)) = cache.raw_get::<LuaValue>(id) {
+        return Ok(existing);
+    }
+    let made = lua.create_userdata(InstanceRef {
         dom: dom.clone(),
         id,
-    }
+    })?;
+    cache.raw_set(id, &made)?;
+    Ok(made)
 }
 
 /// Install `Instance` into a guest VM.
@@ -1029,26 +1173,43 @@ pub fn handle(dom: &SharedDom, id: usize) -> InstanceRef {
 /// DataModel is not a capability: it is the language of the platform, present for
 /// every guest on both hosts, and an application that had to be handed it would
 /// not be the same application that runs on Roblox.
-/// Install `UDim2`, `Color3`, `Vector2`, `UDim` and `Rect`.
+/// Install the value vocabulary: `UDim`, `UDim2`, `Vector2`, `Color3`, `Rect`,
+/// `Font`, the two sequence types and their keypoints, `Enum`, and `Content`.
 ///
-/// SEPARATE FROM `install`, AND NOT CALLED FOR AN AETHER MOD YET. Aether carries
-/// its own vocabulary for off-engine hosts, and `Headless.InstallVocabulary`
-/// publishes it with `if rawget(g, name) == nil` -- first writer wins. So a
-/// partial host vocabulary does not merge with Aether's, it BLOCKS it: installing
-/// these into a mod VM took `Color3.fromHex` away and all three mods stopped
-/// loading, whichever order the two ran in.
+/// SEPARATE FROM `install`, AND CALLED FOR BOTH RUNTIMES SINCE SPRINT 6. It was
+/// called for a DataModel mod only, and the reason is worth keeping because it is
+/// the shape of the trap rather than a fact about a past release: Aether carries
+/// its own vocabulary for off-engine hosts and publishes it with
+/// `if rawget(g, name) == nil` -- FIRST WRITER WINS. So a partial host vocabulary
+/// does not merge with Aether's, it BLOCKS it. Installing five types into an
+/// Aether mod VM took `Color3.fromHex` away and all three mods stopped loading,
+/// whichever order the two ran in.
 ///
-/// Closing the gap is not a matter of adding `fromHex`. Aether's values are Luau
-/// tables its own `create` consumes, and these are userdata; substituting one for
-/// the other is the change where Aether starts consuming the host's vocabulary
-/// instead of carrying its own, which is the same change that retires
-/// `Headless.luau`.
+/// TWO THINGS CHANGED, AND ONLY TOGETHER ARE THEY ENOUGH.
 ///
-/// Until then this is the language for a guest whose host IS the whole story --
-/// the tests below, and `dew run` for a raw Luau application when it exists. On
-/// Roblox `InstallVocabulary` is already a no-op because the engine provides the
-/// vocabulary; on Dew it should be a no-op for the same reason, and that is the
-/// end state this is waiting for rather than working around.
+/// The gap closed. `vocabulary.rs` now answers every one of the eleven names
+/// Aether's `Host.Vocabulary` declares, `fromHex` and `fromHSV` included, so
+/// there is no member for a first writer to take away.
+///
+/// And the second writer left. Under Aether's DataModel host `InstallVocabulary`
+/// is `function() end`, which is what a host says when the environment already
+/// supplies the vocabulary -- it is the same line on Roblox and for the same
+/// reason. Nothing publishes a second vocabulary, so nothing races.
+///
+/// THIS IS NOT OPTIONAL FOR AN AETHER MOD, WHICH IS THE PART WORTH KNOWING. The
+/// DataModel host's `available()` probe asks the environment for `UDim`, `UDim2`,
+/// `Vector2`, `Color3`, `Rect` and `Enum` before it will consent to drive
+/// anything, and refuses a host that lacks one. So on a VM where this was not
+/// called, Aether does not fall back to a lesser vocabulary -- it selects the
+/// Luau test double instead, silently, and draws a correct-looking widget through
+/// it. A missing name here does not surface here.
+///
+/// The prediction this replaces was that closing the gap would mean substituting
+/// Aether's Luau tables for this host's userdata inside its own `create`, and
+/// that turned out to be a thing that did not need doing: on the DataModel host
+/// `create` is vide's, `create` writes properties onto real instances, and this
+/// host's instances take this host's userdata. There was no substitution because
+/// there were never two vocabularies on that path -- only on the test double's.
 pub fn install_vocabulary(lua: &Lua) -> LuaResult<()> {
     vocabulary::install(lua)?;
     enums::install(lua)?;
@@ -1060,7 +1221,7 @@ pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
     let shared = dom.clone();
     instance.set(
         "new",
-        lua.create_function(move |_, class: String| {
+        lua.create_function(move |lua, class: String| {
             if !class_exists(&class) {
                 return Err(LuaError::runtime(format!(
                     "{class} is not a valid class name"
@@ -1070,10 +1231,7 @@ pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
                 .lock()
                 .expect("dom")
                 .insert(class.clone(), class.clone());
-            Ok(InstanceRef {
-                dom: shared.clone(),
-                id,
-            })
+            handle(lua, &shared, id)
         })?,
     )?;
     lua.globals().set("Instance", instance)?;
@@ -1591,5 +1749,22 @@ mod tests {
         )
         .expect("eval");
         assert!(got);
+    }
+    #[test]
+    fn zz_probe_handle_identity() {
+        let got: bool = eval(
+            r#"
+            local parent = Instance.new("Frame")
+            local child = Instance.new("Frame")
+            child.Parent = parent
+            local a = parent:GetChildren()[1]
+            local b = parent:GetChildren()[1]
+            local t = {}
+            t[a] = 1
+            return rawequal(a, b) and t[b] == 1
+        "#,
+        )
+        .expect("eval");
+        assert!(got, "two reads of one instance are not the same table key");
     }
 }

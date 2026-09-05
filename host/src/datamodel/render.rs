@@ -551,7 +551,10 @@ mod tests {
             .expect("dom")
             .insert("Folder".into(), "Root".into());
         lua.globals()
-            .set("root", crate::datamodel::handle(&dom, root))
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
             .expect("root");
         lua.load(src).exec().expect("guest");
         frame_of(&dom, root, width, height)
@@ -587,7 +590,10 @@ mod tests {
             guard.insert("Folder".into(), "Root".into())
         };
         lua.globals()
-            .set("root", crate::datamodel::handle(&dom, root))
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
             .expect("root");
         lua.load(src).exec().expect("guest");
         let frame = frame_of(&dom, root, width, height);
@@ -1123,7 +1129,10 @@ mod tests {
             .expect("dom")
             .insert("Folder".into(), "Root".into());
         lua.globals()
-            .set("root", crate::datamodel::handle(&dom, root))
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
             .expect("root");
         lua.load(
             r#"

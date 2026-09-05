@@ -659,7 +659,9 @@ mod tests {
                 .lock()
                 .expect("dom")
                 .insert("ScreenGui".into(), "DewRoot".into());
-            lua.globals().set("root", handle(&dom, root)).expect("root");
+            lua.globals()
+                .set("root", handle(&lua, &dom, root).expect("root handle"))
+                .expect("root");
             // A TABLE THE HANDLERS WRITE INTO. Counting in Luau rather than in
             // Rust keeps the assertion on the guest's side of the boundary, which
             // is where the behaviour is observed.

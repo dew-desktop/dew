@@ -5,22 +5,22 @@ name = "dew/app"
 version = "0.0.1"
 target = "roblox"
 
-[graph."spektr/aether@0.0.0-f95cc16407b5acc8935f6f498aecf6566d243164 roblox"]
-direct = ["aether", { repo = "https://github.com/project-aether-ui/aether", rev = "76f29ee42f7bfb95c8fe157941a8e28633bf5b6e" }, "standard"]
+[graph."spektr/aether@0.0.0-b7fd2916bfd7390537cb2f9d962ae8a52b38c190 roblox"]
+direct = ["aether", { repo = "https://github.com/project-aether-ui/aether", rev = "3ebb707f016edb698ad3ea3c5f9ca1247a1d760e" }, "standard"]
 
-[graph."spektr/aether@0.0.0-f95cc16407b5acc8935f6f498aecf6566d243164 roblox".dependencies]
+[graph."spektr/aether@0.0.0-b7fd2916bfd7390537cb2f9d962ae8a52b38c190 roblox".dependencies]
 vide = ["wally#centau/vide@0.4.1 roblox", "standard"]
 Virtual = ["spektr/virtual@0.0.0-b956a128e07be89ff24225f8870a06741c79a993 roblox", "standard"]
 
-[graph."spektr/aether@0.0.0-f95cc16407b5acc8935f6f498aecf6566d243164 roblox".pkg_ref]
+[graph."spektr/aether@0.0.0-b7fd2916bfd7390537cb2f9d962ae8a52b38c190 roblox".pkg_ref]
 ref_ty = "git"
 repo = "https://github.com/project-aether-ui/aether"
-tree_id = "f95cc16407b5acc8935f6f498aecf6566d243164"
+tree_id = "b7fd2916bfd7390537cb2f9d962ae8a52b38c190"
 new_structure = true
 
-[graph."spektr/aether@0.0.0-f95cc16407b5acc8935f6f498aecf6566d243164 roblox".pkg_ref.dependencies]
+[graph."spektr/aether@0.0.0-b7fd2916bfd7390537cb2f9d962ae8a52b38c190 roblox".pkg_ref.dependencies]
 vide = [{ wally = "wally#centau/vide", version = "^0.4.0", index = "https://github.com/UpliftGames/wally-index" }, "standard"]
-Virtual = [{ repo = "https://github.com/project-aether-ui/aether", rev = "76f29ee42f7bfb95c8fe157941a8e28633bf5b6e", path = "packages/virtual" }, "standard"]
+Virtual = [{ repo = "https://github.com/project-aether-ui/aether", rev = "3ebb707f016edb698ad3ea3c5f9ca1247a1d760e", path = "packages/virtual" }, "standard"]
 
 [graph."spektr/virtual@0.0.0-b956a128e07be89ff24225f8870a06741c79a993 roblox".pkg_ref]
 ref_ty = "git"
