@@ -49,18 +49,6 @@ aether_runtime = { path = "../crates/runtime", features = ["raster"] }
 aether_raster = { path = "../crates/raster" }
 aether_window = { path = "../crates/window" }
 
-# WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
-# from a platform -- surfaces and input -- and a tray icon is neither. It presents
-# nothing of Aether and the CLI will never want one, so the mechanism lives here
-# with the product that needs it.
-[target.'cfg(windows)'.dependencies]
-windows = { version = "0.59", features = [
-    "Win32_Foundation",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_UI_Shell",
-    "Win32_System_LibraryLoader",
-] }
-
 # THE DATAMODEL SURFACE, from Roblox's own API dump.
 #
 # rbx_reflection_database is generated from the dump and versioned against a
@@ -91,6 +79,18 @@ mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6.0"
+
+# WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
+# from a platform -- surfaces and input -- and a tray icon is neither. It presents
+# nothing of Aether and the CLI will never want one, so the mechanism lives here
+# with the product that needs it.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_LibraryLoader",
+] }
 
 # `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.
 # Cargo reads profiles only from a root and ignores them in a member, so leaving
