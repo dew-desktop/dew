@@ -33,8 +33,9 @@ use aether_runtime::{Driver, RasterPainter, Rgb};
 #[cfg(windows)]
 use aether_window::{Button, Event, Window};
 use dew_host::datamodel::input;
+use mlua::Lua;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -520,70 +521,381 @@ fn create_renderer(
     }
 }
 
-fn validate_args() -> Result<(), String> {
-    validate_args_iter(std::env::args().skip(1))
+#[derive(Debug, PartialEq, Eq)]
+pub enum Command {
+    Run {
+        mod_id: Option<String>,
+        stats: bool,
+        bench: bool,
+    },
+    Snapshot {
+        target: SnapshotTarget,
+        output: String,
+    },
+    Check {
+        target: Option<String>,
+    },
+    Init {
+        name: String,
+        runtime: manifest::Runtime,
+        surface: String,
+        size: (u32, u32),
+    },
+    Help {
+        subcommand: Option<String>,
+    },
 }
 
-fn validate_args_iter<I: Iterator<Item = String>>(args: I) -> Result<(), String> {
-    validate_args_for_platform(args, cfg!(windows))
+#[derive(Debug, PartialEq, Eq)]
+pub enum SnapshotTarget {
+    Mod(Option<String>),
+    Script {
+        path: String,
+        width: u32,
+        height: u32,
+    },
 }
 
-fn validate_args_for_platform<I: Iterator<Item = String>>(
-    mut args: I,
+pub fn parse_args<I: Iterator<Item = String>>(
+    args: I,
     is_windows: bool,
-) -> Result<(), String> {
-    while let Some(arg) = args.next() {
+) -> Result<Command, String> {
+    let args_vec: Vec<String> = args.collect();
+    if args_vec.is_empty() {
+        if is_windows {
+            return Ok(Command::Run {
+                mod_id: None,
+                stats: false,
+                bench: false,
+            });
+        } else {
+            return Err("no headless action specified (use --script or --snapshot)".to_string());
+        }
+    }
+
+    let first = &args_vec[0];
+    match first.as_str() {
+        "run" => parse_run(&args_vec[1..], is_windows),
+        "snapshot" => parse_snapshot(&args_vec[1..]),
+        "check" => parse_check(&args_vec[1..]),
+        "init" | "scaffold" => parse_init(&args_vec[1..]),
+        "help" | "--help" | "-h" => Ok(Command::Help {
+            subcommand: args_vec.get(1).cloned(),
+        }),
+        _ if first.starts_with("--") => parse_legacy_flags(&args_vec, is_windows),
+        _ => Err(format!("unrecognised argument '{first}'")),
+    }
+}
+
+fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
+    let mut mod_id = None;
+    let mut stats = false;
+    let mut bench = false;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--script" | "--size" | "--snapshot" | "--mod" => {
-                let _ = args.next();
+            "--mod" | "-m" => {
+                let val = iter.next().ok_or("missing value for --mod")?;
+                mod_id = Some(val.clone());
             }
-            "--stats" | "--bench" => {
+            "--stats" => {
+                if !is_windows {
+                    return Err(
+                        "'--stats' is Windows-only: it drives the window loop; use --snapshot to render headlessly".to_string()
+                    );
+                }
+                stats = true;
+            }
+            "--bench" => {
+                if !is_windows {
+                    return Err(
+                        "'--bench' is Windows-only: it drives the window loop; use --snapshot to render headlessly".to_string()
+                    );
+                }
+                bench = true;
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+
+    if !is_windows {
+        return Err(
+            "'run' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                .to_string(),
+        );
+    }
+
+    Ok(Command::Run {
+        mod_id,
+        stats,
+        bench,
+    })
+}
+
+fn parse_snapshot(args: &[String]) -> Result<Command, String> {
+    let mut mod_id = None;
+    let mut script = None;
+    let mut size = (400, 300);
+    let mut output = None;
+    let mut positionals = Vec::new();
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--mod" | "-m" => {
+                let val = iter.next().ok_or("missing value for --mod")?;
+                mod_id = Some(val.clone());
+            }
+            "--script" | "-s" => {
+                let val = iter.next().ok_or("missing value for --script")?;
+                script = Some(val.clone());
+            }
+            "--size" => {
+                let val = iter.next().ok_or("missing value for --size")?;
+                let (w, h) = val
+                    .split_once('x')
+                    .ok_or_else(|| format!("invalid size '{val}', expected WxH (e.g. 400x300)"))?;
+                let width: u32 = w
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("invalid width in '{val}'"))?;
+                let height: u32 = h
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("invalid height in '{val}'"))?;
+                size = (width, height);
+            }
+            "--output" | "--out" | "-o" => {
+                let val = iter.next().ok_or("missing value for --output")?;
+                output = Some(val.clone());
+            }
+            s if !s.starts_with('-') => {
+                positionals.push(s.to_string());
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+
+    if let Some(out) = output {
+        if let Some(pos) = positionals.first() {
+            if mod_id.is_none() && script.is_none() {
+                mod_id = Some(pos.clone());
+            } else {
+                return Err(format!("unexpected argument '{pos}'"));
+            }
+        }
+        output = Some(out);
+    } else {
+        match positionals.len() {
+            0 => {}
+            1 => {
+                let pos = positionals.remove(0);
+                if mod_id.is_some()
+                    || script.is_some()
+                    || pos.ends_with(".png")
+                    || pos.contains('/')
+                    || pos.contains('\\')
+                {
+                    output = Some(pos);
+                } else {
+                    mod_id = Some(pos);
+                }
+            }
+            2 => {
+                if mod_id.is_some() || script.is_some() {
+                    return Err(format!("unexpected argument '{}'", positionals[1]));
+                }
+                mod_id = Some(positionals.remove(0));
+                output = Some(positionals.remove(0));
+            }
+            _ => return Err(format!("unexpected argument '{}'", positionals[2])),
+        }
+    }
+
+    let out = output.unwrap_or_else(|| "dew.png".to_string());
+    let target = if let Some(path) = script {
+        SnapshotTarget::Script {
+            path,
+            width: size.0,
+            height: size.1,
+        }
+    } else {
+        SnapshotTarget::Mod(mod_id)
+    };
+
+    Ok(Command::Snapshot {
+        target,
+        output: out,
+    })
+}
+
+fn parse_check(args: &[String]) -> Result<Command, String> {
+    let mut target = None;
+    for arg in args {
+        if arg.starts_with('-') {
+            return Err(format!("unrecognised argument '{arg}'"));
+        }
+        if target.is_some() {
+            return Err(format!("unexpected argument '{arg}'"));
+        }
+        target = Some(arg.clone());
+    }
+    Ok(Command::Check { target })
+}
+
+fn parse_init(args: &[String]) -> Result<Command, String> {
+    let mut name = None;
+    let mut runtime = manifest::Runtime::DataModel;
+    let mut surface = "window".to_string();
+    let mut size = (340, 180);
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--runtime" | "-r" => {
+                let val = iter.next().ok_or("missing value for --runtime")?;
+                runtime = match val.to_lowercase().as_str() {
+                    "datamodel" => manifest::Runtime::DataModel,
+                    "aether" => manifest::Runtime::Aether,
+                    _ => {
+                        return Err(format!(
+                            "unknown runtime '{val}', expected 'datamodel' or 'aether'"
+                        ))
+                    }
+                };
+            }
+            "--surface" => {
+                let val = iter.next().ok_or("missing value for --surface")?;
+                surface = val.clone();
+            }
+            "--size" => {
+                let val = iter.next().ok_or("missing value for --size")?;
+                let (w, h) = val
+                    .split_once('x')
+                    .ok_or_else(|| format!("invalid size '{val}', expected WxH (e.g. 340x180)"))?;
+                let width: u32 = w
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("invalid width in '{val}'"))?;
+                let height: u32 = h
+                    .trim()
+                    .parse()
+                    .map_err(|_| format!("invalid height in '{val}'"))?;
+                size = (width, height);
+            }
+            s if !s.starts_with('-') => {
+                if name.is_none() {
+                    name = Some(s.to_string());
+                } else {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+
+    let name = name.ok_or("missing mod name for init (usage: dew init <name>)")?;
+    Ok(Command::Init {
+        name,
+        runtime,
+        surface,
+        size,
+    })
+}
+
+fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, String> {
+    let mut iter = args.iter();
+    let mut script = None;
+    let mut size = (400, 300);
+    let mut snapshot_out = None;
+    let mut mod_id = None;
+    let mut stats = false;
+    let mut bench = false;
+
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--script" => {
+                let val = iter.next().ok_or("missing value for --script")?;
+                script = Some(val.clone());
+            }
+            "--size" => {
+                let val = iter.next().ok_or("missing value for --size")?;
+                if let Some((w, h)) = val.split_once('x') {
+                    if let (Ok(w), Ok(h)) = (w.trim().parse(), h.trim().parse()) {
+                        size = (w, h);
+                    }
+                }
+            }
+            "--snapshot" => {
+                let val = iter.next().ok_or("missing value for --snapshot")?;
+                snapshot_out = Some(val.clone());
+            }
+            "--mod" => {
+                let val = iter.next().ok_or("missing value for --mod")?;
+                mod_id = Some(val.clone());
+            }
+            "--stats" => {
                 if !is_windows {
                     return Err(format!(
                         "'{arg}' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
                     ));
                 }
+                stats = true;
             }
-            _ => {
-                return Err(format!("unrecognised argument '{arg}'"));
+            "--bench" => {
+                if !is_windows {
+                    return Err(format!(
+                        "'{arg}' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                    ));
+                }
+                bench = true;
             }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
         }
     }
-    Ok(())
+
+    if let Some(out) = snapshot_out {
+        let target = if let Some(s) = script {
+            SnapshotTarget::Script {
+                path: s,
+                width: size.0,
+                height: size.1,
+            }
+        } else {
+            SnapshotTarget::Mod(mod_id)
+        };
+        Ok(Command::Snapshot {
+            target,
+            output: out,
+        })
+    } else if let Some(s) = script {
+        Ok(Command::Snapshot {
+            target: SnapshotTarget::Script {
+                path: s,
+                width: size.0,
+                height: size.1,
+            },
+            output: "dew.png".to_string(),
+        })
+    } else {
+        if !is_windows {
+            return Err("no headless action specified (use --script or --snapshot)".to_string());
+        }
+        Ok(Command::Run {
+            mod_id,
+            stats,
+            bench,
+        })
+    }
 }
 
-fn run() -> Result<(), String> {
-    validate_args()?;
-
-    println!("💧 Dew starting");
-
-    // `--script` NEVER TOUCHES THE MOD DIRECTORY. A standalone run is a different
-    // product from the applet host and shares only the painter, so it returns
-    // before any of the discovery below.
-    if let Some(script) = flag("--script") {
-        let (width, height) = flag("--size")
-            .and_then(|s| {
-                let (w, h) = s.split_once('x')?;
-                Some((w.trim().parse().ok()?, h.trim().parse().ok()?))
-            })
-            .unwrap_or((400, 300));
-        let (report, mut surface) = run_script(&script, width, height)?;
-        let out = flag("--snapshot").unwrap_or_else(|| "dew.png".to_string());
-        surface
-            .write_png(&out)
-            .map_err(|code| format!("could not write {out}: rasteriser status {code}"))?;
-        println!("[dew] {script}: {report} -> {out} ({width}x{height})");
-        return Ok(());
-    }
-
+fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
     let mods_dir = find_dir("mods").ok_or("could not find a `mods` directory")?;
     let (aether_root, aliases) = aether_aliases()?;
 
     let state = Arc::new(Mutex::new(capabilities::HostState::default()));
 
-    // ONE MOD FOR NOW, and the loop below drives one window. Multi-window
-    // placement is the next piece of Dew's own remit; everything under it is
-    // already per-mod, so adding windows does not reach back into any of it.
     let entries = std::fs::read_dir(&mods_dir).map_err(|e| e.to_string())?;
     let mut loaded = Vec::new();
     for entry in entries.flatten() {
@@ -593,9 +905,6 @@ fn run() -> Result<(), String> {
         }
         match mods::load(&dir, &aether_root, &aliases, &state) {
             Ok(m) => loaded.push(m),
-            // ONE BAD MOD MUST NOT TAKE THE HOST DOWN. It is reported and
-            // skipped, which is the behaviour a platform running third-party
-            // code has to have.
             Err(message) => eprintln!("[dew] skipping mod: {message}"),
         }
     }
@@ -604,65 +913,86 @@ fn run() -> Result<(), String> {
         return Err(format!("no mods loaded from {}", mods_dir.display()));
     }
 
-    // WHICH MOD, CHOSEN RATHER THAN STUMBLED INTO. Without `--mod` this took
-    // whatever `read_dir` happened to return first — which is not alphabetical,
-    // not declared anywhere, and changes with the filesystem. A default that
-    // cannot be predicted is worse than no default, so the available ids are
-    // listed when the requested one is not among them.
-    let wanted = flag("--mod");
-    let active = match &wanted {
+    match wanted {
         Some(id) => loaded
             .into_iter()
-            .find(|m| &m.manifest.id == id)
-            .ok_or_else(|| format!("no mod with id {id:?}"))?,
+            .find(|m| m.manifest.id == id)
+            .ok_or_else(|| format!("no mod with id {id:?}")),
         None => {
             let mut sorted = loaded;
             sorted.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
             let ids: Vec<&str> = sorted.iter().map(|m| m.manifest.id.as_str()).collect();
             println!("[dew] mods: {} (pick one with --mod <id>)", ids.join(", "));
-            sorted.into_iter().next().expect("non-empty")
+            Ok(sorted.into_iter().next().expect("non-empty"))
         }
-    };
+    }
+}
 
-    // DESTRUCTURED, to move the mounted half out by value. `Mod` implements no
-    // `Drop`, so Rust permits this directly — and the alternative that suggests
-    // itself, swapping in a placeholder, has no valid placeholder to swap: a
-    // `Session` is Lua handles, and a zeroed one is undefined behaviour the moment
-    // it is dropped rather than a temporarily invalid value.
-    let mods::Mod {
-        manifest,
-        mut width,
-        mut height,
-        surface,
-        mounted,
-        clock,
-        vm,
-    } = active;
+fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String> {
+    match target {
+        SnapshotTarget::Script {
+            path,
+            width,
+            height,
+        } => {
+            let (report, mut surface) = run_script(&path, width, height)?;
+            surface
+                .write_png(&output)
+                .map_err(|code| format!("could not write {output}: rasteriser status {code}"))?;
+            println!("[dew] {path}: {report} -> {output} ({width}x{height})");
+            Ok(())
+        }
+        SnapshotTarget::Mod(wanted) => {
+            let active = load_active_mod(wanted.as_deref())?;
+            let mods::Mod {
+                manifest,
+                width,
+                height,
+                surface,
+                mounted,
+                clock,
+                vm,
+            } = active;
 
-    // `--snapshot <path>`: draw one frame, write it, exit.
-    //
-    // NEEDS NO WINDOW, which is what makes it useful beyond debugging — it is how
-    // a widget gets diffed in CI, and how anyone without a desktop session can
-    // see what a mod actually renders. It is also the only way to inspect a
-    // widget's appearance from a terminal, which is where most of this gets
-    // written.
-    //
-    // NO SCREEN SIZE HERE. A snapshot renders at the declared size and does not
-    // place anything, so querying the display here would invent a requirement
-    // headless runs do not have.
-    if let Some(path) = flag("--snapshot") {
-        let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
-        renderer.frame(1.0 / 60.0)?;
-        renderer
-            .painter_mut()
-            .write_png(&path)
-            .map_err(|code| format!("could not write {path}: rasteriser status {code}"))?;
-        println!("[dew] wrote {path} ({width}x{height}) for {}", manifest.id);
-        return Ok(());
+            let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
+            renderer.frame(1.0 / 60.0)?;
+            renderer
+                .painter_mut()
+                .write_png(&output)
+                .map_err(|code| format!("could not write {output}: rasteriser status {code}"))?;
+            println!(
+                "[dew] wrote {output} ({width}x{height}) for {}",
+                manifest.id
+            );
+            Ok(())
+        }
+    }
+}
+
+fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (wanted, stats, bench);
+        Err(
+            "'run' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                .to_string(),
+        )
     }
 
     #[cfg(windows)]
     {
+        println!("💧 Dew starting");
+        let active = load_active_mod(wanted)?;
+        let mods::Mod {
+            manifest,
+            mut width,
+            mut height,
+            surface,
+            mounted,
+            clock,
+            vm,
+        } = active;
+
         let screen = aether_window::screen_size();
         if surface.fills_screen() {
             width = screen.0.max(1) as u32;
@@ -674,17 +1004,8 @@ fn run() -> Result<(), String> {
         let resolved = surface.resolve(screen, (width, height));
         let mut window = Window::new(&resolved, width, height)?;
 
-        // The VM outlives the driver that borrows its handles. Named rather than
-        // `_vm`, because "this binding exists to keep something alive" is a fact
-        // about the program, not an unused variable to silence.
         let _keep_alive = vm;
 
-        // THE TRAY OUTLIVES THE LOOP. Dropping it removes the icon, and Windows
-        // leaves a dead one on screen until something repaints — so it is bound here
-        // rather than created inline and dropped immediately.
-        // THE TOOLTIP NAMES THE MOD, not the host. `name` and `description` are the
-        // two manifest fields that exist purely to be shown to a person, and this is
-        // where they are shown; a mod that declares neither falls back to its id.
         let tooltip = if manifest.description.trim().is_empty() {
             format!("Dew — {}", manifest.display_name())
         } else {
@@ -697,7 +1018,6 @@ fn run() -> Result<(), String> {
 
         let _tray = match tray::Tray::new(icon_path().as_deref(), &tooltip) {
             Ok(tray) => Some(tray),
-            // A missing tray is not a reason to refuse to run.
             Err(message) => {
                 eprintln!("[dew] no tray icon: {message}");
                 None
@@ -705,26 +1025,14 @@ fn run() -> Result<(), String> {
         };
 
         let mut last = Instant::now();
-
-        let stats = std::env::args().any(|a| a == "--stats");
-        let bench = std::env::args().any(|a| a == "--bench");
         let (mut frames, mut painted_frames) = (0u32, 0u32);
         let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
         let mut last_report = Instant::now();
 
-        // `poll` returning None is the window closing, which ends the loop -- the
-        // condition IS the shutdown signal rather than a check inside the body.
         while let Some(events) = window.poll() {
             for event in events {
                 match event {
                     Event::PointerMove { x, y } => renderer.moved(x, y)?,
-                    //--- THE BUTTON TRAVELS NOW. These two arms matched
-                    //--- `button: Button::Left` and a third dropped the rest, because
-                    //--- `Driver::pointer` has nowhere to put a button. A DataModel mod
-                    //--- has `MouseButton2Click` and `SecondaryActivated`, so which
-                    //--- button it was is no longer the host's to discard — the Aether
-                    //--- arm ignores everything but the left inside `Renderer`, where
-                    //--- that limitation belongs.
                     Event::PointerDown { x, y, button } => renderer.down(button, x, y)?,
                     Event::PointerUp { x, y, button } => renderer.up(button, x, y)?,
                     Event::Wheel { x, y, delta } => {
@@ -739,9 +1047,6 @@ fn run() -> Result<(), String> {
             let dt = last.elapsed().as_secs_f32();
             last = Instant::now();
 
-            // `--bench`: repaint every frame whether or not anything changed, which
-            // is the load a drag produces. Without it `--stats` measures an idle
-            // screen, where the interesting number is always zero.
             if bench {
                 renderer.invalidate();
             }
@@ -752,19 +1057,12 @@ fn run() -> Result<(), String> {
                 .map_err(|e| format!("while rendering: {e}"))?;
             let t_frame = t0.elapsed();
 
-            // RASTERISE **AND** PRESENT. vello records during paint and rasterises on
-            // demand inside `bgra()`, so this is not the blit — it is most of the
-            // drawing. Timing it as "present" made the blit look like the bottleneck
-            // when the blit is a memcpy.
             let t1 = Instant::now();
             if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
                 window.present(bgra, width, height);
             }
             let t_raster = t1.elapsed();
 
-            // `--stats`: where the frame time actually goes. Reported as a rolling
-            // average rather than per frame, because a per-frame print costs more
-            // than the frame it is measuring.
             if stats {
                 frames += 1;
                 if painted {
@@ -791,8 +1089,6 @@ fn run() -> Result<(), String> {
                 return Ok(());
             }
 
-            // READ EVERY FRAME, because the tray menu can change it between any two.
-            // `None` is uncapped and does not sleep at all.
             if let Some(target) = tray::frame_budget() {
                 let elapsed = last.elapsed();
                 if elapsed < target {
@@ -803,10 +1099,324 @@ fn run() -> Result<(), String> {
 
         Ok(())
     }
+}
 
-    #[cfg(not(windows))]
+fn check_mod_dir(dir: &Path) -> Result<(manifest::Manifest, PathBuf, Vec<String>), String> {
+    let manifest = manifest::Manifest::load(dir)?;
+    let entry = manifest
+        .entry(dir)
+        .ok_or_else(|| format!("{}: no {}.luau or main.luau", dir.display(), manifest.id))?;
+
+    let lua = Lua::new();
+    let src = std::fs::read_to_string(&entry)
+        .map_err(|e| format!("{}: could not read entry file: {e}", entry.display()))?;
+    lua.load(&src)
+        .set_name(entry.file_name().unwrap_or_default().to_string_lossy())
+        .into_function()
+        .map_err(|e| format!("{}: syntax error: {e}", entry.display()))?;
+
+    let mut warnings = manifest.unhonoured();
+    for key in &manifest.unknown {
+        warnings.push(format!("{key:?} is not a field Dew reads, and was ignored"));
+    }
+
+    Ok((manifest, entry, warnings))
+}
+
+fn execute_check(target: Option<String>) -> Result<(), String> {
+    let dirs: Vec<PathBuf> = match target {
+        Some(t) => {
+            let p = PathBuf::from(&t);
+            if p.is_dir() {
+                vec![p]
+            } else if let Some(mods_dir) = find_dir("mods") {
+                let candidate = mods_dir.join(&t);
+                if candidate.is_dir() {
+                    vec![candidate]
+                } else {
+                    return Err(format!(
+                        "no directory or mod found at '{t}' (checked '{}')",
+                        candidate.display()
+                    ));
+                }
+            } else {
+                return Err(format!("no directory or mod found at '{t}'"));
+            }
+        }
+        None => {
+            if Path::new("mod.json").is_file() {
+                vec![PathBuf::from(".")]
+            } else if let Some(mods_dir) = find_dir("mods") {
+                let mut found = Vec::new();
+                for entry in std::fs::read_dir(&mods_dir)
+                    .map_err(|e| e.to_string())?
+                    .flatten()
+                {
+                    if entry.path().is_dir() {
+                        found.push(entry.path());
+                    }
+                }
+                found.sort();
+                found
+            } else {
+                return Err("could not find a `mods` directory or a local `mod.json`".to_string());
+            }
+        }
+    };
+
+    if dirs.is_empty() {
+        return Err("no mods found to check".to_string());
+    }
+
+    let mut failed = 0;
+    for dir in &dirs {
+        match check_mod_dir(dir) {
+            Ok((manifest, entry, warnings)) => {
+                println!(
+                    "[dew] check {}: ok ({}, entry: {})",
+                    manifest.id,
+                    manifest.runtime.name(),
+                    entry.file_name().unwrap_or_default().to_string_lossy()
+                );
+                for warn in warnings {
+                    println!("[dew] {}: warning: {warn}", manifest.id);
+                }
+            }
+            Err(err) => {
+                failed += 1;
+                eprintln!("[dew] check failed: {err}");
+            }
+        }
+    }
+
+    if failed > 0 {
+        Err(format!("{failed} mod(s) failed validation"))
+    } else {
+        Ok(())
+    }
+}
+
+fn execute_init(
+    name: String,
+    runtime: manifest::Runtime,
+    _surface: String,
+    size: (u32, u32),
+) -> Result<(), String> {
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
-        Err("no headless action specified (use --script or --snapshot)".to_string())
+        return Err(format!(
+            "invalid mod name '{name}': use alphanumeric characters, dashes, or underscores"
+        ));
+    }
+
+    let target_dir = if name.contains('/') || name.contains('\\') {
+        PathBuf::from(&name)
+    } else if let Some(mods_dir) = find_dir("mods") {
+        mods_dir.join(&name)
+    } else {
+        PathBuf::from(&name)
+    };
+
+    if target_dir.exists() {
+        return Err(format!(
+            "directory '{}' already exists",
+            target_dir.display()
+        ));
+    }
+
+    std::fs::create_dir_all(&target_dir)
+        .map_err(|e| format!("could not create directory {}: {e}", target_dir.display()))?;
+
+    let display_name = {
+        let mut chars = name.chars();
+        match chars.next() {
+            None => String::new(),
+            Some(f) => f.to_uppercase().collect::<String>() + chars.as_str(),
+        }
+    };
+
+    let mod_json = serde_json::json!({
+        "id": name,
+        "name": display_name,
+        "description": format!("A Dew mod ({})", runtime.name()),
+        "runtime": runtime.name(),
+        "permissions": []
+    });
+
+    let mod_json_str = serde_json::to_string_pretty(&mod_json).map_err(|e| e.to_string())?;
+    let mod_json_path = target_dir.join("mod.json");
+    std::fs::write(&mod_json_path, mod_json_str + "\n")
+        .map_err(|e| format!("could not write {}: {e}", mod_json_path.display()))?;
+
+    let entry_code = match runtime {
+        manifest::Runtime::DataModel => format!(
+            r#"--!strict
+--[[
+	{display_name} -- a Dew mod written against the native DataModel.
+]]
+
+local function mount(_dew: any, root: Instance)
+	local frame = Instance.new("Frame")
+	frame.Name = "Root"
+	frame.Size = UDim2.fromScale(1, 1)
+	frame.BackgroundColor3 = Color3.fromRGB(30, 30, 35)
+	frame.BorderSizePixel = 0
+	frame.Parent = root
+
+	local label = Instance.new("TextLabel")
+	label.Name = "Title"
+	label.Size = UDim2.new(1, 0, 0, 40)
+	label.Position = UDim2.new(0, 0, 0.5, -20)
+	label.BackgroundTransparency = 1
+	label.Text = "Hello from {display_name}!"
+	label.TextColor3 = Color3.fromRGB(240, 240, 245)
+	label.TextSize = 20
+	label.Parent = frame
+end
+
+return {{
+	size = {{ width = {}, height = {} }},
+	mount = mount,
+}}
+"#,
+            size.0, size.1
+        ),
+        manifest::Runtime::Aether => format!(
+            r#"--!strict
+--[[
+	{display_name} -- a Dew mod written against Aether.
+]]
+
+local aether = require("@aether/api")
+
+local function mount(_dew: any)
+	return aether.create("Frame", {{
+		Name = "Root",
+		Size = aether.UDim2.fromScale(1, 1),
+		BackgroundColor3 = aether.Color3.fromRGB(30, 30, 35),
+		BorderSizePixel = 0,
+	}}, {{
+		aether.create("TextLabel", {{
+			Name = "Title",
+			Size = aether.UDim2.new(1, 0, 0, 40),
+			Position = aether.UDim2.new(0, 0, 0.5, -20),
+			BackgroundTransparency = 1,
+			Text = "Hello from {display_name}!",
+			TextColor3 = aether.Color3.fromRGB(240, 240, 245),
+			TextSize = 20,
+		}}),
+	}})
+end
+
+return {{
+	size = {{ width = {}, height = {} }},
+	mount = mount,
+}}
+"#,
+            size.0, size.1
+        ),
+    };
+
+    let entry_path = target_dir.join(format!("{name}.luau"));
+    std::fs::write(&entry_path, entry_code)
+        .map_err(|e| format!("could not write {}: {e}", entry_path.display()))?;
+
+    println!("[dew] initialized mod '{name}' in {}", target_dir.display());
+    println!("[dew] check with: dew check {name}");
+    println!("[dew] snapshot with: dew snapshot --mod {name}");
+    Ok(())
+}
+
+fn execute_help(subcommand: Option<String>) {
+    match subcommand.as_deref() {
+        Some("snapshot") => {
+            println!("Usage: dew snapshot [OPTIONS] [OUTPUT]");
+            println!();
+            println!("Render a mod or standalone script headlessly to a PNG image.");
+            println!();
+            println!("Options:");
+            println!("  --mod, -m <ID>        Mod to snapshot (defaults to first available mod)");
+            println!("  --script, -s <PATH>   Standalone script to execute and snapshot");
+            println!("  --size <WxH>          Dimensions for standalone script (default: 400x300)");
+            println!("  --output, -o <PATH>   Output PNG path (default: dew.png)");
+        }
+        Some("run") => {
+            println!("Usage: dew run [OPTIONS]");
+            println!();
+            println!("Run a mod interactively in a desktop window (Windows only).");
+            println!();
+            println!("Options:");
+            println!("  --mod, -m <ID>        Mod to run (defaults to first available mod)");
+            println!("  --stats               Print FPS and render timings");
+            println!("  --bench               Run in benchmark mode");
+        }
+        Some("check") => {
+            println!("Usage: dew check [TARGET]");
+            println!();
+            println!("Validate a mod's manifest (mod.json), entrypoint, and Luau syntax.");
+            println!();
+            println!("Arguments:");
+            println!(
+                "  [TARGET]              Mod ID or path to directory (checks all mods if omitted)"
+            );
+        }
+        Some("init") | Some("scaffold") => {
+            println!("Usage: dew init <NAME> [OPTIONS]");
+            println!();
+            println!("Scaffold a new Dew mod with a valid manifest and working entrypoint.");
+            println!();
+            println!("Arguments:");
+            println!("  <NAME>                Mod identifier and directory name");
+            println!();
+            println!("Options:");
+            println!("  --runtime, -r <RT>    Runtime: 'datamodel' (default) or 'aether'");
+            println!("  --surface <SURFACE>   Surface: 'window' (default), 'overlay', or 'widget'");
+            println!("  --size <WxH>          Default size (default: 340x180)");
+        }
+        _ => {
+            println!("Dew -- desktop applet platform over a native DataModel");
+            println!();
+            println!("Usage: dew <COMMAND> [OPTIONS]");
+            println!();
+            println!("Commands:");
+            println!("  run        Run a mod interactively in a desktop window (Windows only)");
+            println!("  snapshot   Render a mod or script headlessly to a PNG image");
+            println!("  check      Validate mod manifest, entrypoint, and Luau syntax");
+            println!("  init       Scaffold a new mod with manifest and entrypoint");
+            println!("  help       Show help for a command");
+            println!();
+            println!("Legacy Flags:");
+            println!("  --snapshot <PATH>     Render default or --mod to PNG");
+            println!("  --mod <ID>            Select mod for run or snapshot");
+            println!("  --script <PATH>       Run standalone script");
+            println!("  --size <WxH>          Dimensions for standalone script");
+            println!("  --stats, --bench      Performance monitoring (Windows only)");
+        }
+    }
+}
+
+fn run() -> Result<(), String> {
+    let cmd = parse_args(std::env::args().skip(1), cfg!(windows))?;
+    match cmd {
+        Command::Run {
+            mod_id,
+            stats,
+            bench,
+        } => execute_run(mod_id.as_deref(), stats, bench),
+        Command::Snapshot { target, output } => execute_snapshot(target, output),
+        Command::Check { target } => execute_check(target),
+        Command::Init {
+            name,
+            runtime,
+            surface,
+            size,
+        } => execute_init(name, runtime, surface, size),
+        Command::Help { subcommand } => {
+            execute_help(subcommand);
+            Ok(())
+        }
     }
 }
 
@@ -819,17 +1429,6 @@ fn icon_path() -> Option<PathBuf> {
         PathBuf::from("../host/assets/dew.ico"),
     ];
     candidates.into_iter().find(|p| p.is_file())
-}
-
-/// `--name value`, or None.
-fn flag(name: &str) -> Option<String> {
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        if arg == name {
-            return args.next();
-        }
-    }
-    None
 }
 
 /// What every mod VM is given: Aether's source, and the aliases that name it.
@@ -885,6 +1484,17 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn validate_args_iter<I: Iterator<Item = String>>(args: I) -> Result<(), String> {
+        validate_args_for_platform(args, cfg!(windows))
+    }
+
+    fn validate_args_for_platform<I: Iterator<Item = String>>(
+        args: I,
+        is_windows: bool,
+    ) -> Result<(), String> {
+        parse_args(args, is_windows).map(|_| ())
+    }
 
     #[test]
     fn valid_arguments_are_accepted() {
@@ -943,6 +1553,190 @@ mod tests {
                     "'{flag}' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
                 )
             );
+        }
+    }
+
+    #[test]
+    fn subcommand_snapshot_mod() {
+        let args = ["snapshot", "--mod", "nameplate", "out.png"]
+            .iter()
+            .map(|s| s.to_string());
+        let cmd = parse_args(args, true).unwrap();
+        match cmd {
+            Command::Snapshot { target, output } => {
+                assert_eq!(output, "out.png");
+                match target {
+                    SnapshotTarget::Mod(Some(id)) => assert_eq!(id, "nameplate"),
+                    _ => panic!("expected Mod target with nameplate"),
+                }
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_snapshot_positional_mod() {
+        let args = ["snapshot", "nameplate", "out.png"]
+            .iter()
+            .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Snapshot { target, output } => {
+                assert_eq!(output, "out.png");
+                match target {
+                    SnapshotTarget::Mod(Some(id)) => assert_eq!(id, "nameplate"),
+                    _ => panic!("expected Mod target with nameplate"),
+                }
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_snapshot_default() {
+        let args = ["snapshot", "out.png"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Snapshot { target, output } => {
+                assert_eq!(output, "out.png");
+                match target {
+                    SnapshotTarget::Mod(None) => {}
+                    _ => panic!("expected default Mod target"),
+                }
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_snapshot_script() {
+        let args = [
+            "snapshot",
+            "--script",
+            "app.luau",
+            "--size",
+            "360x240",
+            "/tmp/app.png",
+        ]
+        .iter()
+        .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Snapshot { target, output } => {
+                assert_eq!(output, "/tmp/app.png");
+                match target {
+                    SnapshotTarget::Script {
+                        path,
+                        width,
+                        height,
+                    } => {
+                        assert_eq!(path, "app.luau");
+                        assert_eq!(width, 360);
+                        assert_eq!(height, 240);
+                    }
+                    _ => panic!("expected Script target"),
+                }
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_run_rejected_off_windows() {
+        let args = ["run"].iter().map(|s| s.to_string());
+        let err = parse_args(args, false).unwrap_err();
+        assert_eq!(
+            err,
+            "'run' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+        );
+    }
+
+    #[test]
+    fn subcommand_run_accepted_on_windows() {
+        let args = ["run", "--mod", "nameplate"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, true).unwrap();
+        match cmd {
+            Command::Run {
+                mod_id,
+                stats,
+                bench,
+            } => {
+                assert_eq!(mod_id.as_deref(), Some("nameplate"));
+                assert!(!stats);
+                assert!(!bench);
+            }
+            _ => panic!("expected Run command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_check() {
+        let args = ["check", "nameplate"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Check { target } => assert_eq!(target.as_deref(), Some("nameplate")),
+            _ => panic!("expected Check command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_init() {
+        let args = [
+            "init",
+            "my_mod",
+            "--runtime",
+            "datamodel",
+            "--size",
+            "400x200",
+        ]
+        .iter()
+        .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Init {
+                name,
+                runtime,
+                surface: _,
+                size,
+            } => {
+                assert_eq!(name, "my_mod");
+                assert_eq!(runtime, manifest::Runtime::DataModel);
+                assert_eq!(size, (400, 200));
+            }
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_scaffold_alias() {
+        let args = ["scaffold", "my_mod"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Init { name, .. } => assert_eq!(name, "my_mod"),
+            _ => panic!("expected Init command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_help() {
+        let args = ["help", "snapshot"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("snapshot")),
+            _ => panic!("expected Help command"),
+        }
+    }
+
+    #[test]
+    fn check_mod_dir_nameplate() {
+        if let Some(mods_dir) = find_dir("mods") {
+            let nameplate = mods_dir.join("nameplate");
+            if nameplate.is_dir() {
+                let (manifest, entry, warnings) = check_mod_dir(&nameplate).unwrap();
+                assert_eq!(manifest.id, "nameplate");
+                assert!(entry.is_file());
+                assert!(warnings.is_empty());
+            }
         }
     }
 }

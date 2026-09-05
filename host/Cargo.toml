@@ -6,10 +6,10 @@ authors = ["Dew Team"]
 edition = "2021"
 license = "GPL-3.0-only"
 
-# `cargo run` with no --bin runs the host. Adding a second binary made that
+# `cargo run` with no --bin runs dew. Adding secondary binaries made that
 # ambiguous and cargo refused, which is correct of cargo and surprising for
 # anyone who had been running the command for weeks.
-default-run = "dew-host"
+default-run = "dew"
 
 # EVERYTHING THAT DRAWS OR EXECUTES IS DEW'S, and lives beside this file.
 #
@@ -30,8 +30,12 @@ name = "dew_host"
 path = "src/lib.rs"
 
 [[bin]]
-name = "dew-host"
+name = "dew"
 path = "src/main.rs"
+
+[[bin]]
+name = "dew-host"
+path = "src/bin/dew_host.rs"
 
 # Hyphenated to match, rather than inheriting datamodel_surface from the file
 # name. It is a developer tool: it prints what the DataModel Standard has to

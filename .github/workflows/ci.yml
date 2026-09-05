@@ -99,13 +99,19 @@ jobs:
       # EVERY MOD, not the first one. A mod that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
       # a broken mod here.
+      # Validate all mod manifests and syntax
+      - run: cargo run --quiet --manifest-path host/Cargo.toml -- check
+
+      # EVERY MOD, not the first one. A mod that fails to load is skipped with a
+      # message and the host carries on, which is right at runtime and would hide
+      # a broken mod here.
       - name: Mount each mod
         shell: bash
         run: |
           for m in mods/*/; do
             id=$(basename "$m")
             echo "--- $id"
-            cargo run --quiet --manifest-path host/Cargo.toml -- --mod "$id" --snapshot "/tmp/$id.png"
+            cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --mod "$id" "/tmp/$id.png"
           done
 
 
@@ -185,26 +191,33 @@ jobs:
 
       - run: cargo test --manifest-path host/Cargo.toml
 
-      # WINDOW-ONLY FLAGS MUST BE REJECTED OFF WINDOWS.
-      # --stats and --bench drive the window loop and have nothing to run on.
-      - name: Assert --stats and --bench are rejected off Windows
+      # WINDOW-ONLY COMMANDS AND FLAGS MUST BE REJECTED OFF WINDOWS.
+      # `run`, `--stats` and `--bench` drive the window loop and have nothing to run on.
+      - name: Assert run, --stats and --bench are rejected off Windows
         shell: bash
         run: |
-          for flag in --stats --bench; do
-            output=$(cargo run --quiet --manifest-path host/Cargo.toml -- "$flag" 2>&1 || true)
+          for cmd in run --stats --bench; do
+            output=$(cargo run --quiet --manifest-path host/Cargo.toml -- "$cmd" 2>&1 || true)
             echo "$output"
             echo "$output" | grep -q "is Windows-only: it drives the window loop; use --snapshot to render headlessly" || {
-              echo "Expected $flag to be rejected as Windows-only, got: $output"
+              echo "Expected $cmd to be rejected as Windows-only, got: $output"
               exit 1
             }
           done
+
+      # VALIDATE MOD MANIFESTS AND LUAU SYNTAX
+      - name: Validate mods with check
+        shell: bash
+        run: |
+          cargo run --quiet --manifest-path host/Cargo.toml -- check
+          cargo run --quiet --manifest-path host/Cargo.toml -- check nameplate
 
       # HEADLESS RENDERING: must produce real PNGs without a display.
       - name: Render standalone script snapshot
         shell: bash
         run: |
           cargo run --quiet --manifest-path host/Cargo.toml -- \
-            --script examples/standalone/app.luau --size 360x220 --snapshot /tmp/standalone.png
+            snapshot --script examples/standalone/app.luau --size 360x220 /tmp/standalone.png
           test -s /tmp/standalone.png || { echo "standalone.png was not created or is empty"; exit 1; }
           echo "Rendered /tmp/standalone.png successfully"
 
@@ -212,7 +225,7 @@ jobs:
       - name: Render named mod snapshot
         shell: bash
         run: |
-          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- --mod nameplate --snapshot /tmp/nameplate.png)
+          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --mod nameplate /tmp/nameplate.png)
           echo "$output"
           echo "$output" | grep -q "wrote /tmp/nameplate.png (340x148) for nameplate" || {
             echo "Expected snapshot of nameplate by name, got: $output"
@@ -224,6 +237,25 @@ jobs:
       - name: Render default mod snapshot
         shell: bash
         run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- --snapshot /tmp/mod.png
+          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot /tmp/mod.png
           test -s /tmp/mod.png || { echo "mod.png was not created or is empty"; exit 1; }
           echo "Rendered /tmp/mod.png successfully"
+
+      # MOD SCAFFOLDING WORKFLOW: init, check, and snapshot
+      - name: Exercise mod scaffolding
+        shell: bash
+        run: |
+          cargo run --quiet --manifest-path host/Cargo.toml -- init test_scaffold --runtime datamodel
+          cargo run --quiet --manifest-path host/Cargo.toml -- check test_scaffold
+          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --mod test_scaffold /tmp/scaffold.png
+          test -s /tmp/scaffold.png || { echo "scaffold.png was not created or is empty"; exit 1; }
+          rm -rf mods/test_scaffold
+          echo "Scaffolded, checked, and rendered test_scaffold mod successfully"
+
+      # BACKWARD COMPATIBILITY: legacy flags without subcommands still work
+      - name: Verify legacy flag compatibility
+        shell: bash
+        run: |
+          cargo run --quiet --manifest-path host/Cargo.toml -- --snapshot /tmp/legacy.png
+          test -s /tmp/legacy.png || { echo "legacy.png was not created or is empty"; exit 1; }
+          echo "Rendered legacy snapshot successfully"
