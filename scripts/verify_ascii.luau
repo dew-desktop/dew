@@ -30,10 +30,11 @@
 	reads them. Pull requests are the third place and are not checkable from here.
 
 	THE CENSUS is the migration, as the allowlist is in `verify_boundaries.luau`.
-	No tracked file is in it: the only entries are private notes under
-	`.artifacts/`, which predate the convention and which CI never sees. A file
-	absent from the census gets no allowance, so every tracked document starts at
-	zero and a new violation fails on the commit that adds it.
+	No tracked file is in it: private notes under `.artifacts/` are excluded
+	entirely because they are gitignored, outside the scope of CONTRIBUTING, and
+	absent in CI. A file absent from the census gets no allowance, so every
+	tracked document starts at zero and a new violation fails on the commit that
+	adds it.
 ]]
 
 local fs = require("@lune/fs")
@@ -51,6 +52,7 @@ local NOT_OURS = {
 	".git",
 	"Cargo.lock",
 	"pesde.lock",
+	".artifacts",
 }
 
 --- BY EXTENSION, NOT BY SNIFFING. A PNG is full of high bytes and is not a
@@ -62,28 +64,14 @@ local NOT_OURS = {
 local TEXT_EXTENSIONS = { "md" }
 local TEXT_NAMES: { string } = {}
 
---- WHAT THE PRIVATE NOTES UNDER `.artifacts/` CARRIED on 2026-09-04. Lower a
---- number when you clean a file; never raise one. Nothing tracked appears here,
---- and nothing tracked should: a tracked document's allowance is zero. An entry
---- whose file is gone or already clean is reported as slack to remove, because
---- an allowance nobody has earned is a hole.
-local CENSUS: { [string]: number } = {
-	[".artifacts/branching_strategy_and_scope_discipline.md"] = 178,
-	[".artifacts/drafts/CONTRIBUTING.md"] = 2,
-	[".artifacts/drafts/README_PUBLIC_LAUNCH.md"] = 16,
-	[".artifacts/drafts/docs/contributing/branching.md"] = 10,
-	[".artifacts/drafts/docs/contributing/guidelines.md"] = 6,
-	[".artifacts/drafts/docs/internals/architecture/mod_ecosystem.md"] = 14,
-	[".artifacts/drafts/docs/internals/architecture/stack.md"] = 7,
-	[".artifacts/drafts/docs/internals/hot_reload/watcher.md"] = 26,
-	[".artifacts/drafts/docs/internals/ipc/protocol.md"] = 52,
-	[".artifacts/drafts/docs/internals/runtime/luau_vm.md"] = 66,
-	[".artifacts/drafts/docs/mods/mod_authoring.md"] = 19,
-	[".artifacts/early_versioning_and_release_policy.md"] = 3,
-	[".artifacts/repo_hygiene_and_release_strategy.md"] = 10,
-	[".artifacts/vision/aether_native_architecture_pivot.md"] = 395,
-	[".artifacts/vision/vision_chat_dump.md"] = 8,
-}
+--- CENSUS holds migration debt for tracked documentation. Lower a number when
+--- you clean a file; never raise one. Every tracked document starts at zero
+--- allowance unless granted an explicit entry here. Private notes under
+--- `.artifacts/` are omitted from the census and excluded from checking because
+--- they are gitignored and CI never sees them. An entry whose file is gone or
+--- already clean is reported as slack to remove, because an allowance nobody
+--- has earned is a hole.
+local CENSUS: { [string]: number } = {}
 
 local function isText(path: string): boolean
 	local name = string.match(path, "([^/]+)$") or path
