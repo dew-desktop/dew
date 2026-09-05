@@ -20,7 +20,7 @@
 
 mod capabilities;
 use dew_host::datamodel;
-mod manifest;
+use dew_host::manifest;
 mod mods;
 mod services;
 mod surface;
@@ -1027,6 +1027,10 @@ fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), Str
         if surface.fills_screen() {
             width = screen.0.max(1) as u32;
             height = screen.1.max(1) as u32;
+        }
+
+        if let mods::Mounted::DataModel { ref dom, .. } = mounted {
+            dom.lock().expect("dom").assets.set_blocking(false);
         }
 
         let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;

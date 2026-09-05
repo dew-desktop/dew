@@ -116,6 +116,10 @@ pub fn build(lua: &Lua, granted: &[Permission], state: &Shared) -> LuaResult<Lua
                 )?;
                 dew.set("audio", audio)?;
             }
+
+            Permission::RbxAssetId => {
+                // Host-level capability for Content resolution; exposes no guest Lua table.
+            }
         }
     }
 

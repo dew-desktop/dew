@@ -77,7 +77,9 @@ rbx_reflection_database = "3"
 # decoded assets would be deciding what a `Content` resolves to, which is the
 # scheme, the permission and the cache, and all three are the host's. So the host
 # turns bytes into pixels and hands the rasteriser pixels.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+sha2 = "0.10"
+ureq = { version = "2.10", default-features = false, features = ["tls"] }
 
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }

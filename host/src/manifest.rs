@@ -15,13 +15,15 @@ use std::path::{Path, PathBuf};
 /// refused rather than ignored: silently dropping one means a mod that asks for
 /// `filesystem` on a host that has never heard of it runs anyway, with the
 /// author believing it was granted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Permission {
     Storage,
     Audio,
     Notifications,
     Clipboard,
+    #[serde(rename = "rbxassetid")]
+    RbxAssetId,
 }
 
 impl Permission {
@@ -31,6 +33,7 @@ impl Permission {
             Permission::Audio => "audio",
             Permission::Notifications => "notifications",
             Permission::Clipboard => "clipboard",
+            Permission::RbxAssetId => "rbxassetid",
         }
     }
 }

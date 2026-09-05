@@ -216,6 +216,19 @@ pub fn load(
     //      with an `Image` property; images arriving later must not become the
     //      way around a rule the requirer already enforces.
     dom.lock().expect("dom").assets.set_root(dir.to_path_buf());
+    dom.lock()
+        .expect("dom")
+        .assets
+        .set_permissions(manifest.permissions.clone());
+    let dom_weak = std::sync::Arc::downgrade(&dom);
+    dom.lock()
+        .expect("dom")
+        .assets
+        .set_dirty_hook(std::sync::Arc::new(move || {
+            if let Some(d) = dom_weak.upgrade() {
+                d.lock().expect("dom").touch();
+            }
+        }));
     datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     //      AND `DewHost`, ON THE SAME TERMS AND FOR THE SAME REASON. Text metrics
@@ -995,5 +1008,102 @@ mod tests {
             message.contains("mount = function(dew, root)"),
             "an author of a DataModel mod must not be shown an Aether signature: {message}"
         );
+    }
+
+    fn test_png() -> Vec<u8> {
+        let mut buffer = std::io::Cursor::new(Vec::new());
+        let img = image::RgbaImage::from_raw(1, 1, vec![50, 100, 150, 255]).expect("1x1");
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut buffer, image::ImageFormat::Png)
+            .expect("encode");
+        buffer.into_inner()
+    }
+
+    #[test]
+    fn a_mod_resolves_an_image_through_rbxassetid_with_grant() {
+        let fixture = Fixture::new(
+            "rbxgrant",
+            r#"{ "id": "plain", "runtime": "datamodel", "permissions": ["rbxassetid"] }"#,
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 100, height = 60 },
+                    mount = function(dew, root)
+                        local img = Instance.new("ImageLabel")
+                        img.Name = "RbxIcon"
+                        img.Size = UDim2.new(1, 0, 1, 0)
+                        img.ImageContent = Content.fromUri("rbxassetid://12345")
+                        img.Parent = root
+                    end,
+                }
+            "#,
+        );
+        let loaded = fixture.load().expect("the mod loads");
+        let Mounted::DataModel { dom, root } = &loaded.mounted else {
+            panic!("expected DataModel");
+        };
+
+        let png_bytes = test_png();
+        let expected_hash = dew_host::assets::hash_bytes(&png_bytes);
+
+        // Supply mock transport
+        dom.lock()
+            .expect("dom")
+            .assets
+            .set_transport(std::sync::Arc::new(dew_host::assets::MockTransport(
+                move |_| Ok(png_bytes.clone()),
+            )));
+
+        let frame = datamodel::render::frame_of(dom, *root, 100.0, 60.0);
+        assert_eq!(frame.nodes.len(), 1);
+        let node_image = frame.nodes[0].image.as_ref().expect("image on node");
+        assert_eq!(node_image.uri, "rbxassetid://12345");
+        let bitmap = node_image.bitmap.as_ref().expect("resolved bitmap");
+        assert_eq!(bitmap.rgba, vec![50, 100, 150, 255]);
+
+        let cache = dom.lock().expect("dom").assets.content_cache();
+        assert_eq!(cache.lock().unwrap().misses(), 1);
+        assert_eq!(cache.lock().unwrap().hits(), 0);
+        assert!(cache.lock().unwrap().contains_hash(&expected_hash));
+    }
+
+    #[test]
+    fn a_mod_is_refused_an_image_through_rbxassetid_without_grant() {
+        let fixture = Fixture::new(
+            "rbxnogrant",
+            r#"{ "id": "plain", "runtime": "datamodel", "permissions": ["storage"] }"#,
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 100, height = 60 },
+                    mount = function(dew, root)
+                        local img = Instance.new("ImageLabel")
+                        img.Name = "RbxIcon"
+                        img.Size = UDim2.new(1, 0, 1, 0)
+                        img.ImageContent = Content.fromUri("rbxassetid://12345")
+                        img.Parent = root
+                    end,
+                }
+            "#,
+        );
+        let loaded = fixture.load().expect("the mod loads");
+        let Mounted::DataModel { dom, root } = &loaded.mounted else {
+            panic!("expected DataModel");
+        };
+
+        // Transport must NEVER be called without grant
+        dom.lock()
+            .expect("dom")
+            .assets
+            .set_transport(std::sync::Arc::new(dew_host::assets::MockTransport(|_| {
+                panic!("transport must not be called when permission is missing");
+            })));
+
+        let frame = datamodel::render::frame_of(dom, *root, 100.0, 60.0);
+        assert_eq!(frame.nodes.len(), 1);
+        let node_image = frame.nodes[0].image.as_ref().expect("image on node");
+        assert_eq!(node_image.uri, "rbxassetid://12345");
+        // Refusal means bitmap is None: draws missing placeholder marker, property keeps value
+        assert!(node_image.bitmap.is_none());
     }
 }

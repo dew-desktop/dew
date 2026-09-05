@@ -21,3 +21,4 @@
 // rather than the rule.
 pub mod assets;
 pub mod datamodel;
+pub mod manifest;
