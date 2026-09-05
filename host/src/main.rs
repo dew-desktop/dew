@@ -24,11 +24,13 @@ mod manifest;
 mod mods;
 mod services;
 mod surface;
+#[cfg(windows)]
 mod tray;
 
 use crate::services::SharedClock;
 use aether_raster::Backend;
 use aether_runtime::{Driver, RasterPainter, Rgb};
+#[cfg(windows)]
 use aether_window::{Button, Event, Window};
 use dew_host::datamodel::input;
 use std::collections::HashMap;
@@ -133,6 +135,7 @@ impl Renderer {
 /// Dew's host depend on the window crate's enum inside the datamodel would put an
 /// Aether type in `dew_host`, which is exactly the boundary ADR-004's checker
 /// counts. It is three lines to translate and the allowlist stays where it is.
+#[cfg(windows)]
 fn button(button: Button) -> input::Button {
     match button {
         Button::Left => input::Button::Left,
@@ -238,6 +241,7 @@ impl Renderer {
     /// window and named the cause: fourteen methods and no events. The signal type
     /// arrived in sprint 8; what was still missing was somewhere to send a
     /// pointer, which is a hit test.
+    #[cfg(windows)]
     fn moved(&mut self, x: f32, y: f32) -> Result<(), String> {
         match self {
             Renderer::Aether { driver, .. } => driver
@@ -274,6 +278,7 @@ impl Renderer {
     /// mod has `MouseButton2Click` and `SecondaryActivated`, so the button now
     /// travels — and the Aether arm keeps ignoring anything but the left, which is
     /// the framework's own limitation and not one to paper over here.
+    #[cfg(windows)]
     fn down(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
         match self {
             Renderer::Aether { driver, .. } => {
@@ -309,6 +314,7 @@ impl Renderer {
     }
 
     /// A button came up.
+    #[cfg(windows)]
     fn up(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
         match self {
             Renderer::Aether { driver, .. } => {
@@ -343,6 +349,7 @@ impl Renderer {
         }
     }
 
+    #[cfg(windows)]
     fn wheel(&mut self, x: f32, y: f32, delta: f32) -> Result<(), String> {
         match self {
             Renderer::Aether { driver, .. } => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
@@ -377,6 +384,7 @@ impl Renderer {
     /// served by accident. Now that a clean tree skips the paint, a window that
     /// was uncovered has to be able to say so -- nothing in the arena changed,
     /// and the pixels still need redrawing.
+    #[cfg(windows)]
     fn invalidate(&mut self) {
         match self {
             Renderer::Aether { driver, .. } => driver.invalidate(),
@@ -480,7 +488,73 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     Ok((format!("{drawn} node(s)"), surface))
 }
 
+fn create_renderer(
+    mounted: mods::Mounted,
+    vm: &aether_runtime::Vm,
+    clock: &SharedClock,
+    surface: &surface::Declared,
+    width: u32,
+    height: u32,
+) -> Result<Renderer, String> {
+    let background = if surface.is_transparent() {
+        None
+    } else {
+        Some(BACKGROUND)
+    };
+    match mounted {
+        mods::Mounted::Aether(session) => Ok(Renderer::Aether {
+            driver: Driver::new(session, painter(width, height)?, background),
+            clock: clock.clone(),
+        }),
+        mods::Mounted::DataModel { dom, root } => Ok(Renderer::DataModel {
+            dom,
+            root,
+            painter: painter(width, height)?,
+            background,
+            width: width as f32,
+            height: height as f32,
+            lua: vm.lua().clone(),
+            pointer: input::Pointer::default(),
+            clock: clock.clone(),
+        }),
+    }
+}
+
+fn validate_args() -> Result<(), String> {
+    validate_args_iter(std::env::args().skip(1))
+}
+
+fn validate_args_iter<I: Iterator<Item = String>>(args: I) -> Result<(), String> {
+    validate_args_for_platform(args, cfg!(windows))
+}
+
+fn validate_args_for_platform<I: Iterator<Item = String>>(
+    mut args: I,
+    is_windows: bool,
+) -> Result<(), String> {
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--script" | "--size" | "--snapshot" | "--mod" => {
+                let _ = args.next();
+            }
+            "--stats" | "--bench" => {
+                if !is_windows {
+                    return Err(format!(
+                        "'{arg}' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                    ));
+                }
+            }
+            _ => {
+                return Err(format!("unrecognised argument '{arg}'"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn run() -> Result<(), String> {
+    validate_args()?;
+
     println!("💧 Dew starting");
 
     // `--script` NEVER TOUCHES THE MOD DIRECTORY. A standalone run is a different
@@ -565,54 +639,6 @@ fn run() -> Result<(), String> {
         vm,
     } = active;
 
-    let screen = aether_window::screen_size();
-    if surface.fills_screen() {
-        width = screen.0.max(1) as u32;
-        height = screen.1.max(1) as u32;
-    }
-
-    // A WIDGET IS CLEARED TO NOTHING, a window to the platform's own background.
-    //
-    // `None` here means the painter clears transparent, so a pixel the tree did
-    // not paint is a pixel the window does not occupy — which is what turns a
-    // rounded card into a rounded WINDOW rather than a rounded shape on a dark
-    // rectangle.
-    let background = if surface.is_transparent() {
-        None
-    } else {
-        Some(BACKGROUND)
-    };
-    // THE BRANCH IS HERE AND NOWHERE ELSE IN THIS FUNCTION. Everything above --
-    // discovery, the manifest, the screen, the surface, the background -- is Dew's
-    // own remit and identical for both runtimes; everything below drives whatever
-    // this produced.
-    let mut renderer = match mounted {
-        mods::Mounted::Aether(session) => Renderer::Aether {
-            driver: Driver::new(session, painter(width, height)?, background),
-            clock: clock.clone(),
-        },
-        //--- SIZED ONCE, at the size the window was opened at. A DataModel tree
-        //--- lays out against the surface it is given, and `Event::Resized` does
-        //--- not change `width` here for the Aether path either -- the window is
-        //--- not resizable yet, and pretending otherwise would put a second
-        //--- untested code path behind a feature that does not exist.
-        mods::Mounted::DataModel { dom, root } => Renderer::DataModel {
-            dom,
-            root,
-            painter: painter(width, height)?,
-            background,
-            width: width as f32,
-            height: height as f32,
-            //--- CLONED BEFORE `vm` IS MOVED INTO `_keep_alive` BELOW. `Lua` is a
-            //--- reference-counted handle onto the VM's state, so this is a second
-            //--- reference and not a second VM — and the handlers this arm fires
-            //--- are functions the guest created in exactly that state.
-            lua: vm.lua().clone(),
-            pointer: input::Pointer::default(),
-            clock: clock.clone(),
-        },
-    };
-
     // `--snapshot <path>`: draw one frame, write it, exit.
     //
     // NEEDS NO WINDOW, which is what makes it useful beyond debugging — it is how
@@ -620,7 +646,12 @@ fn run() -> Result<(), String> {
     // see what a mod actually renders. It is also the only way to inspect a
     // widget's appearance from a terminal, which is where most of this gets
     // written.
+    //
+    // NO SCREEN SIZE HERE. A snapshot renders at the declared size and does not
+    // place anything, so querying the display here would invent a requirement
+    // headless runs do not have.
     if let Some(path) = flag("--snapshot") {
+        let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
         renderer.frame(1.0 / 60.0)?;
         renderer
             .painter_mut()
@@ -630,140 +661,157 @@ fn run() -> Result<(), String> {
         return Ok(());
     }
 
-    let resolved = surface.resolve(screen, (width, height));
-    let mut window = Window::new(&resolved, width, height)?;
-
-    // The VM outlives the driver that borrows its handles. Named rather than
-    // `_vm`, because "this binding exists to keep something alive" is a fact
-    // about the program, not an unused variable to silence.
-    let _keep_alive = vm;
-
-    // THE TRAY OUTLIVES THE LOOP. Dropping it removes the icon, and Windows
-    // leaves a dead one on screen until something repaints — so it is bound here
-    // rather than created inline and dropped immediately.
-    // THE TOOLTIP NAMES THE MOD, not the host. `name` and `description` are the
-    // two manifest fields that exist purely to be shown to a person, and this is
-    // where they are shown; a mod that declares neither falls back to its id.
-    let tooltip = if manifest.description.trim().is_empty() {
-        format!("Dew — {}", manifest.display_name())
-    } else {
-        format!(
-            "Dew — {}: {}",
-            manifest.display_name(),
-            manifest.description
-        )
-    };
-
-    let _tray = match tray::Tray::new(icon_path().as_deref(), &tooltip) {
-        Ok(tray) => Some(tray),
-        // A missing tray is not a reason to refuse to run.
-        Err(message) => {
-            eprintln!("[dew] no tray icon: {message}");
-            None
+    #[cfg(windows)]
+    {
+        let screen = aether_window::screen_size();
+        if surface.fills_screen() {
+            width = screen.0.max(1) as u32;
+            height = screen.1.max(1) as u32;
         }
-    };
 
-    let mut last = Instant::now();
+        let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
 
-    let stats = std::env::args().any(|a| a == "--stats");
-    let bench = std::env::args().any(|a| a == "--bench");
-    let (mut frames, mut painted_frames) = (0u32, 0u32);
-    let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
-    let mut last_report = Instant::now();
+        let resolved = surface.resolve(screen, (width, height));
+        let mut window = Window::new(&resolved, width, height)?;
 
-    // `poll` returning None is the window closing, which ends the loop -- the
-    // condition IS the shutdown signal rather than a check inside the body.
-    while let Some(events) = window.poll() {
-        for event in events {
-            match event {
-                Event::PointerMove { x, y } => renderer.moved(x, y)?,
-                //--- THE BUTTON TRAVELS NOW. These two arms matched
-                //--- `button: Button::Left` and a third dropped the rest, because
-                //--- `Driver::pointer` has nowhere to put a button. A DataModel mod
-                //--- has `MouseButton2Click` and `SecondaryActivated`, so which
-                //--- button it was is no longer the host's to discard — the Aether
-                //--- arm ignores everything but the left inside `Renderer`, where
-                //--- that limitation belongs.
-                Event::PointerDown { x, y, button } => renderer.down(button, x, y)?,
-                Event::PointerUp { x, y, button } => renderer.up(button, x, y)?,
-                Event::Wheel { x, y, delta } => {
-                    renderer.wheel(x, y, delta)?;
+        // The VM outlives the driver that borrows its handles. Named rather than
+        // `_vm`, because "this binding exists to keep something alive" is a fact
+        // about the program, not an unused variable to silence.
+        let _keep_alive = vm;
+
+        // THE TRAY OUTLIVES THE LOOP. Dropping it removes the icon, and Windows
+        // leaves a dead one on screen until something repaints — so it is bound here
+        // rather than created inline and dropped immediately.
+        // THE TOOLTIP NAMES THE MOD, not the host. `name` and `description` are the
+        // two manifest fields that exist purely to be shown to a person, and this is
+        // where they are shown; a mod that declares neither falls back to its id.
+        let tooltip = if manifest.description.trim().is_empty() {
+            format!("Dew — {}", manifest.display_name())
+        } else {
+            format!(
+                "Dew — {}: {}",
+                manifest.display_name(),
+                manifest.description
+            )
+        };
+
+        let _tray = match tray::Tray::new(icon_path().as_deref(), &tooltip) {
+            Ok(tray) => Some(tray),
+            // A missing tray is not a reason to refuse to run.
+            Err(message) => {
+                eprintln!("[dew] no tray icon: {message}");
+                None
+            }
+        };
+
+        let mut last = Instant::now();
+
+        let stats = std::env::args().any(|a| a == "--stats");
+        let bench = std::env::args().any(|a| a == "--bench");
+        let (mut frames, mut painted_frames) = (0u32, 0u32);
+        let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
+        let mut last_report = Instant::now();
+
+        // `poll` returning None is the window closing, which ends the loop -- the
+        // condition IS the shutdown signal rather than a check inside the body.
+        while let Some(events) = window.poll() {
+            for event in events {
+                match event {
+                    Event::PointerMove { x, y } => renderer.moved(x, y)?,
+                    //--- THE BUTTON TRAVELS NOW. These two arms matched
+                    //--- `button: Button::Left` and a third dropped the rest, because
+                    //--- `Driver::pointer` has nowhere to put a button. A DataModel mod
+                    //--- has `MouseButton2Click` and `SecondaryActivated`, so which
+                    //--- button it was is no longer the host's to discard — the Aether
+                    //--- arm ignores everything but the left inside `Renderer`, where
+                    //--- that limitation belongs.
+                    Event::PointerDown { x, y, button } => renderer.down(button, x, y)?,
+                    Event::PointerUp { x, y, button } => renderer.up(button, x, y)?,
+                    Event::Wheel { x, y, delta } => {
+                        renderer.wheel(x, y, delta)?;
+                    }
+                    Event::Resized { .. } | Event::Exposed => renderer.invalidate(),
+                    Event::CloseRequested => return Ok(()),
+                    Event::Char(_) | Event::Key { .. } => {}
                 }
-                Event::Resized { .. } | Event::Exposed => renderer.invalidate(),
-                Event::CloseRequested => return Ok(()),
-                Event::Char(_) | Event::Key { .. } => {}
+            }
+
+            let dt = last.elapsed().as_secs_f32();
+            last = Instant::now();
+
+            // `--bench`: repaint every frame whether or not anything changed, which
+            // is the load a drag produces. Without it `--stats` measures an idle
+            // screen, where the interesting number is always zero.
+            if bench {
+                renderer.invalidate();
+            }
+
+            let t0 = Instant::now();
+            let painted = renderer
+                .frame(dt)
+                .map_err(|e| format!("while rendering: {e}"))?;
+            let t_frame = t0.elapsed();
+
+            // RASTERISE **AND** PRESENT. vello records during paint and rasterises on
+            // demand inside `bgra()`, so this is not the blit — it is most of the
+            // drawing. Timing it as "present" made the blit look like the bottleneck
+            // when the blit is a memcpy.
+            let t1 = Instant::now();
+            if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
+                window.present(bgra, width, height);
+            }
+            let t_raster = t1.elapsed();
+
+            // `--stats`: where the frame time actually goes. Reported as a rolling
+            // average rather than per frame, because a per-frame print costs more
+            // than the frame it is measuring.
+            if stats {
+                frames += 1;
+                if painted {
+                    sum_frame += t_frame;
+                    sum_present += t_raster;
+                    painted_frames += 1;
+                }
+                if last_report.elapsed() >= Duration::from_secs(1) {
+                    let n = painted_frames.max(1);
+                    println!(
+                        "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
+                        sum_frame / n,
+                        sum_present / n
+                    );
+                    frames = 0;
+                    painted_frames = 0;
+                    sum_frame = Duration::ZERO;
+                    sum_present = Duration::ZERO;
+                    last_report = Instant::now();
+                }
+            }
+
+            if tray::exit_requested() {
+                return Ok(());
+            }
+
+            // READ EVERY FRAME, because the tray menu can change it between any two.
+            // `None` is uncapped and does not sleep at all.
+            if let Some(target) = tray::frame_budget() {
+                let elapsed = last.elapsed();
+                if elapsed < target {
+                    std::thread::sleep(target - elapsed);
+                }
             }
         }
 
-        let dt = last.elapsed().as_secs_f32();
-        last = Instant::now();
-
-        // `--bench`: repaint every frame whether or not anything changed, which
-        // is the load a drag produces. Without it `--stats` measures an idle
-        // screen, where the interesting number is always zero.
-        if bench {
-            renderer.invalidate();
-        }
-
-        let t0 = Instant::now();
-        let painted = renderer
-            .frame(dt)
-            .map_err(|e| format!("while rendering: {e}"))?;
-        let t_frame = t0.elapsed();
-
-        // RASTERISE **AND** PRESENT. vello records during paint and rasterises on
-        // demand inside `bgra()`, so this is not the blit — it is most of the
-        // drawing. Timing it as "present" made the blit look like the bottleneck
-        // when the blit is a memcpy.
-        let t1 = Instant::now();
-        if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
-            window.present(bgra, width, height);
-        }
-        let t_raster = t1.elapsed();
-
-        // `--stats`: where the frame time actually goes. Reported as a rolling
-        // average rather than per frame, because a per-frame print costs more
-        // than the frame it is measuring.
-        if stats {
-            frames += 1;
-            if painted {
-                sum_frame += t_frame;
-                sum_present += t_raster;
-                painted_frames += 1;
-            }
-            if last_report.elapsed() >= Duration::from_secs(1) {
-                let n = painted_frames.max(1);
-                println!(
-                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
-                    sum_frame / n,
-                    sum_present / n
-                );
-                frames = 0;
-                painted_frames = 0;
-                sum_frame = Duration::ZERO;
-                sum_present = Duration::ZERO;
-                last_report = Instant::now();
-            }
-        }
-
-        if tray::exit_requested() {
-            return Ok(());
-        }
-
-        // READ EVERY FRAME, because the tray menu can change it between any two.
-        // `None` is uncapped and does not sleep at all.
-        if let Some(target) = tray::frame_budget() {
-            let elapsed = last.elapsed();
-            if elapsed < target {
-                std::thread::sleep(target - elapsed);
-            }
-        }
+        Ok(())
     }
 
-    Ok(())
+    #[cfg(not(windows))]
+    {
+        Err("no headless action specified (use --script or --snapshot)".to_string())
+    }
 }
 
 /// Dew's tray icon, beside the executable or in the source tree.
+#[cfg(windows)]
 fn icon_path() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from("host/assets/dew.ico"),
@@ -830,6 +878,71 @@ fn main() -> ExitCode {
         Err(message) => {
             eprintln!("dew: {message}");
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_arguments_are_accepted() {
+        let args = [
+            "--script",
+            "test.luau",
+            "--size",
+            "400x300",
+            "--snapshot",
+            "out.png",
+            "--mod",
+            "nameplate",
+        ]
+        .iter()
+        .map(|s| s.to_string());
+        assert!(validate_args_iter(args).is_ok());
+    }
+
+    #[test]
+    fn unknown_arguments_are_refused() {
+        let args = ["--unknown-flag"].iter().map(|s| s.to_string());
+        let err = validate_args_iter(args).unwrap_err();
+        assert_eq!(err, "unrecognised argument '--unknown-flag'");
+    }
+
+    #[test]
+    fn stats_and_bench_refused_off_windows() {
+        for flag in ["--stats", "--bench"] {
+            let args = [flag.to_string()].into_iter();
+            let err = validate_args_for_platform(args, false).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "'{flag}' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                )
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn stats_and_bench_are_accepted_on_windows() {
+        let args = ["--stats", "--bench"].into_iter().map(String::from);
+        assert!(validate_args_iter(args).is_ok());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn stats_and_bench_are_refused_on_non_windows_target() {
+        for flag in ["--stats", "--bench"] {
+            let args = [flag.to_string()].into_iter();
+            let err = validate_args_iter(args).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "'{flag}' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                )
+            );
         }
     }
 }

@@ -292,15 +292,6 @@ end
 
 table.sort(outstanding)
 
---- dew-cli does not exist, and Dew does not build without win32: `mod tray;` is
---- unconditional and `tray.rs` uses the `windows` crate unconditionally. Stated
---- rather than checked, because the check is "it compiles on Linux" and that is
---- CI's job on the day there is a Linux job to run it.
-local mainRs = if fs.isFile("host/src/main.rs") then fs.readFile("host/src/main.rs") else ""
-if string.find(mainRs, "\nmod tray;", 1, true) then
-	table.insert(outstanding, "host/src/main.rs -> `mod tray;` is unconditional; no headless build")
-end
-
 print(`boundaries: {#outstanding} known violation(s) still to migrate`)
 for _, entry in ipairs(outstanding) do
 	print(`  DEBT  {entry}`)

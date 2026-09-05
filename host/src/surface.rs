@@ -19,6 +19,7 @@
 //! exactly how `mod.json`'s permissions were decoration before they were
 //! enforced.
 
+#[cfg(windows)]
 use aether_window::Surface;
 use mlua::prelude::*;
 
@@ -134,6 +135,7 @@ impl Declared {
     }
 
     /// Turn the declaration into a concrete surface for a screen of this size.
+    #[cfg(windows)]
     pub fn resolve(&self, screen: (i32, i32), size: (u32, u32)) -> Surface {
         match self {
             Declared::Window { title } => Surface::Window {

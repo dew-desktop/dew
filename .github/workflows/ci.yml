@@ -145,3 +145,85 @@ jobs:
       # --all-targets covers the test builds too. The tray's `WM_COMMAND` cast was
       # only reported there.
       - run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
+
+
+  linux:
+    name: build and render without win32
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve the toolchain pin
+        id: rust
+        shell: bash
+        run: |
+          channel=$(grep -m1 -oE 'channel = "[^"]+"' rust-toolchain.toml | cut -d'"' -f2)
+          test -n "$channel" || { echo "no channel in rust-toolchain.toml"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Rust pinned at $channel"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: host
+
+      # Install Linux pesde binary
+      - name: Install pesde
+        shell: bash
+        run: |
+          url="https://github.com/pesde-pkg/pesde/releases/download/v0.7.3%2Bregistry.0.2.3/pesde-0.7.3-linux-x86_64.zip"
+          curl -sSL "$url" -o pesde.zip
+          unzip -q pesde.zip -d "$RUNNER_TEMP/pesde"
+          chmod +x "$RUNNER_TEMP/pesde/pesde"
+          echo "$RUNNER_TEMP/pesde" >> "$GITHUB_PATH"
+
+      - run: pesde install
+
+      - run: cargo build --manifest-path host/Cargo.toml
+
+      - run: cargo test --manifest-path host/Cargo.toml
+
+      # WINDOW-ONLY FLAGS MUST BE REJECTED OFF WINDOWS.
+      # --stats and --bench drive the window loop and have nothing to run on.
+      - name: Assert --stats and --bench are rejected off Windows
+        shell: bash
+        run: |
+          for flag in --stats --bench; do
+            output=$(cargo run --quiet --manifest-path host/Cargo.toml -- "$flag" 2>&1 || true)
+            echo "$output"
+            echo "$output" | grep -q "is Windows-only: it drives the window loop; use --snapshot to render headlessly" || {
+              echo "Expected $flag to be rejected as Windows-only, got: $output"
+              exit 1
+            }
+          done
+
+      # HEADLESS RENDERING: must produce real PNGs without a display.
+      - name: Render standalone script snapshot
+        shell: bash
+        run: |
+          cargo run --quiet --manifest-path host/Cargo.toml -- \
+            --script examples/standalone/app.luau --size 360x220 --snapshot /tmp/standalone.png
+          test -s /tmp/standalone.png || { echo "standalone.png was not created or is empty"; exit 1; }
+          echo "Rendered /tmp/standalone.png successfully"
+
+      # MOD SELECTION HEADLESS: renders nameplate by name, not whichever sorts first.
+      - name: Render named mod snapshot
+        shell: bash
+        run: |
+          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- --mod nameplate --snapshot /tmp/nameplate.png)
+          echo "$output"
+          echo "$output" | grep -q "wrote /tmp/nameplate.png (340x148) for nameplate" || {
+            echo "Expected snapshot of nameplate by name, got: $output"
+            exit 1
+          }
+          test -s /tmp/nameplate.png || { echo "nameplate.png was not created or is empty"; exit 1; }
+          echo "Rendered /tmp/nameplate.png successfully"
+
+      - name: Render default mod snapshot
+        shell: bash
+        run: |
+          cargo run --quiet --manifest-path host/Cargo.toml -- --snapshot /tmp/mod.png
+          test -s /tmp/mod.png || { echo "mod.png was not created or is empty"; exit 1; }
+          echo "Rendered /tmp/mod.png successfully"
