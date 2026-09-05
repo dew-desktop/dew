@@ -541,6 +541,10 @@ pub enum Command {
         surface: String,
         size: (u32, u32),
     },
+    Test {
+        filter: Option<String>,
+        dir: Option<PathBuf>,
+    },
     Help {
         subcommand: Option<String>,
     },
@@ -579,6 +583,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "snapshot" => parse_snapshot(&args_vec[1..]),
         "check" => parse_check(&args_vec[1..]),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
+        "test" => parse_test(&args_vec[1..]),
         "help" | "--help" | "-h" => Ok(Command::Help {
             subcommand: args_vec.get(1).cloned(),
         }),
@@ -802,6 +807,31 @@ fn parse_init(args: &[String]) -> Result<Command, String> {
         surface,
         size,
     })
+}
+
+fn parse_test(args: &[String]) -> Result<Command, String> {
+    let mut filter: Option<String> = None;
+    let mut dir: Option<PathBuf> = None;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dir" | "-d" => {
+                let val = iter.next().ok_or("missing value for --dir")?;
+                dir = Some(PathBuf::from(val));
+            }
+            s if !s.starts_with('-') => {
+                if filter.is_none() {
+                    filter = Some(s.to_string());
+                } else {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+
+    Ok(Command::Test { filter, dir })
 }
 
 fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, String> {
@@ -1329,6 +1359,264 @@ return {{
     Ok(())
 }
 
+fn execute_test(filter: Option<String>, dir: Option<PathBuf>) -> Result<(), String> {
+    let target_dir = match dir {
+        Some(d) => {
+            if !d.is_dir() {
+                return Err(format!("directory '{}' does not exist", d.display()));
+            }
+            d.canonicalize().unwrap_or(d)
+        }
+        None => {
+            let cur = std::env::current_dir().map_err(|e| e.to_string())?;
+            if cur.join("tests").is_dir() || cur.join("src").join("api.luau").is_file() {
+                cur
+            } else if let Some(aether) = find_dir("aether") {
+                aether
+            } else if PathBuf::from("../aether").is_dir() {
+                PathBuf::from("../aether")
+                    .canonicalize()
+                    .unwrap_or_else(|_| PathBuf::from("../aether"))
+            } else {
+                cur
+            }
+        }
+    };
+
+    let temp_dir = std::env::temp_dir().join("dew_test_lune");
+    let lune_dir = temp_dir.join("lune");
+    std::fs::create_dir_all(&lune_dir)
+        .map_err(|e| format!("could not create lune shim directory: {e}"))?;
+    let process_luau = r#"
+local process = {}
+function process.exit(code: number?)
+    local c = code or 0
+    if c ~= 0 then
+        error(string.format("[dew test] process.exit(%d)", c), 0)
+    end
+end
+process.args = {}
+process.env = {}
+return process
+"#;
+    std::fs::write(lune_dir.join("process.luau"), process_luau)
+        .map_err(|e| format!("could not write lune shim process.luau: {e}"))?;
+
+    fn discover(dir: &Path, found: &mut Vec<PathBuf>) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if [
+                "roblox_packages",
+                "luau_packages",
+                ".pesde",
+                "target",
+                "node_modules",
+                ".git",
+            ]
+            .contains(&name.as_str())
+            {
+                continue;
+            }
+            if path.is_dir() {
+                discover(&path, found);
+            } else if name.ends_with(".test.luau") {
+                found.push(path);
+            }
+        }
+    }
+
+    let mut suites = Vec::new();
+    discover(&target_dir, &mut suites);
+    suites.sort();
+
+    let filter_lower = filter.as_ref().map(|s| s.to_lowercase());
+    let matching_suites: Vec<PathBuf> = suites
+        .into_iter()
+        .filter(|p| {
+            if let Some(ref f) = filter_lower {
+                p.to_string_lossy().to_lowercase().contains(f)
+            } else {
+                true
+            }
+        })
+        .collect();
+
+    if matching_suites.is_empty() {
+        if let Some(ref f) = filter {
+            return Err(format!(
+                "no test suites matched filter '{f}' in {}",
+                target_dir.display()
+            ));
+        } else {
+            return Err(format!(
+                "no test suites (*.test.luau) found in {}",
+                target_dir.display()
+            ));
+        }
+    }
+
+    let aether_root = if target_dir.join("src").join("api.luau").is_file() {
+        target_dir.clone()
+    } else if let Some(d) = find_dir("aether") {
+        d
+    } else if let Some(p) = aether_runtime::installed_package("aether") {
+        p
+    } else {
+        target_dir.clone()
+    };
+
+    let mut vide_src = None;
+    let roblox_packages = aether_root.join("roblox_packages");
+    let pesde_dir = roblox_packages.join(".pesde");
+    if pesde_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&pesde_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with("centau_vide@") {
+                    let candidate = entry.path().join("vide").join("src");
+                    if candidate.is_dir() {
+                        vide_src = Some(candidate);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if vide_src.is_none() {
+        if let Some(vide_pkg) = aether_runtime::installed_package("vide") {
+            vide_src = Some(vide_pkg.join("src"));
+        }
+    }
+
+    let total = matching_suites.len();
+    let mut passed = 0;
+    let mut failed = 0;
+
+    for suite_path in &matching_suites {
+        let rel_path = suite_path.strip_prefix(&target_dir).unwrap_or(suite_path);
+        let suite_name = rel_path.to_string_lossy().replace('\\', "/");
+
+        let suite_dir = suite_path.parent().unwrap_or(&target_dir);
+        let mut roots = vec![suite_dir.to_path_buf(), aether_root.clone()];
+        if roblox_packages.is_dir() {
+            roots.push(roblox_packages.clone());
+        }
+
+        let mut aliases = HashMap::new();
+        aliases.insert("aether".to_string(), aether_root.join("src"));
+        aliases.insert(
+            "testkit".to_string(),
+            aether_root.join("tests").join("testkit"),
+        );
+        aliases.insert("lune".to_string(), lune_dir.clone());
+        if let Some(ref v) = vide_src {
+            aliases.insert("vide".to_string(), v.clone());
+        }
+
+        let caps = aether_runtime::Capabilities {
+            require_roots: roots,
+            print: true,
+            aliases,
+        };
+
+        let vm = match aether_runtime::Vm::new(caps.clone()) {
+            Ok(v) => v,
+            Err(e) => {
+                failed += 1;
+                eprintln!("::error::{suite_name}");
+                eprintln!("  VM creation failed: {e}");
+                continue;
+            }
+        };
+
+        let dom = dew_host::datamodel::SharedDom::default();
+        if let Err(e) = dew_host::datamodel::install(vm.lua(), &dom) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  DataModel installation failed: {e}");
+            continue;
+        }
+        if let Err(e) = dew_host::datamodel::install_vocabulary(vm.lua()) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  Vocabulary installation failed: {e}");
+            continue;
+        }
+        let clock: crate::services::SharedClock =
+            Arc::new(Mutex::new(crate::services::Clock::default()));
+        if let Err(e) = crate::services::install(vm.lua(), &clock) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  Services installation failed: {e}");
+            continue;
+        }
+        if let Err(e) = vm.lua().globals().set("game", true) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  Game gate installation failed: {e}");
+            continue;
+        }
+        if let Err(e) = aether_runtime::modules::install(&vm, &caps) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  Require installation failed: {e}");
+            continue;
+        }
+
+        let source = match std::fs::read_to_string(suite_path) {
+            Ok(s) => s,
+            Err(e) => {
+                failed += 1;
+                eprintln!("::error::{suite_name}");
+                eprintln!("  Read error: {e}");
+                continue;
+            }
+        };
+
+        let mut stem = aether_runtime::strip_extended_prefix(
+            suite_path
+                .canonicalize()
+                .unwrap_or_else(|_| suite_path.to_path_buf()),
+        );
+        stem.set_extension("");
+        let chunk_name = format!("@{}", stem.display());
+
+        let result: mlua::prelude::LuaResult<mlua::prelude::LuaValue> = (|| {
+            let func = vm
+                .lua()
+                .load(&source)
+                .set_name(&chunk_name)
+                .into_function()?;
+            func.call(())
+        })();
+
+        match result {
+            Ok(_) => {
+                passed += 1;
+            }
+            Err(e) => {
+                failed += 1;
+                eprintln!("::error::{suite_name}");
+                eprintln!("  {e}");
+            }
+        }
+    }
+
+    println!();
+    if failed > 0 {
+        println!("SUITES: FAILED ({passed} passed, {failed} failed of {total})");
+        Err(format!("{failed} of {total} suites failed"))
+    } else {
+        println!("SUITES: PASS ({passed} of {total})");
+        Ok(())
+    }
+}
+
 fn execute_help(subcommand: Option<String>) {
     match subcommand.as_deref() {
         Some("snapshot") => {
@@ -1375,6 +1663,21 @@ fn execute_help(subcommand: Option<String>) {
             println!("  --surface <SURFACE>   Surface: 'window' (default), 'overlay', or 'widget'");
             println!("  --size <WxH>          Default size (default: 340x180)");
         }
+        Some("test") => {
+            println!("Usage: dew test [FILTER] [OPTIONS]");
+            println!();
+            println!(
+                "Run Luau test suites (*.test.luau) in Dew's VM against Dew's native DataModel."
+            );
+            println!();
+            println!("Arguments:");
+            println!("  [FILTER]              Optional substring to filter suite paths");
+            println!();
+            println!("Options:");
+            println!(
+                "  --dir, -d <PATH>      Directory to search for suites (defaults to current dir)"
+            );
+        }
         _ => {
             println!("Dew -- desktop applet platform over a native DataModel");
             println!();
@@ -1385,6 +1688,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  snapshot   Render a mod or script headlessly to a PNG image");
             println!("  check      Validate mod manifest, entrypoint, and Luau syntax");
             println!("  init       Scaffold a new mod with manifest and entrypoint");
+            println!("  test       Run Luau test suites against Dew's DataModel");
             println!("  help       Show help for a command");
             println!();
             println!("Legacy Flags:");
@@ -1413,6 +1717,7 @@ fn run() -> Result<(), String> {
             surface,
             size,
         } => execute_init(name, runtime, surface, size),
+        Command::Test { filter, dir } => execute_test(filter, dir),
         Command::Help { subcommand } => {
             execute_help(subcommand);
             Ok(())
@@ -1738,5 +2043,103 @@ mod tests {
                 assert!(warnings.is_empty());
             }
         }
+    }
+
+    #[test]
+    fn subcommand_test_default() {
+        let args = ["test"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Test { filter, dir } => {
+                assert_eq!(filter, None);
+                assert_eq!(dir, None);
+            }
+            _ => panic!("expected Test command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_test_filter() {
+        let args = ["test", "FloatingMath"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Test { filter, dir } => {
+                assert_eq!(filter.as_deref(), Some("FloatingMath"));
+                assert_eq!(dir, None);
+            }
+            _ => panic!("expected Test command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_test_dir() {
+        let args = ["test", "--dir", "my_tests"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Test { filter, dir } => {
+                assert_eq!(filter, None);
+                assert_eq!(dir, Some(PathBuf::from("my_tests")));
+            }
+            _ => panic!("expected Test command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_test_filter_and_dir() {
+        let args = ["test", "FloatingMath", "--dir", "my_tests"]
+            .iter()
+            .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Test { filter, dir } => {
+                assert_eq!(filter.as_deref(), Some("FloatingMath"));
+                assert_eq!(dir, Some(PathBuf::from("my_tests")));
+            }
+            _ => panic!("expected Test command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_test_help() {
+        let args = ["help", "test"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("test")),
+            _ => panic!("expected Help command"),
+        }
+    }
+
+    #[test]
+    fn execute_test_runs_passing_suite() {
+        let aether_root = match find_dir("aether") {
+            Some(d) => d,
+            None => {
+                let candidate = PathBuf::from("../aether");
+                if candidate.is_dir() {
+                    candidate.canonicalize().unwrap()
+                } else {
+                    return;
+                }
+            }
+        };
+
+        // FloatingMath is pure math and passes under Dew's VM
+        let res = execute_test(Some("FloatingMath".into()), Some(aether_root));
+        assert!(res.is_ok(), "FloatingMath test suite must pass");
+    }
+
+    #[test]
+    fn execute_test_runs_standalone_suite() {
+        let temp_dir = std::env::temp_dir().join(format!("dew_test_unit_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let suite_path = temp_dir.join("sample.test.luau");
+        let _ = std::fs::write(&suite_path, "local x = 42\nassert(x == 42)\n");
+
+        let res = execute_test(None, Some(temp_dir.clone()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert!(
+            res.is_ok(),
+            "Standalone sample suite must pass under execute_test"
+        );
     }
 }
