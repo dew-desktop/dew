@@ -545,6 +545,10 @@ pub enum Command {
         filter: Option<String>,
         dir: Option<PathBuf>,
     },
+    Conformance {
+        filter: Option<String>,
+        dir: Option<PathBuf>,
+    },
     Help {
         subcommand: Option<String>,
     },
@@ -584,6 +588,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "check" => parse_check(&args_vec[1..]),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
+        "conformance" => parse_conformance(&args_vec[1..]),
         "help" | "--help" | "-h" => Ok(Command::Help {
             subcommand: args_vec.get(1).cloned(),
         }),
@@ -832,6 +837,31 @@ fn parse_test(args: &[String]) -> Result<Command, String> {
     }
 
     Ok(Command::Test { filter, dir })
+}
+
+fn parse_conformance(args: &[String]) -> Result<Command, String> {
+    let mut filter: Option<String> = None;
+    let mut dir: Option<PathBuf> = None;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--dir" | "-d" => {
+                let val = iter.next().ok_or("missing value for --dir")?;
+                dir = Some(PathBuf::from(val));
+            }
+            s if !s.starts_with('-') => {
+                if filter.is_none() {
+                    filter = Some(s.to_string());
+                } else {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+
+    Ok(Command::Conformance { filter, dir })
 }
 
 fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, String> {
@@ -1744,18 +1774,32 @@ fn execute_help(subcommand: Option<String>) {
                 "  --dir, -d <PATH>      Directory to search for suites (defaults to current dir)"
             );
         }
+        Some("conformance") => {
+            println!("Usage: dew conformance [FILTER] [OPTIONS]");
+            println!();
+            println!("Run the DataModel Standard layout conformance suite against Dew's native DataModel.");
+            println!();
+            println!("Arguments:");
+            println!("  [FILTER]              Optional substring to filter case names");
+            println!();
+            println!("Options:");
+            println!(
+                "  --dir, -d <PATH>      Directory containing cases (defaults to auto-discovery)"
+            );
+        }
         _ => {
             println!("Dew -- desktop applet platform over a native DataModel");
             println!();
             println!("Usage: dew <COMMAND> [OPTIONS]");
             println!();
             println!("Commands:");
-            println!("  run        Run a mod interactively in a desktop window (Windows only)");
-            println!("  snapshot   Render a mod or script headlessly to a PNG image");
-            println!("  check      Validate mod manifest, entrypoint, and Luau syntax");
-            println!("  init       Scaffold a new mod with manifest and entrypoint");
-            println!("  test       Run Luau test suites against Dew's DataModel");
-            println!("  help       Show help for a command");
+            println!("  run          Run a mod interactively in a desktop window (Windows only)");
+            println!("  snapshot     Render a mod or script headlessly to a PNG image");
+            println!("  check        Validate mod manifest, entrypoint, and Luau syntax");
+            println!("  init         Scaffold a new mod with manifest and entrypoint");
+            println!("  test         Run Luau test suites against Dew's DataModel");
+            println!("  conformance  Run layout conformance suite against Dew's DataModel");
+            println!("  help         Show help for a command");
             println!();
             println!("Legacy Flags:");
             println!("  --snapshot <PATH>     Render default or --mod to PNG");
@@ -1765,6 +1809,20 @@ fn execute_help(subcommand: Option<String>) {
             println!("  --stats, --bench      Performance monitoring (Windows only)");
         }
     }
+}
+
+fn execute_conformance(filter: Option<String>, dir: Option<PathBuf>) -> Result<(), String> {
+    let cases_dir = dew_host::conformance::find_cases_dir(dir.as_deref())?;
+    println!(
+        "[dew] running conformance suite from {}",
+        cases_dir.display()
+    );
+    let (results, summary) = dew_host::conformance::run_suite(&cases_dir, filter.as_deref());
+    dew_host::conformance::print_report(&results, &summary);
+    if summary.undecodable > 0 {
+        return Err(format!("{} case(s) failed to decode", summary.undecodable));
+    }
+    Ok(())
 }
 
 fn run() -> Result<(), String> {
@@ -1784,6 +1842,7 @@ fn run() -> Result<(), String> {
             size,
         } => execute_init(name, runtime, surface, size),
         Command::Test { filter, dir } => execute_test(filter, dir),
+        Command::Conformance { filter, dir } => execute_conformance(filter, dir),
         Command::Help { subcommand } => {
             execute_help(subcommand);
             Ok(())
@@ -2207,5 +2266,71 @@ mod tests {
             res.is_ok(),
             "Standalone sample suite must pass under execute_test"
         );
+    }
+
+    #[test]
+    fn subcommand_conformance_default() {
+        let args = ["conformance"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Conformance { filter, dir } => {
+                assert_eq!(filter, None);
+                assert_eq!(dir, None);
+            }
+            _ => panic!("expected Conformance command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_conformance_filter() {
+        let args = ["conformance", "01_"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Conformance { filter, dir } => {
+                assert_eq!(filter.as_deref(), Some("01_"));
+                assert_eq!(dir, None);
+            }
+            _ => panic!("expected Conformance command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_conformance_dir() {
+        let args = ["conformance", "--dir", "cases"]
+            .iter()
+            .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Conformance { filter, dir } => {
+                assert_eq!(filter, None);
+                assert_eq!(dir, Some(PathBuf::from("cases")));
+            }
+            _ => panic!("expected Conformance command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_conformance_filter_and_dir() {
+        let args = ["conformance", "01_", "--dir", "cases"]
+            .iter()
+            .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Conformance { filter, dir } => {
+                assert_eq!(filter.as_deref(), Some("01_"));
+                assert_eq!(dir, Some(PathBuf::from("cases")));
+            }
+            _ => panic!("expected Conformance command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_conformance_help() {
+        let args = ["help", "conformance"].iter().map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("conformance")),
+            _ => panic!("expected Help command"),
+        }
     }
 }

@@ -44,6 +44,10 @@ path = "src/bin/dew_host.rs"
 name = "datamodel-surface"
 path = "src/bin/datamodel_surface.rs"
 
+[[bin]]
+name = "conformance"
+path = "src/bin/conformance.rs"
+
 [dependencies]
 # THE NAMES ARE STILL AETHER'S, AND THAT IS THIS SPRINT REFUSING TO DO TWO
 # THINGS AT ONCE. A move and a rename in one diff is a diff nobody can review:

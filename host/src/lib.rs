@@ -20,5 +20,6 @@
 // standard ends up with two implementations inside one host -- so the file moved
 // rather than the rule.
 pub mod assets;
+pub mod conformance;
 pub mod datamodel;
 pub mod manifest;
