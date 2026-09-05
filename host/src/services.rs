@@ -131,6 +131,7 @@ pub struct Clock {
     /// Set on the first tick, not at construction. Time starts when frames do, so
     /// a mod that spent 40ms mounting does not read 0.04 from its first `Now`.
     started: Option<Instant>,
+    elapsed: f64,
 }
 
 pub type SharedClock = Arc<Mutex<Clock>>;
@@ -145,8 +146,10 @@ impl Clock {
         self.listeners.is_empty()
     }
 
-    fn now(&self) -> f64 {
-        self.started.map_or(0.0, |t| t.elapsed().as_secs_f64())
+    pub fn now(&self) -> f64 {
+        self.started.map_or(self.elapsed, |t| {
+            t.elapsed().as_secs_f64().max(self.elapsed)
+        })
     }
 }
 
@@ -180,6 +183,7 @@ pub fn tick(clock: &SharedClock, dt: f32) {
         if guard.started.is_none() {
             guard.started = Some(Instant::now());
         }
+        guard.elapsed += dt as f64;
         if guard.listeners.is_empty() {
             return;
         }

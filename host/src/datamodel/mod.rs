@@ -63,6 +63,7 @@ struct Node {
     /// than a full property set -- which is also what makes "was this touched"
     /// answerable later.
     props: BTreeMap<String, Variant>,
+    attributes: BTreeMap<String, Variant>,
     /// Indices into `Dom::handlers`, IN CONNECT ORDER. Firing order is connect
     /// order, and this is the only place that order is recorded -- a map keyed by
     /// event would lose it, and a guest that connects a logger and then a
@@ -141,6 +142,7 @@ impl Dom {
             parent: None,
             children: Vec::new(),
             props: BTreeMap::new(),
+            attributes: BTreeMap::new(),
             connections: Vec::new(),
         }));
         self.dirty = true;
@@ -204,6 +206,30 @@ impl Dom {
 
     pub fn exists(&self, id: usize) -> bool {
         self.node(id).is_some()
+    }
+
+    pub fn get_attribute(&self, id: usize, name: &str) -> Option<Variant> {
+        self.node(id).and_then(|n| n.attributes.get(name).cloned())
+    }
+
+    pub fn set_attribute(&mut self, id: usize, name: &str, val: Option<Variant>) {
+        if let Some(node) = self.node_mut(id) {
+            match val {
+                Some(v) => {
+                    node.attributes.insert(name.to_string(), v);
+                }
+                None => {
+                    node.attributes.remove(name);
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    pub fn get_attributes(&self, id: usize) -> BTreeMap<String, Variant> {
+        self.node(id)
+            .map(|n| n.attributes.clone())
+            .unwrap_or_default()
     }
 
     // ── Connections ──────────────────────────────────────────────────────────
@@ -722,8 +748,47 @@ fn coerce_enum(
     )))
 }
 
+/// Coerce a Lua value into a `Variant` for an attribute.
+pub(crate) fn coerce_attribute_value(value: &LuaValue) -> LuaResult<Option<Variant>> {
+    match value {
+        LuaValue::Nil => Ok(None),
+        LuaValue::Boolean(b) => Ok(Some(Variant::Bool(*b))),
+        LuaValue::String(s) => Ok(Some(Variant::String(s.to_string_lossy()))),
+        LuaValue::Integer(i) => Ok(Some(Variant::Float64(*i as f64))),
+        LuaValue::Number(n) => Ok(Some(Variant::Float64(*n))),
+        LuaValue::UserData(_) => {
+            if let Some(v) = LuaUDim::from_value(value) {
+                return Ok(Some(Variant::UDim(v)));
+            }
+            if let Some(v) = LuaUDim2::from_value(value) {
+                return Ok(Some(Variant::UDim2(v)));
+            }
+            if let Some(v) = LuaVector2::from_value(value) {
+                return Ok(Some(Variant::Vector2(v)));
+            }
+            if let Some(v) = LuaColor3::from_value(value) {
+                return Ok(Some(Variant::Color3(v)));
+            }
+            if let Some(v) = LuaRect::from_value(value) {
+                return Ok(Some(Variant::Rect(v)));
+            }
+            if let Some(v) = LuaFont::from_value(value) {
+                return Ok(Some(Variant::Font(v)));
+            }
+            Err(LuaError::runtime(format!(
+                "SetAttribute: unsupported UserData type {}",
+                value.type_name()
+            )))
+        }
+        _ => Err(LuaError::runtime(format!(
+            "SetAttribute: unsupported attribute type {}",
+            value.type_name()
+        ))),
+    }
+}
+
 /// Turn a stored `Variant` back into something a guest can read.
-fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> LuaResult<LuaValue> {
+pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> LuaResult<LuaValue> {
     Ok(match value {
         // `Variant::Enum` is a bare `u32` with no record of which enum it belongs
         // to, so naming it needs the property's declared type. Without that a

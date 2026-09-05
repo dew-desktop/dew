@@ -102,8 +102,8 @@ DOM. It is a consumer of this surface and never an implementation of it, so it
 is not measured here and is not required to conform. What must match is what a
 Luau application sees, **with or without Aether**.
 
-**37 of 52 in-scope members implemented.**
-32 more are excluded by decision, out of 84 reachable
+**40 of 55 in-scope members implemented.**
+29 more are excluded by decision, out of 84 reachable
 (44 methods, 40 events).
 
 Asked of `dew_host::datamodel::members::implements`, the predicate `__index`
@@ -114,9 +114,9 @@ document makes on the host's behalf.
 
 - `Activated`, `Changed`, `ChildAdded`, `ChildRemoved`, `ClearAllChildren`, `DescendantAdded`, `DescendantRemoving`, `Destroy`
 - `Destroying`, `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`, `FindFirstDescendant`
-- `GetChildren`, `GetDescendants`, `GetPropertyChangedSignal`, `InputBegan`, `InputChanged`, `InputEnded`, `IsA`, `IsAncestorOf`
-- `IsDescendantOf`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`, `MouseEnter`
-- `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `SecondaryActivated`
+- `GetAttribute`, `GetAttributes`, `GetChildren`, `GetDescendants`, `GetPropertyChangedSignal`, `InputBegan`, `InputChanged`, `InputEnded`
+- `IsA`, `IsAncestorOf`, `IsDescendantOf`, `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`
+- `MouseButton2Up`, `MouseEnter`, `MouseLeave`, `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `SecondaryActivated`, `SetAttribute`
 
 **22 of them are events**, reachable through `RBXScriptSignal` and
 `RBXScriptConnection`.

@@ -1555,6 +1555,68 @@ return process
             eprintln!("  Services installation failed: {e}");
             continue;
         }
+
+        // Test runner provides a steppable clock via DewHost.Clock.Step(dt)
+        // so transition tests can step simulated time. This is strictly isolated
+        // to `dew test` and absent in guest mods run via `dew run` / `dew snapshot`.
+        let step_clock = Arc::clone(&clock);
+        if let Ok(dew_host) = vm.lua().globals().get::<mlua::Table>("DewHost") {
+            if let Ok(dew_clock) = dew_host.get::<mlua::Table>("Clock") {
+                let _ = dew_clock.set(
+                    "Step",
+                    match vm.lua().create_function(move |_, dt: Option<f32>| {
+                        crate::services::tick(&step_clock, dt.unwrap_or(1.0 / 60.0));
+                        Ok(())
+                    }) {
+                        Ok(f) => f,
+                        Err(e) => {
+                            failed += 1;
+                            eprintln!("::error::{suite_name}");
+                            eprintln!("  Clock.Step installation failed: {e}");
+                            continue;
+                        }
+                    },
+                );
+            }
+        }
+
+        // Provide os.clock for test suites that measure relative time (e.g. Scrollbar)
+        let os_clock = Arc::clone(&clock);
+        let os_table = match vm.lua().create_table() {
+            Ok(t) => t,
+            Err(e) => {
+                failed += 1;
+                eprintln!("::error::{suite_name}");
+                eprintln!("  os table creation failed: {e}");
+                continue;
+            }
+        };
+        if let Err(e) = os_table.set(
+            "clock",
+            match vm
+                .lua()
+                .create_function(move |_, ()| Ok(os_clock.lock().unwrap().now()))
+            {
+                Ok(f) => f,
+                Err(e) => {
+                    failed += 1;
+                    eprintln!("::error::{suite_name}");
+                    eprintln!("  os.clock function creation failed: {e}");
+                    continue;
+                }
+            },
+        ) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  os.clock installation failed: {e}");
+            continue;
+        }
+        if let Err(e) = vm.lua().globals().set("os", os_table) {
+            failed += 1;
+            eprintln!("::error::{suite_name}");
+            eprintln!("  os global installation failed: {e}");
+            continue;
+        }
         if let Err(e) = vm.lua().globals().set("game", true) {
             failed += 1;
             eprintln!("::error::{suite_name}");

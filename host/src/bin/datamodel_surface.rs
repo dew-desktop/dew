@@ -79,19 +79,18 @@ struct ApiClass {
 /// engine has no equivalent line to write on a conformant host that omits it.
 const MOTION: &[&str] = &["TweenPosition", "TweenSize", "TweenSizeAndPosition"];
 
-/// Engine bookkeeping, the method-and-event twin of `NOT_UI`.
+/// Tags, styling, wiring, actors and reflection-on-self.
 ///
-/// Tags, attributes, styling, wiring, actors and reflection-on-self. None of it
-/// affects what is drawn or where, and a standard that demanded it would be
-/// describing Roblox's object model rather than describing a UI.
+/// Attributes (GetAttribute, GetAttributes, SetAttribute) were originally
+/// excluded under the claim that none of it "affects what is drawn or where".
+/// However, `aether/src/host/DataModel.luau` and `HitTest.luau` depend on attributes
+/// for hit testing corner radii and bounds overrides. Like `Parent` and `Name`,
+/// they are host infrastructure that UI frameworks require and are now implemented.
 const NOT_UI_MEMBERS: &[&str] = &[
     "AddTag",
     "GetTags",
     "HasTag",
     "RemoveTag",
-    "GetAttribute",
-    "GetAttributes",
-    "SetAttribute",
     "GetAttributeChangedSignal",
     "AttributeChanged",
     "GetStyled",

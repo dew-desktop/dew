@@ -237,6 +237,18 @@ const MEMBERS: &[Member] = &[
         name: "IsDescendantOf",
         introduced_on: "Instance",
     },
+    Member {
+        name: "GetAttribute",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "GetAttributes",
+        introduced_on: "Instance",
+    },
+    Member {
+        name: "SetAttribute",
+        introduced_on: "Instance",
+    },
 ];
 
 /// Does `class` match `ancestor`, or descend from it?
@@ -635,6 +647,42 @@ pub fn lookup(
                 }
             }
             Ok(())
+        })?,
+        "GetAttribute" => lua.create_function(move |lua, (_, name): (LuaValue, String)| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            let val = dom.get_attribute(this.id, &name);
+            drop(dom);
+            match val {
+                Some(v) => super::to_lua(lua, &v, None),
+                None => Ok(LuaValue::Nil),
+            }
+        })?,
+        "SetAttribute" => lua.create_function(
+            move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
+                let variant = super::coerce_attribute_value(&value)?;
+                let mut dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                dom.set_attribute(this.id, &name, variant);
+                Ok(())
+            },
+        )?,
+        "GetAttributes" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            let attrs = dom.get_attributes(this.id);
+            drop(dom);
+            let out = lua.create_table()?;
+            for (k, v) in attrs {
+                out.set(k, super::to_lua(lua, &v, None)?)?;
+            }
+            Ok(out)
         })?,
         other => unreachable!("implements() admitted {other} and lookup has no arm for it"),
     };
