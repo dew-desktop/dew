@@ -27,6 +27,8 @@ const TOLERANCE: f32 = 0.01;
 pub static SUPPORTS: &[&str] = &[
     "AnchorPoint",
     "ClipsDescendants",
+    "TextScaled",
+    "TextWrapped",
     "UICorner",
     "UIGradient.Radial",
     "UIStroke",
@@ -1537,10 +1539,10 @@ mod tests {
             summary.total
         );
         assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
-        assert_eq!(summary.unsupported, 3, "expected 3 unsupported cases");
+        assert_eq!(summary.unsupported, 0, "expected 0 unsupported cases");
         assert_eq!(
-            summary.passed, 21,
-            "expected all 21 executable conformance cases to pass"
+            summary.passed, 24,
+            "expected all 24 executable conformance cases to pass"
         );
         assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
         assert_eq!(summary.open_questions, 1, "expected 1 open question");
@@ -1579,10 +1581,13 @@ mod tests {
         assert!(passing_names.contains(&"AutomaticSize with a quarter-Scale child under a layout"));
         assert!(passing_names.contains(&"UIListLayout stacks children and ignores their Position"));
 
-        // 3 native text metrics cases
+        // 6 native text metrics and dynamic typography cases
         assert!(passing_names.contains(&"one line of text is a fixed multiple of TextSize"));
         assert!(passing_names.contains(&"text measurement is linear in TextSize"));
         assert!(passing_names.contains(&"text measurement is per glyph, not per character"));
+        assert!(passing_names.contains(&"TextScaled chooses the text size from the box"));
+        assert!(passing_names.contains(&"TextWrapped grows the height past one line"));
+        assert!(passing_names.contains(&"TextWrapped off keeps a long string on one line"));
     }
 
     #[test]
@@ -1644,11 +1649,11 @@ mod tests {
         let (_results, summary) = run_suite_pixel(&dir, None, false, false);
         assert_eq!(summary.total, 24);
         assert_eq!(summary.undecodable, 0);
-        assert_eq!(summary.unsupported, 3);
-        assert_eq!(summary.passed, 21);
+        assert_eq!(summary.unsupported, 0);
+        assert_eq!(summary.passed, 24);
         assert_eq!(summary.failed, 0);
         assert_eq!(summary.divergent, 1);
-        assert_eq!(summary.verified_against_roblox, 18);
+        assert_eq!(summary.verified_against_roblox, 21);
         assert_eq!(summary.open_questions, 1);
     }
 

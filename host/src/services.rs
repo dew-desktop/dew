@@ -129,6 +129,111 @@ pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
     Ok((width, height))
 }
 
+/// Measure a string with word wrapping against an available width constraint.
+///
+/// When `TextWrapped = true`, breaks at word boundaries against `max_width`,
+/// and at glyph/character boundaries when a single word exceeds `max_width`.
+/// Multi-line inputs separated by '\n' are preserved as distinct paragraphs.
+/// Total height is resolved line count * size * 1.5.
+pub fn measure_wrapped(text: &str, size: f32, max_width: f32) -> Result<(f32, f32), String> {
+    let Some(font) = face() else {
+        return Err("this host has no font, so it cannot measure text".into());
+    };
+    if text.is_empty() {
+        return Ok((0.0, size * 1.5));
+    }
+    if max_width <= 0.0 {
+        return measure(text, size);
+    }
+
+    let mut total_lines = 0usize;
+    let mut max_observed_w = 0.0_f32;
+
+    for paragraph in text.split('\n') {
+        if paragraph.is_empty() {
+            total_lines += 1;
+            continue;
+        }
+
+        let mut current_line = String::new();
+        let words: Vec<&str> = paragraph.split(' ').collect();
+
+        for word in words {
+            if word.is_empty() {
+                continue;
+            }
+
+            let word_w = font
+                .width(size, word)
+                .ok_or("the measuring face did not parse")?;
+
+            if word_w <= max_width {
+                if current_line.is_empty() {
+                    current_line.push_str(word);
+                } else {
+                    let mut candidate = current_line.clone();
+                    candidate.push(' ');
+                    candidate.push_str(word);
+                    let cand_w = font
+                        .width(size, &candidate)
+                        .ok_or("the measuring face did not parse")?;
+                    if cand_w <= max_width {
+                        current_line = candidate;
+                    } else {
+                        let line_w = font
+                            .width(size, &current_line)
+                            .ok_or("the measuring face did not parse")?;
+                        max_observed_w = max_observed_w.max(line_w);
+                        total_lines += 1;
+                        current_line.clear();
+                        current_line.push_str(word);
+                    }
+                }
+            } else {
+                if !current_line.is_empty() {
+                    let line_w = font
+                        .width(size, &current_line)
+                        .ok_or("the measuring face did not parse")?;
+                    max_observed_w = max_observed_w.max(line_w);
+                    total_lines += 1;
+                    current_line.clear();
+                }
+
+                for ch in word.chars() {
+                    let mut candidate = current_line.clone();
+                    candidate.push(ch);
+                    let cand_w = font
+                        .width(size, &candidate)
+                        .ok_or("the measuring face did not parse")?;
+                    if cand_w <= max_width || current_line.is_empty() {
+                        current_line = candidate;
+                    } else {
+                        let line_w = font
+                            .width(size, &current_line)
+                            .ok_or("the measuring face did not parse")?;
+                        max_observed_w = max_observed_w.max(line_w);
+                        total_lines += 1;
+                        current_line.clear();
+                        current_line.push(ch);
+                    }
+                }
+            }
+        }
+
+        if !current_line.is_empty() {
+            let line_w = font
+                .width(size, &current_line)
+                .ok_or("the measuring face did not parse")?;
+            max_observed_w = max_observed_w.max(line_w);
+            total_lines += 1;
+        }
+    }
+
+    let line_count = total_lines.max(1) as f32;
+    let height = line_count * size * 1.5;
+    Ok((max_observed_w, height))
+}
+
 // -- The clock ---------------------------------------------------------------
 
 /// Frame subscriptions for one guest VM.
@@ -249,6 +354,17 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
             }
             measure(&text, size).map_err(LuaError::runtime)
         })?,
+    )?;
+    text.set(
+        "MeasureWrapped",
+        lua.create_function(
+            |_, (text, size, max_width, font): (String, f32, f32, Option<String>)| {
+                if let Some(name) = font {
+                    note_once_font(&name);
+                }
+                measure_wrapped(&text, size, max_width).map_err(LuaError::runtime)
+            },
+        )?,
     )?;
     host.set("Text", text)?;
 
@@ -431,6 +547,47 @@ mod tests {
             .eval()
             .expect("measure");
         assert!(got);
+    }
+
+    #[test]
+    fn wrapped_text_grows_height_when_exceeding_width() {
+        if !has_face() {
+            return;
+        }
+        let long = "The quick brown fox jumps over the lazy dog and keeps going well past the edge";
+        let (_, single_h) = measure("One line", 18.0).expect("measure");
+        let (wrap_w, wrap_h) = measure_wrapped(long, 18.0, 200.0).expect("measure_wrapped");
+        assert!(wrap_w <= 200.0, "observed width {wrap_w} exceeded 200");
+        let ratio = wrap_h / single_h;
+        assert!(ratio >= 1.9, "ratio {ratio} was less than 1.9");
+        let nearest = (ratio + 0.5).floor();
+        assert!(
+            (ratio - nearest).abs() < 0.02,
+            "ratio {ratio} was not integral"
+        );
+    }
+
+    #[test]
+    fn wrapped_text_respects_single_line_when_fitting() {
+        if !has_face() {
+            return;
+        }
+        let short = "One line";
+        let (_, unwrapped_h) = measure(short, 18.0).expect("measure");
+        let (_, wrapped_h) = measure_wrapped(short, 18.0, 200.0).expect("measure_wrapped");
+        assert_eq!(wrapped_h, unwrapped_h);
+    }
+
+    #[test]
+    fn wrapped_oversized_words_break_at_glyph_boundaries() {
+        if !has_face() {
+            return;
+        }
+        let long_word = "Supercalifragilisticexpialidocious";
+        let (wrap_w, wrap_h) = measure_wrapped(long_word, 18.0, 50.0).expect("measure_wrapped");
+        assert!(wrap_w <= 50.0 || wrap_w < 60.0);
+        let (_, single_h) = measure("a", 18.0).expect("measure");
+        assert!(wrap_h > single_h);
     }
 
     #[test]

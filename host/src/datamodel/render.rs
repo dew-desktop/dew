@@ -684,7 +684,24 @@ fn grow(
     if draws_text(&class) {
         let text_content = text(dom, node, "Text").unwrap_or_default();
         let text_size = number(dom, node, "TextSize").unwrap_or(14.0);
-        if let Ok((tw, th)) = crate::services::measure(&text_content, text_size) {
+        let wrapped = boolean(dom, node, "TextWrapped").unwrap_or(false);
+        let measured = if wrapped {
+            let avail_w = if entry_rect.w > 0.0 {
+                (entry_rect.w - pad_l - pad_r).max(0.0)
+            } else if offered.w > 0.0 {
+                (offered.w - pad_l - pad_r).max(0.0)
+            } else {
+                0.0
+            };
+            if avail_w > 0.0 {
+                crate::services::measure_wrapped(&text_content, text_size, avail_w)
+            } else {
+                crate::services::measure(&text_content, text_size)
+            }
+        } else {
+            crate::services::measure(&text_content, text_size)
+        };
+        if let Ok((tw, th)) = measured {
             if grow_x {
                 let needed_w = tw + pad_l + pad_r;
                 entry_rect.w = entry_rect.w.max(needed_w);
@@ -930,6 +947,56 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
     collected.into_iter().map(|(_, placed)| placed).collect()
 }
 
+fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
+    let authored_size = number(dom, id, "TextSize").unwrap_or(14.0);
+    if boolean(dom, id, "TextScaled") != Some(true) {
+        return authored_size;
+    }
+
+    let Some(text_content) = text(dom, id, "Text") else {
+        return authored_size;
+    };
+    if text_content.is_empty() {
+        return authored_size;
+    }
+
+    let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
+    let box_w = (placed_rect.w - pad_l - pad_r).max(0.0);
+    let box_h = (placed_rect.h - pad_t - pad_b).max(0.0);
+    if box_w <= 0.0 || box_h <= 0.0 {
+        return authored_size;
+    }
+
+    let wrapped = boolean(dom, id, "TextWrapped").unwrap_or(false);
+    if !wrapped {
+        if let Ok((w1, _)) = crate::services::measure(&text_content, 1.0) {
+            let lines = text_content.split('\n').count().max(1) as f32;
+            let h1 = lines * 1.0 * 1.5;
+            let scale_w = if w1 > 0.0 { box_w / w1 } else { f32::INFINITY };
+            let scale_h = if h1 > 0.0 { box_h / h1 } else { f32::INFINITY };
+            return scale_w.min(scale_h);
+        }
+    } else {
+        let mut low = 1.0_f32;
+        let mut high = (box_h / 1.5).max(1.0);
+        for _ in 0..16 {
+            let mid = (low + high) / 2.0;
+            if let Ok((mw, mh)) = crate::services::measure_wrapped(&text_content, mid, box_w) {
+                if mw <= box_w && mh <= box_h {
+                    low = mid;
+                } else {
+                    high = mid;
+                }
+            } else {
+                break;
+            }
+        }
+        return low;
+    }
+
+    authored_size
+}
+
 /// Turn one placed element into the display list node the painter consumes.
 ///
 /// `&mut Dom` FOR ONE REASON, AND IT IS WORTH THE SIGNATURE. Resolving an image
@@ -972,7 +1039,11 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         } else {
             None
         },
-        text_size: number(dom, id, "TextSize").unwrap_or(14.0),
+        text_size: if draws_text(&class) {
+            resolved_text_size(dom, id, placed.rect)
+        } else {
+            number(dom, id, "TextSize").unwrap_or(14.0)
+        },
         text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
         text_colour: colour(dom, id, "TextColor3"),
