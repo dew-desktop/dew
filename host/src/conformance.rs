@@ -1144,6 +1144,14 @@ fn finalize_result(case: &Case, detail: String, remediation: Option<String>) -> 
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum SummarySource {
+    #[default]
+    SharedModule,
+    NativeFallback,
+    Native,
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SuiteSummary {
     pub total: usize,
@@ -1155,6 +1163,7 @@ pub struct SuiteSummary {
     pub undecodable: usize,
     pub verified_against_roblox: usize,
     pub disagreed_open: usize,
+    pub source: SummarySource,
 }
 
 /// Pure-Rust tally calculation matching `conformance/tally.luau` semantics.
@@ -1171,13 +1180,20 @@ pub fn compute_summary_native(results: &[CaseResult]) -> SuiteSummary {
         match &r.status {
             CaseStatus::Pass => {
                 passed += 1;
+                if r.provenance == "divergent" {
+                    divergent += 1;
+                }
             }
             CaseStatus::Divergent => {
                 passed += 1;
                 divergent += 1;
             }
             CaseStatus::Fail { .. } => {
-                failed += 1;
+                if r.provenance == "asserted" {
+                    disagreed_open += 1;
+                } else {
+                    failed += 1;
+                }
             }
             CaseStatus::OpenQuestion { .. } => {
                 disagreed_open += 1;
@@ -1216,72 +1232,107 @@ pub fn compute_summary_native(results: &[CaseResult]) -> SuiteSummary {
         undecodable,
         verified_against_roblox,
         disagreed_open,
+        source: SummarySource::Native,
     }
 }
 
-/// Compute summary using shared `tally.luau` when available, falling back to native Rust.
+/// Evaluates `tally.luau` source via Lua and returns the parsed `SuiteSummary`.
+pub fn compute_summary_via_lua(
+    lua: &Lua,
+    tally_source: &str,
+    results: &[CaseResult],
+) -> Result<SuiteSummary, String> {
+    let tally_module = lua
+        .load(tally_source)
+        .set_name("tally.luau")
+        .eval::<Table>()
+        .map_err(|e| format!("failed to load tally.luau: {e}"))?;
+
+    let summarize_fn: Function = tally_module
+        .get("summarize")
+        .map_err(|e| format!("missing 'summarize' in tally.luau: {e}"))?;
+
+    let lua_results = lua
+        .create_table()
+        .map_err(|e| format!("failed to create lua table: {e}"))?;
+
+    for (i, r) in results.iter().enumerate() {
+        let item = lua
+            .create_table()
+            .map_err(|e| format!("failed to create result item: {e}"))?;
+        let _ = item.set("name", r.name.as_str());
+        let _ = item.set("provenance", r.provenance.as_str());
+        let _ = item.set(
+            "ok",
+            matches!(r.status, CaseStatus::Pass | CaseStatus::Divergent),
+        );
+        let _ = item.set(
+            "unsupported",
+            matches!(r.status, CaseStatus::Unsupported { .. }),
+        );
+        let _ = item.set(
+            "divergent",
+            matches!(r.status, CaseStatus::Divergent) || r.provenance == "divergent",
+        );
+        let _ = item.set(
+            "undecodable",
+            matches!(r.status, CaseStatus::Undecodable { .. }),
+        );
+        let _ = lua_results.set(i + 1, item);
+    }
+
+    let summary_table: Table = summarize_fn
+        .call(lua_results)
+        .map_err(|e| format!("summarize() failed: {e}"))?;
+
+    Ok(SuiteSummary {
+        total: summary_table.get("total").unwrap_or(results.len()),
+        passed: summary_table.get("passed").unwrap_or(0),
+        failed: summary_table.get("failed").unwrap_or(0),
+        open_questions: summary_table.get("open_questions").unwrap_or(0),
+        divergent: summary_table.get("divergent").unwrap_or(0),
+        unsupported: summary_table.get("unsupported").unwrap_or(0),
+        undecodable: summary_table.get("undecodable").unwrap_or(0),
+        verified_against_roblox: summary_table.get("verified_against_roblox").unwrap_or(0),
+        disagreed_open: summary_table.get("disagreed_open").unwrap_or(0),
+        source: SummarySource::SharedModule,
+    })
+}
+
+/// The shared module `conformance/tally.luau` is the source both runners read to
+/// produce their suite summaries, with native Rust retained in Dew as an explicit
+/// fallback when running detached from Aether.
 pub fn compute_summary(cases_dir: Option<&Path>, results: &[CaseResult]) -> SuiteSummary {
     if let Some(dir) = cases_dir {
         let tally_path = dir.parent().map(|p| p.join("tally.luau"));
         if let Some(ref path) = tally_path {
-            if let Ok(source) = std::fs::read_to_string(path) {
-                let lua = Lua::new();
-                if let Ok(tally_module) = lua.load(&source).set_name("tally.luau").eval::<Table>() {
-                    if let Ok(summarize_fn) = tally_module.get::<Function>("summarize") {
-                        if let Ok(lua_results) = lua.create_table() {
-                            for (i, r) in results.iter().enumerate() {
-                                if let Ok(item) = lua.create_table() {
-                                    let _ = item.set("name", r.name.as_str());
-                                    let _ = item.set("provenance", r.provenance.as_str());
-                                    let _ = item.set(
-                                        "ok",
-                                        matches!(
-                                            r.status,
-                                            CaseStatus::Pass | CaseStatus::Divergent
-                                        ),
-                                    );
-                                    let _ = item.set(
-                                        "unsupported",
-                                        matches!(r.status, CaseStatus::Unsupported { .. }),
-                                    );
-                                    let _ = item.set(
-                                        "divergent",
-                                        matches!(r.status, CaseStatus::Divergent),
-                                    );
-                                    let _ = item.set(
-                                        "undecodable",
-                                        matches!(r.status, CaseStatus::Undecodable { .. }),
-                                    );
-                                    let _ = lua_results.set(i + 1, item);
-                                }
-                            }
-                            if let Ok(summary_table) = summarize_fn.call::<Table>(lua_results) {
-                                return SuiteSummary {
-                                    total: summary_table.get("total").unwrap_or(results.len()),
-                                    passed: summary_table.get("passed").unwrap_or(0),
-                                    failed: summary_table.get("failed").unwrap_or(0),
-                                    open_questions: summary_table
-                                        .get("open_questions")
-                                        .unwrap_or(0),
-                                    divergent: summary_table.get("divergent").unwrap_or(0),
-                                    unsupported: summary_table.get("unsupported").unwrap_or(0),
-                                    undecodable: summary_table.get("undecodable").unwrap_or(0),
-                                    verified_against_roblox: summary_table
-                                        .get("verified_against_roblox")
-                                        .unwrap_or(0),
-                                    disagreed_open: summary_table
-                                        .get("disagreed_open")
-                                        .unwrap_or(0),
-                                };
-                            }
+            match std::fs::read_to_string(path) {
+                Ok(source) => {
+                    let lua = Lua::new();
+                    match compute_summary_via_lua(&lua, &source, results) {
+                        Ok(mut summary) => {
+                            summary.source = SummarySource::SharedModule;
+                            return summary;
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "  warning: failed to evaluate shared tally.luau: {e}; falling back to native Rust"
+                            );
                         }
                     }
+                }
+                Err(_) => {
+                    let mut summary = compute_summary_native(results);
+                    summary.source = SummarySource::NativeFallback;
+                    return summary;
                 }
             }
         }
     }
 
-    compute_summary_native(results)
+    let mut summary = compute_summary_native(results);
+    summary.source = SummarySource::Native;
+    summary
 }
 
 /// Run all conformance cases in `cases_dir` with optional filter.
@@ -1367,6 +1418,9 @@ pub fn run_suite_with_options(
 
 /// Print formatted report matching `conformance/run.luau` output.
 pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
+    if summary.source == SummarySource::NativeFallback {
+        println!("  note: shared tally.luau not found alongside cases; using native Rust summary");
+    }
     println!();
     for r in results {
         match &r.status {
@@ -1435,6 +1489,18 @@ pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
             "  {} case(s) state a belief nobody has checked in Studio{}. See conformance/README.md for how to verify one.",
             summary.open_questions, disagree_note
         );
+    }
+
+    match summary.source {
+        SummarySource::SharedModule => {
+            println!("  (summary: shared tally.luau)");
+        }
+        SummarySource::NativeFallback => {
+            println!("  (summary: native Rust fallback; shared tally.luau not found)");
+        }
+        SummarySource::Native => {
+            println!("  (summary: native Rust)");
+        }
     }
 
     if summary.failed > 0 {
@@ -1589,8 +1655,145 @@ mod tests {
     #[test]
     fn shared_and_native_tally_produce_identical_summaries() {
         let dir = find_cases_dir(None).expect("cases dir");
+        let tally_path = dir.parent().expect("conformance dir").join("tally.luau");
+        let tally_source = std::fs::read_to_string(&tally_path).expect("read tally.luau");
+        let lua = Lua::new();
+
+        // Provenance is a closed set: roblox, asserted, reference, divergent.
+        // Outcome is a closed set: pass, disagree, unsupported, undecodable.
+        let provenances = ["roblox", "asserted", "reference", "divergent"];
+
+        #[derive(Debug, Clone, Copy)]
+        enum Outcome {
+            Pass,
+            Disagree,
+            Unsupported,
+            Undecodable,
+        }
+
+        let outcomes = [
+            Outcome::Pass,
+            Outcome::Disagree,
+            Outcome::Unsupported,
+            Outcome::Undecodable,
+        ];
+
+        let make_case_result = |prov: &'static str, outcome: Outcome, id: usize| -> CaseResult {
+            let name = format!("case_{prov}_{outcome:?}_{id}");
+            let status = match (prov, outcome) {
+                ("divergent", Outcome::Pass) => CaseStatus::Divergent,
+                (_, Outcome::Pass) => CaseStatus::Pass,
+                ("asserted", Outcome::Disagree) => CaseStatus::OpenQuestion {
+                    detail: "implementation disagrees".into(),
+                    note: None,
+                },
+                (_, Outcome::Disagree) => CaseStatus::Fail {
+                    detail: "assertion failed".into(),
+                    remediation: None,
+                },
+                (_, Outcome::Unsupported) => CaseStatus::Unsupported {
+                    feature: "HypotheticalFeature".into(),
+                },
+                (_, Outcome::Undecodable) => CaseStatus::Undecodable {
+                    error: "syntax error".into(),
+                },
+            };
+            CaseResult {
+                file_stem: name.clone(),
+                name,
+                provenance: prov.to_string(),
+                status,
+                note: None,
+            }
+        };
+
+        let assert_same_tallies = |shared: &SuiteSummary, native: &SuiteSummary, ctx: &str| {
+            assert_eq!(
+                (
+                    shared.total,
+                    shared.passed,
+                    shared.failed,
+                    shared.open_questions,
+                    shared.divergent,
+                    shared.unsupported,
+                    shared.undecodable,
+                    shared.verified_against_roblox,
+                    shared.disagreed_open,
+                ),
+                (
+                    native.total,
+                    native.passed,
+                    native.failed,
+                    native.open_questions,
+                    native.divergent,
+                    native.unsupported,
+                    native.undecodable,
+                    native.verified_against_roblox,
+                    native.disagreed_open,
+                ),
+                "mismatch in tallies for {ctx}: shared={shared:?}, native={native:?}"
+            );
+        };
+
+        // 1. Enumerate and test every individual combination as a single-case suite (16 suites)
+        for &prov in &provenances {
+            for &outcome in &outcomes {
+                let single_case = vec![make_case_result(prov, outcome, 1)];
+                let shared = compute_summary_via_lua(&lua, &tally_source, &single_case)
+                    .expect("lua summary");
+                let native = compute_summary_native(&single_case);
+                assert_same_tallies(&shared, &native, &format!("single {prov} x {outcome:?}"));
+            }
+        }
+
+        // 2. Test an exhaustive suite containing all 16 combinations simultaneously
+        let mut all_combinations = Vec::new();
+        for (i, &prov) in provenances.iter().enumerate() {
+            for (j, &outcome) in outcomes.iter().enumerate() {
+                all_combinations.push(make_case_result(prov, outcome, i * 4 + j));
+            }
+        }
+        assert_eq!(all_combinations.len(), 16);
+        let shared_all =
+            compute_summary_via_lua(&lua, &tally_source, &all_combinations).expect("lua summary");
+        let native_all = compute_summary_native(&all_combinations);
+        assert_same_tallies(&shared_all, &native_all, "all 16 combinations");
+
+        // Verify specific semantic tallies on the complete 16-combination suite:
+        assert_eq!(native_all.total, 16);
+        assert_eq!(native_all.unsupported, 4);
+        assert_eq!(native_all.undecodable, 4);
+        assert_eq!(native_all.passed, 4);
+        assert_eq!(native_all.failed, 3);
+        assert_eq!(native_all.disagreed_open, 1);
+        assert_eq!(native_all.open_questions, 2);
+        assert_eq!(native_all.verified_against_roblox, 2);
+        assert_eq!(native_all.divergent, 1);
+
+        // 3. Test multi-instance combinations (3 of each combination = 48 cases)
+        let mut multi_combinations = Vec::new();
+        for rep in 0..3 {
+            for &prov in &provenances {
+                for &outcome in &outcomes {
+                    multi_combinations.push(make_case_result(prov, outcome, rep));
+                }
+            }
+        }
+        let shared_multi =
+            compute_summary_via_lua(&lua, &tally_source, &multi_combinations).expect("lua summary");
+        let native_multi = compute_summary_native(&multi_combinations);
+        assert_same_tallies(&shared_multi, &native_multi, "48-case multi combination");
+
+        // 4. Test empty results set
+        let empty: Vec<CaseResult> = Vec::new();
+        let shared_empty =
+            compute_summary_via_lua(&lua, &tally_source, &empty).expect("lua summary");
+        let native_empty = compute_summary_native(&empty);
+        assert_same_tallies(&shared_empty, &native_empty, "empty set");
+
+        // 5. Test today's live case directory
         let (results, summary_shared) = run_suite(&dir, None);
         let summary_native = compute_summary_native(&results);
-        assert_eq!(summary_shared, summary_native);
+        assert_same_tallies(&summary_shared, &summary_native, "live case directory");
     }
 }
