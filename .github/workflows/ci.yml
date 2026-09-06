@@ -17,9 +17,121 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # WHAT CHANGED, so a documentation commit does not pay for a GPU build.
+  #
+  # `47b1b57` touched one Markdown file and one lune script, and paid all three
+  # Rust jobs -- about sixteen minutes -- to learn that no Rust had changed.
+  #
+  # THE FILTER IS NEGATIVE ON PURPOSE. It lists what CANNOT affect the build
+  # rather than what can, so a path nobody thought about builds by default. The
+  # failure mode of the positive form is a new directory that silently stops
+  # being compiled, which is the expensive direction to be wrong in.
+  #
+  # WRITTEN OUT RATHER THAN DELEGATED to a filter action, because the question
+  # "can this gate ever say no" has to be answerable locally. This exact `case`
+  # was run against four real commits before it shipped: `47b1b57`, the
+  # documentation commit that paid for three Rust jobs, answers false, and the
+  # three Rust commits before it answer true. A gate nobody has watched refuse
+  # is not known to work.
+  changes:
+    name: what changed
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The diff below needs both endpoints, and the default shallow
+          # checkout has only one of them.
+          fetch-depth: 0
+
+      - id: filter
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BASE: ${{ github.event.before }}
+          PUSH_HEAD: ${{ github.sha }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            base="$PR_BASE"; head="$PR_HEAD"
+          else
+            base="$PUSH_BASE"; head="$PUSH_HEAD"
+          fi
+
+          # EVERY UNCERTAINTY BUILDS. A new branch, a force push and a squashed
+          # base all report a base this cannot diff against, and the only safe
+          # answer to "I do not know what changed" is "build it".
+          if ! changed=$(git diff --name-only "$base" "$head" 2>&1); then
+            echo "cannot diff $base..$head, so building everything:"
+            echo "$changed"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          code=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            case "$f" in
+              docs/*|scripts/*) continue ;;
+              *.md) continue ;;
+            esac
+            echo "triggers the Rust jobs: $f"
+            code=true
+          done <<< "$changed"
+
+          if [ "$code" = false ]; then
+            echo "documentation and lune scripts only; the Rust jobs are skipped"
+          fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+
+  # THE CHECKS THAT NEED NO TOOLCHAIN, in their own job so they cost seconds.
+  #
+  # These three ran inside the Windows build job, where they took two seconds
+  # and started fifty-seven seconds in, behind a toolchain install and a cache
+  # restore they do not use. They gate the Rust jobs below rather than running
+  # beside them, which keeps the property the note on commitlint describes: a
+  # malformed subject line fails in half a minute instead of after a GPU build.
+  #
+  # THIS JOB HAS NO `if:`. verify_ascii covers documentation, so the one kind of
+  # commit that skips every Rust job is exactly the kind this job exists for.
+  checks:
+    name: commitlint, boundaries and ASCII
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: CompeyDev/setup-rokit@v0.1.2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # FIRST, NOT LAST. This was once the final step of the build job, so a
+      # malformed subject line cost a full toolchain install, a pesde install, a
+      # cold cargo build and three mod mounts -- about ten minutes -- to find out
+      # about. It needs nothing but lune, so it runs the moment lune exists.
+      - run: lune run scripts/commitlint_check.luau
+
+      # ARCHITECTURE, CHECKED. ADR-004 draws hard lines between Aether, Dew and
+      # dew-cli, and a boundary with nothing checking it is a boundary nobody
+      # follows -- this repository has found that class five times in one
+      # milestone. Lune-only, so it runs beside commitlint before anything is
+      # built.
+      - run: lune run scripts/verify_boundaries.luau
+
+      # PLAIN ASCII IN DOCUMENTATION. CONTRIBUTING.md names three places --
+      # commits, pull requests and documentation. commitlint covers the first,
+      # this covers the third, and nothing covered either until six sprint
+      # records had drifted. Scoped to Markdown ON PURPOSE: source comments and
+      # what Dew prints at runtime are not documentation, and a gate that
+      # overreaches gets disabled and takes the real rule with it.
+      - run: lune run scripts/verify_ascii.luau
+
   build:
     name: build and mount every mod
     runs-on: windows-latest
+    needs: [changes, checks]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -39,34 +151,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust.outputs.channel }}
+
+      # `.`, NOT `host`. THE WORKSPACE ROOT IS THE REPOSITORY ROOT.
+      #
+      # This said `workspaces: host` from before the rendering stack moved in and
+      # the four packages became one workspace (ADR-004, milestone 2 sprint 1).
+      # After that move `cargo metadata` reports the target directory as
+      # `<repo>/target`, and `host/target` does not exist at all -- so this step
+      # restored and saved a directory that was not there, cached the registry
+      # alone, reported success in nineteen seconds, and every run recompiled
+      # wgpu, vello, mlua and tiny-skia from source.
+      #
+      # It cost 14m53s of a 16m32s job here, 6m47s of clippy, and 6m34s on Linux.
+      # The tell was the cache size: 220 MiB for a dependency tree that occupies
+      # 4.9 GB of `target/` locally.
+      #
+      # If the workspace root ever moves again, this moves with it.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: host
-
-      - uses: CompeyDev/setup-rokit@v0.1.2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      # FIRST, NOT LAST. This was the final step of the job, so a malformed
-      # subject line cost a full toolchain install, a pesde install, a cold cargo
-      # build and three mod mounts -- about ten minutes -- to find out about. It
-      # needs nothing but lune, so it runs the moment lune exists.
-      - run: lune run scripts/commitlint_check.luau
-
-      # ARCHITECTURE, CHECKED. ADR-004 draws hard lines between Aether, Dew and
-      # dew-cli, and a boundary with nothing checking it is a boundary nobody
-      # follows -- this repository has found that class five times in one
-      # milestone. Lune-only, so it runs beside commitlint before anything is
-      # built.
-      - run: lune run scripts/verify_boundaries.luau
-
-      # PLAIN ASCII IN DOCUMENTATION. CONTRIBUTING.md names three places --
-      # commits, pull requests and documentation. commitlint covers the first,
-      # this covers the third, and nothing covered either until six sprint
-      # records had drifted. Scoped to Markdown ON PURPOSE: source comments and
-      # what Dew prints at runtime are not documentation, and a gate that
-      # overreaches gets disabled and takes the real rule with it.
-      - run: lune run scripts/verify_ascii.luau
+          workspaces: .
 
       # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
       # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
@@ -118,6 +221,8 @@ jobs:
   format:
     name: fmt and clippy
     runs-on: windows-latest
+    needs: [changes, checks]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -138,9 +243,11 @@ jobs:
         with:
           toolchain: ${{ steps.rust.outputs.channel }}
           components: rustfmt, clippy
+
+      # `.`, NOT `host`. See the note in the build job.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: host
+          workspaces: .
 
       - run: cargo fmt --manifest-path host/Cargo.toml --all --check
 
@@ -156,6 +263,8 @@ jobs:
   linux:
     name: build and render without win32
     runs-on: ubuntu-latest
+    needs: [changes, checks]
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -171,9 +280,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.rust.outputs.channel }}
+
+      # `.`, NOT `host`. See the note in the build job.
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: host
+          workspaces: .
 
       # Install Linux pesde binary
       - name: Install pesde
