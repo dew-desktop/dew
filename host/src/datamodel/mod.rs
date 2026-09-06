@@ -50,7 +50,9 @@ use rbx_reflection::{DataType, PropertyDescriptor, Scriptability};
 use rbx_types::{Variant, VariantType};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
-use vocabulary::{LuaColor3, LuaRect, LuaUDim, LuaUDim2, LuaVector2};
+use vocabulary::{
+    LuaColor3, LuaColorSequence, LuaNumberSequence, LuaRect, LuaUDim, LuaUDim2, LuaVector2,
+};
 
 /// One instance's state. Never handed to a guest directly.
 struct Node {
@@ -429,6 +431,18 @@ fn describe(class: &str, property: &str) -> Option<&'static PropertyDescriptor<'
             // InputActionLabel is introduced in Roblox 0.736 and is not yet in
             // rbx_reflection_database 0.728. It inherits from GuiObject and declares
             // text and image properties matching TextLabel and ImageLabel.
+            if property == "InputAction" {
+                static INPUT_ACTION: std::sync::OnceLock<PropertyDescriptor<'static>> =
+                    std::sync::OnceLock::new();
+                return Some(INPUT_ACTION.get_or_init(|| {
+                    let mut desc = PropertyDescriptor::new(
+                        "InputAction",
+                        DataType::Value(VariantType::String),
+                    );
+                    desc.scriptability = Scriptability::ReadWrite;
+                    desc
+                }));
+            }
             if let Some(desc) = db
                 .classes
                 .get("TextLabel")
@@ -471,6 +485,9 @@ fn default_for(class: &str, property: &str) -> Option<Variant> {
             }
             cursor = current.superclass;
         } else if c == "InputActionLabel" {
+            if property == "InputAction" {
+                return Some(Variant::String(String::new()));
+            }
             if let Some(val) = db
                 .classes
                 .get("TextLabel")
@@ -649,6 +666,12 @@ fn coerce(value: &LuaValue, want: VariantType, class: &str, property: &str) -> L
         VariantType::Font => {
             Variant::Font(LuaFont::from_value(value).ok_or_else(|| wrong("a Font"))?)
         }
+        VariantType::ColorSequence => Variant::ColorSequence(
+            LuaColorSequence::from_value(value).ok_or_else(|| wrong("a ColorSequence"))?,
+        ),
+        VariantType::NumberSequence => Variant::NumberSequence(
+            LuaNumberSequence::from_value(value).ok_or_else(|| wrong("a NumberSequence"))?,
+        ),
         // `supported` was checked before the match, so every remaining type has
         // an arm above. Written as unreachable rather than as a second copy of
         // the message, because two copies is how a predicate and its error drift
@@ -681,6 +704,8 @@ pub fn supported(ty: VariantType) -> bool {
             | VariantType::Content
             | VariantType::ContentId
             | VariantType::Font
+            | VariantType::ColorSequence
+            | VariantType::NumberSequence
     )
 }
 
@@ -739,6 +764,18 @@ fn zero_for(ty: VariantType) -> Option<Variant> {
         )),
         VariantType::Vector2 => Variant::Vector2(rbx_types::Vector2::new(0.0, 0.0)),
         VariantType::Color3 => Variant::Color3(rbx_types::Color3::new(0.0, 0.0, 0.0)),
+        VariantType::ColorSequence => Variant::ColorSequence(rbx_types::ColorSequence {
+            keypoints: vec![
+                rbx_types::ColorSequenceKeypoint::new(0.0, rbx_types::Color3::new(1.0, 1.0, 1.0)),
+                rbx_types::ColorSequenceKeypoint::new(1.0, rbx_types::Color3::new(1.0, 1.0, 1.0)),
+            ],
+        }),
+        VariantType::NumberSequence => Variant::NumberSequence(rbx_types::NumberSequence {
+            keypoints: vec![
+                rbx_types::NumberSequenceKeypoint::new(0.0, 0.0, 0.0),
+                rbx_types::NumberSequenceKeypoint::new(1.0, 0.0, 0.0),
+            ],
+        }),
         VariantType::Content => Variant::Content(rbx_types::Content::none()),
         VariantType::ContentId => Variant::ContentId(String::new().into()),
         // Anything else keeps the old behaviour of reading nil. Inventing a value
@@ -867,6 +904,8 @@ pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> Lua
         Variant::Content(v) => LuaContent(v.clone()).into_lua(lua)?,
         Variant::ContentId(v) => lua.create_string(v.as_str())?.into_lua(lua)?,
         Variant::Font(v) => LuaFont(v.clone()).into_lua(lua)?,
+        Variant::ColorSequence(v) => LuaColorSequence(v.clone()).into_lua(lua)?,
+        Variant::NumberSequence(v) => LuaNumberSequence(v.clone()).into_lua(lua)?,
         // The engine stores some colours as bytes. A guest reads a Color3 either
         // way; presenting two Luau types for one engine concept would make
         // `typeof` answer differently depending on which property was read.
@@ -1557,22 +1596,6 @@ mod tests {
     }
 
     #[test]
-    fn an_unimplemented_type_says_so_rather_than_rejecting_the_program() {
-        // `UIGradient.Color` is a `ColorSequence`, which no slice has reached.
-        // The message must not read as "your program is wrong".
-        //
-        // NAMED `Size`, THEN `FontFace`, NOW THIS. A test for "unsupported" has
-        // to be repointed every time support arrives, which is the test doing its
-        // job rather than failing at it. When nothing in scope is unsupported it
-        // has no subject and should be deleted rather than weakened.
-        let err = run(r#"Instance.new("UIGradient").Color = 1"#)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("cannot accept yet"), "{err}");
-        assert!(err.contains("The property is real"), "{err}");
-    }
-
-    #[test]
     fn a_number_is_a_number_however_the_vm_holds_it() {
         // THE BUG THIS EXISTS FOR: `Value::as_f32` matches only `Value::Number`
         // and `as_i32` only `Value::Integer`, so an integer literal assigned to a
@@ -1877,5 +1900,39 @@ mod tests {
         )
         .expect("eval");
         assert!(got, "two reads of one instance are not the same table key");
+    }
+
+    #[test]
+    fn uigradient_accepts_color_and_transparency_sequences() {
+        let ok: bool = eval(
+            r#"
+            local g = Instance.new("UIGradient")
+            g.Color = ColorSequence.new(Color3.new(1, 0, 0), Color3.new(0, 0, 1))
+            g.Transparency = NumberSequence.new(0.25, 0.75)
+            local cs = g.Color
+            local ts = g.Transparency
+            return typeof(cs) == "ColorSequence"
+                and #cs.Keypoints == 2
+                and cs.Keypoints[1].Value == Color3.new(1, 0, 0)
+                and typeof(ts) == "NumberSequence"
+                and #ts.Keypoints == 2
+                and ts.Keypoints[1].Value == 0.25
+        "#,
+        )
+        .expect("eval");
+        assert!(ok);
+    }
+
+    #[test]
+    fn input_action_label_accepts_input_action() {
+        let got: String = eval(
+            r#"
+            local label = Instance.new("InputActionLabel")
+            label.InputAction = "Interact"
+            return label.InputAction
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, "Interact");
     }
 }

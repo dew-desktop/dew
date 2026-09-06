@@ -667,6 +667,32 @@ pub fn run_case_with_options(
                 local mem = cat[v[3]]
                 if not mem then error("no enum member " .. tostring(v[3])) end
                 return mem
+            elseif k == "ColorSequence" then
+                if type(v[2]) == "table" and type(v[2][1]) == "table" then
+                    local keypoints = {}
+                    for i, kp in ipairs(v[2]) do
+                        keypoints[i] = decode_val(kp)
+                    end
+                    return ColorSequence.new(keypoints)
+                else
+                    local c1 = decode_val(v[2])
+                    local c2 = v[3] and decode_val(v[3]) or nil
+                    return ColorSequence.new(c1, c2)
+                end
+            elseif k == "ColorSequenceKeypoint" then
+                return ColorSequenceKeypoint.new(v[2], decode_val(v[3]))
+            elseif k == "NumberSequence" then
+                if type(v[2]) == "table" and type(v[2][1]) == "table" then
+                    local keypoints = {}
+                    for i, kp in ipairs(v[2]) do
+                        keypoints[i] = decode_val(kp)
+                    end
+                    return NumberSequence.new(keypoints)
+                else
+                    return NumberSequence.new(v[2], v[3])
+                end
+            elseif k == "NumberSequenceKeypoint" then
+                return NumberSequenceKeypoint.new(v[2], v[3], v[4])
             end
             error("unknown encoded type " .. tostring(k))
         end

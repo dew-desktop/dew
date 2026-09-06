@@ -18,7 +18,7 @@ DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or
 without Aether**.
 
-**136 of 139 in-scope properties accepted by the host.** 22 more are
+**139 of 139 in-scope properties accepted by the host.** 22 more are
 excluded by decision, and 25 classes under `GuiObject` are in scope.
 
 Of those 139, **35 are already honoured by Aether's
@@ -63,33 +63,18 @@ layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `Rel
 
 **Properties.** `Archivable`, `AutoLocalize`, `Capabilities`, `GamepadInputEnabled`, `HoverHapticEffect`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `PressHapticEffect`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
 
-## Names the host is split on
-
-Accepted on one class and refused on another, because the same property name
-is a different type on unrelated classes. `UIStroke.Color` is a `Color3` the
-host takes; `UIGradient.Color` is a `ColorSequence` it does not.
-
-These count as NOT accepted. Counting them the other way let one class mask
-another, and reported the surface as 100% complete while two properties were
-still unassignable.
-
-- `Color`
-- `Transparency`
-
 ## Property backlog
 
-What conformance actually requires, split by what it costs. 3 properties.
+What conformance actually requires, split by what it costs. 0 properties.
 
-### Host work only (2)
+### Host work only (0)
 
 Aether's renderer already honours these, so the host has to accept, validate and
 store them and nothing else has to change.
 
-- `Color`, `Transparency`
 
-### Host and rendering (1)
+### Host and rendering (0)
 
-- `InputAction`
 
 ## Methods and events
 

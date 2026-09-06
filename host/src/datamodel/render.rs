@@ -74,7 +74,10 @@ fn is_modifier(class: &str) -> bool {
 
 /// Classes that draw text.
 fn draws_text(class: &str) -> bool {
-    matches!(class, "TextLabel" | "TextButton" | "TextBox")
+    matches!(
+        class,
+        "TextLabel" | "TextButton" | "TextBox" | "InputActionLabel"
+    )
 }
 
 /// Classes that draw an image.
@@ -86,7 +89,7 @@ fn draws_text(class: &str) -> bool {
 /// press. `ImageLabel` and `ImageButton` need none of that, which is why they are
 /// the two that arrive first.
 fn draws_image(class: &str) -> bool {
-    matches!(class, "ImageLabel" | "ImageButton")
+    matches!(class, "ImageLabel" | "ImageButton" | "InputActionLabel")
 }
 
 fn udim(dom: &Dom, id: usize, key: &str) -> (f32, f32) {
@@ -156,6 +159,16 @@ fn text(dom: &Dom, id: usize, key: &str) -> Option<String> {
     match dom.property(id, key) {
         Some(Variant::String(v)) => Some(v),
         _ => None,
+    }
+}
+
+fn text_for(dom: &Dom, id: usize, class: &str) -> Option<String> {
+    if class == "InputActionLabel" {
+        text(dom, id, "InputAction")
+            .filter(|t| !t.is_empty())
+            .or_else(|| text(dom, id, "Text").filter(|t| !t.is_empty()))
+    } else {
+        text(dom, id, "Text").filter(|t| !t.is_empty())
     }
 }
 
@@ -420,24 +433,8 @@ fn gradient_of(dom: &Dom, id: usize) -> Option<Gradient> {
                 }
             }
 
-            let color_varies =
-                !stops.is_empty() && stops.iter().any(|s| s.colour != stops[0].colour);
-            let alpha_varies = !alpha_stops.is_empty()
-                && alpha_stops
-                    .iter()
-                    .any(|s| (s.alpha - alpha_stops[0].alpha).abs() > 0.001);
-            if !color_varies && !alpha_varies {
-                stops = vec![
-                    Stop {
-                        at: 0.0,
-                        colour: Rgb(255, 255, 255),
-                    },
-                    Stop {
-                        at: 1.0,
-                        colour: Rgb(0, 0, 0),
-                    },
-                ];
-                alpha_stops = Vec::new();
+            if stops.is_empty() && alpha_stops.is_empty() {
+                return None;
             }
 
             return Some(Gradient {
@@ -682,7 +679,7 @@ fn grow(
 
     let class = dom.class_of(node).unwrap_or_default();
     if draws_text(&class) {
-        let text_content = text(dom, node, "Text").unwrap_or_default();
+        let text_content = text_for(dom, node, &class).unwrap_or_default();
         let text_size = number(dom, node, "TextSize").unwrap_or(14.0);
         let wrapped = boolean(dom, node, "TextWrapped").unwrap_or(false);
         let measured = if wrapped {
@@ -953,7 +950,8 @@ fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
         return authored_size;
     }
 
-    let Some(text_content) = text(dom, id, "Text") else {
+    let class = dom.class_of(id).unwrap_or_default();
+    let Some(text_content) = text_for(dom, id, &class) else {
         return authored_size;
     };
     if text_content.is_empty() {
@@ -1035,7 +1033,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         stroke: stroke_of(dom, id),
         gradient: gradient_of(dom, id),
         text: if draws_text(&class) {
-            text(dom, id, "Text").filter(|t| !t.is_empty())
+            text_for(dom, id, &class)
         } else {
             None
         },
@@ -1790,5 +1788,24 @@ mod tests {
         let auto = f.nodes.iter().find(|n| n.name == "Auto").expect("auto");
         assert_eq!(auto.rect.w, 30.0, "keeps authored width");
         assert_eq!(auto.rect.h, 40.0, "keeps authored height");
+    }
+
+    #[test]
+    fn input_action_label_reaches_the_display_list() {
+        let f = render(
+            r#"
+            local a = Instance.new("InputActionLabel")
+            a.Name = "Prompt"
+            a.Size = UDim2.new(0, 60, 0, 24)
+            a.InputAction = "Jump"
+            a.TextSize = 16
+            a.Parent = root
+        "#,
+            200.0,
+            100.0,
+        );
+        let prompt = f.nodes.iter().find(|n| n.name == "Prompt").expect("prompt");
+        assert_eq!(prompt.text.as_deref(), Some("Jump"));
+        assert_eq!(prompt.text_size, 16.0);
     }
 }
