@@ -103,16 +103,29 @@ pub fn face() -> Option<Font> {
 /// every label in it were blank. An error is recoverable and a collapse is not:
 /// Aether's `Text.Measure` catches a failing provider and falls back to its
 /// bundled advance table, which is approximate and visible, which is right.
-fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
+/// LINE HEIGHT IS 1.5x TEXTSIZE per line, and that is a rule of the DataModel
+/// layout standard (`LAYOUT.md` section 7) rather than of the underlying font:
+/// in Studio and in conformance, a single line of text in an auto-sized element
+/// resolves to exactly 1.5 x TextSize, while raw font typographic metrics
+/// vary by font.
+pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
     let Some(font) = face() else {
         return Err("this host has no font, so it cannot measure text".into());
     };
-    let width = font
-        .width(size, text)
-        .ok_or("the measuring face did not parse")?;
-    let height = font
-        .line_height(size)
-        .ok_or("the measuring face did not parse")?;
+    let width = if text.is_empty() {
+        0.0
+    } else {
+        let mut max_w = 0.0_f32;
+        for line in text.split('\n') {
+            let w = font
+                .width(size, line)
+                .ok_or("the measuring face did not parse")?;
+            max_w = max_w.max(w);
+        }
+        max_w
+    };
+    let lines = text.split('\n').count().max(1) as f32;
+    let height = lines * size * 1.5;
     Ok((width, height))
 }
 

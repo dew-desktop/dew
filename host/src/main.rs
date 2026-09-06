@@ -22,13 +22,11 @@ mod capabilities;
 use dew_host::datamodel;
 use dew_host::manifest;
 mod mods;
-mod services;
 mod surface;
 #[cfg(windows)]
 mod tray;
-
-use crate::services::SharedClock;
 use dew_host::datamodel::input;
+use dew_host::services::{self, SharedClock};
 use dew_raster::Backend;
 use dew_runtime::{Driver, RasterPainter, Rgb};
 #[cfg(windows)]

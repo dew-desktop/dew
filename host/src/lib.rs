@@ -23,3 +23,4 @@ pub mod assets;
 pub mod conformance;
 pub mod datamodel;
 pub mod manifest;
+pub mod services;

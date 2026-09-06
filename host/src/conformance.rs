@@ -977,15 +977,12 @@ mod tests {
         assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
         assert_eq!(summary.unsupported, 4, "expected 4 unsupported cases");
         assert_eq!(
-            summary.passed, 17,
-            "expected exactly 17 passing cases on native layout (11 geometry + 6 baseline)"
+            summary.passed, 20,
+            "expected all 20 executable conformance cases to pass"
         );
-        assert_eq!(
-            summary.failed, 3,
-            "expected 3 failing cases awaiting Sprint 3 text metrics"
-        );
+        assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
 
-        // Verify the 17 passing cases
+        // Verify the 20 passing cases
         let passing_names: Vec<&str> = results
             .iter()
             .filter(|r| matches!(r.status, CaseStatus::Pass | CaseStatus::Divergent))
@@ -1018,16 +1015,10 @@ mod tests {
         assert!(passing_names.contains(&"AutomaticSize with a quarter-Scale child under a layout"));
         assert!(passing_names.contains(&"UIListLayout stacks children and ignores their Position"));
 
-        // Verify the 3 failing cases are strictly the text metrics backlog
-        let failing_names: Vec<&str> = results
-            .iter()
-            .filter(|r| matches!(r.status, CaseStatus::Fail { .. }))
-            .map(|r| r.name.as_str())
-            .collect();
-        assert_eq!(failing_names.len(), 3);
-        assert!(failing_names.contains(&"one line of text is a fixed multiple of TextSize"));
-        assert!(failing_names.contains(&"text measurement is linear in TextSize"));
-        assert!(failing_names.contains(&"text measurement is per glyph, not per character"));
+        // 3 native text metrics cases
+        assert!(passing_names.contains(&"one line of text is a fixed multiple of TextSize"));
+        assert!(passing_names.contains(&"text measurement is linear in TextSize"));
+        assert!(passing_names.contains(&"text measurement is per glyph, not per character"));
     }
 
     #[test]

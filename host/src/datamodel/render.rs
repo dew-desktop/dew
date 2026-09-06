@@ -589,6 +589,24 @@ fn grow(
         did_y = true;
     }
 
+    let class = dom.class_of(node).unwrap_or_default();
+    if draws_text(&class) {
+        let text_content = text(dom, node, "Text").unwrap_or_default();
+        let text_size = number(dom, node, "TextSize").unwrap_or(14.0);
+        if let Ok((tw, th)) = crate::services::measure(&text_content, text_size) {
+            if grow_x {
+                let needed_w = tw + pad_l + pad_r;
+                entry_rect.w = entry_rect.w.max(needed_w);
+                did_x = true;
+            }
+            if grow_y {
+                let needed_h = th + pad_t + pad_b;
+                entry_rect.h = entry_rect.h.max(needed_h);
+                did_y = true;
+            }
+        }
+    }
+
     (entry_rect, did_x, did_y)
 }
 
