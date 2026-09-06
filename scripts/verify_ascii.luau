@@ -1,40 +1,27 @@
 --!strict
 --[[
-	verify_ascii -- plain ASCII in commits, pull requests and documentation.
+	verify_ascii -- plain ASCII in documentation.
 
 	    lune run scripts/verify_ascii.luau
 
-	WHY
-	`CONTRIBUTING.md` names three places: "plain ASCII, in commits, pull requests
-	and documentation alike", and `docs/contributing/guides/writing.md` gives the
-	reason -- a person typing into a terminal and an agent generating text should
-	both be able to produce the house style without thinking about it, and a
-	character you cannot type is one that gets pasted inconsistently.
+	SCOPE, and it is not open for reinterpretation. `CONTRIBUTING.md` names three
+	places: "plain ASCII, in commits, pull requests and documentation alike".
 
-	Nothing checked it, so it drifted: six sprint records grew a micro sign, a
-	middle dot and an em dash over four days and were normalised by hand, which is
-	the fix that does not stay fixed. `README.md`, `crates/runtime/README.md` and
-	`docs/mod_contract.md` were carrying 23 characters between them on the day this
-	landed, and are clean in the same commit.
+	    commits          checked by scripts/commitlint_check.luau
+	    pull requests    not checkable from here
+	    documentation    checked by this script
 
-	THREE PLACES, AND NOT A FOURTH. This checks documentation. It does NOT check
-	Rust or Luau source, and it does not check what Dew prints at runtime -- the
-	writing guide says outright that emoji in a running program's output is
-	product rather than prose. An earlier draft checked every text file in the
-	repository and reported 2758 violations, most of them ruled comment headers in
-	`host/src/datamodel/`. That was the script inventing a rule rather than
-	enforcing one, and a gate that overreaches gets disabled and takes the real
-	rule with it.
+	IT CHECKS TRACKED DOCUMENTATION AND NOTHING ELSE. Not Rust, not Luau, not
+	comments in either, and not what Dew prints at runtime -- `docs/contributing/
+	guides/writing.md` says emoji in a running program's output is product rather
+	than prose. Private notes under `.artifacts/` are gitignored, absent in CI, and
+	outside CONTRIBUTING's scope, so they are excluded too.
 
-	Commit messages are checked by `scripts/commitlint_check.luau`, which already
-	reads them. Pull requests are the third place and are not checkable from here.
+	That list is the whole rule. Do not widen it.
 
 	THE CENSUS is the migration, as the allowlist is in `verify_boundaries.luau`.
-	No tracked file is in it: private notes under `.artifacts/` are excluded
-	entirely because they are gitignored, outside the scope of CONTRIBUTING, and
-	absent in CI. A file absent from the census gets no allowance, so every
-	tracked document starts at zero and a new violation fails on the commit that
-	adds it.
+	No tracked file is in it, so every tracked document starts at an allowance of
+	zero and a new violation fails on the commit that adds it.
 ]]
 
 local fs = require("@lune/fs")

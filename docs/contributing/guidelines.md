@@ -28,9 +28,10 @@ A commit is read by someone running `git blame` in two years; a pull request by 
 reviewer now; a release note by someone upgrading; a README by someone deciding
 whether to stay. Most bad writing in all four is aimed at the wrong one.
 
-**Plain ASCII everywhere.**
+**Plain ASCII in prose.**
 No em dashes, curly quotes, arrows or emoji, in commits, pull requests, releases
-or documentation. A character you cannot type is one that gets pasted
+or documentation. Source and what a program prints are not prose and are not
+covered. A character you cannot type is one that gets pasted
 inconsistently.
 
 **`main` is always green.**
