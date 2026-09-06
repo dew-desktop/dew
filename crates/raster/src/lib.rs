@@ -43,8 +43,8 @@ use bitmap::BitmapStore;
 use std::collections::HashMap;
 use text::FontStore;
 use tiny_skia::{
-    FillRule, GradientStop, LinearGradient, Mask, Paint, PathBuilder, Pixmap, Point, Rect, Stroke,
-    Transform,
+    FillRule, GradientStop, LinearGradient, Mask, Paint, PathBuilder, Pixmap, Point,
+    RadialGradient, Rect, Stroke, Transform,
 };
 use vello_cpu::color::{AlphaColor, DynamicColor, Srgb};
 use vello_cpu::kurbo::{
@@ -973,7 +973,177 @@ pub extern "C" fn ar_fill_gradient(
         Transform::identity(),
     ) {
         Some(sh) => sh,
+        None => {
+            ar_fill_rect(
+                ptr,
+                x,
+                y,
+                w,
+                h,
+                radius,
+                raw[1] as u8,
+                raw[2] as u8,
+                raw[3] as u8,
+                raw[4] as u8,
+            );
+            return;
+        }
+    };
+    let path = match rounded_path(x, y, w, h, radius) {
+        Some(p) => p,
         None => return,
+    };
+    let mut paint = Paint::default();
+    paint.shader = shader;
+    paint.anti_alias = true;
+    let cuts = s.clip_cuts(x, y, w, h, 0.0);
+    if cuts {
+        s.ensure_mask();
+    }
+    let Surface {
+        pixmap,
+        masks,
+        clips,
+        ..
+    } = s;
+    let mask = if cuts {
+        clips.last().and_then(|k| masks.get(k))
+    } else {
+        None
+    };
+    pixmap.fill_path(
+        &path,
+        &paint,
+        FillRule::Winding,
+        Transform::identity(),
+        mask,
+    );
+}
+
+/// A radial gradient fill.
+///
+/// `stops` is a FLAT array of `[t, r, g, b, a]` per stop, t in 0..1 and channels
+/// in 0..255. The ramp spreads outward from the element's centre with radius
+/// equal to the half-extent of the smaller axis, matching Roblox's UIGradient.
+/// If the painter cannot ramp, it falls back to a flat fill with the first stop's
+/// colour rather than drawing nothing, because drawing nothing produces blank UI.
+#[no_mangle]
+pub extern "C" fn ar_fill_radial_gradient(
+    ptr: *mut Surface,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+    _rotation: f32,
+    stops: *const f32,
+    stop_count: u32,
+) {
+    let s = match unsafe { ptr.as_mut() } {
+        Some(s) => s,
+        None => return,
+    };
+    if stops.is_null() || stop_count == 0 || poisoned("blank") || poisoned("blackout") {
+        return;
+    }
+    let raw = unsafe { std::slice::from_raw_parts(stops, (stop_count as usize) * 5) };
+    let mut parsed: Vec<GradientStop> = Vec::with_capacity(stop_count as usize);
+    for i in 0..stop_count as usize {
+        let t = raw[i * 5].clamp(0.0, 1.0);
+        let c = tiny_skia::Color::from_rgba8(
+            raw[i * 5 + 1] as u8,
+            raw[i * 5 + 2] as u8,
+            raw[i * 5 + 3] as u8,
+            raw[i * 5 + 4] as u8,
+        );
+        parsed.push(GradientStop::new(t, c));
+    }
+    if parsed.len() < 2 {
+        let c =
+            tiny_skia::Color::from_rgba8(raw[1] as u8, raw[2] as u8, raw[3] as u8, raw[4] as u8);
+        parsed.push(GradientStop::new(1.0, c));
+    }
+
+    let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+    let grad_radius = (w / 2.0).min(h / 2.0);
+
+    if s.which == Which::VelloCpu {
+        let stops: Vec<ColorStop> = (0..stop_count as usize)
+            .map(|i| ColorStop {
+                offset: raw[i * 5].clamp(0.0, 1.0),
+                color: DynamicColor::from_alpha_color(AlphaColor::<Srgb>::from_rgba8(
+                    raw[i * 5 + 1] as u8,
+                    raw[i * 5 + 2] as u8,
+                    raw[i * 5 + 3] as u8,
+                    raw[i * 5 + 4] as u8,
+                )),
+            })
+            .collect();
+        let stops = if stops.len() < 2 {
+            let mut v = stops.clone();
+            if let Some(first) = stops.first() {
+                v.push(ColorStop {
+                    offset: 1.0,
+                    color: first.color,
+                });
+            }
+            v
+        } else {
+            stops
+        };
+        if stops.len() < 2 {
+            ar_fill_rect(
+                ptr,
+                x,
+                y,
+                w,
+                h,
+                radius,
+                raw[1] as u8,
+                raw[2] as u8,
+                raw[3] as u8,
+                raw[4] as u8,
+            );
+            return;
+        }
+        let grad = VGradient::new_radial(VPoint::new(cx as f64, cy as f64), grad_radius)
+            .with_stops(stops.as_slice());
+        if let Some(path) = Surface::vello_path(x, y, w, h, radius) {
+            if let Some(v) = s.vello.as_mut() {
+                v.ctx.set_paint(grad);
+                v.ctx.fill_path(&path);
+                v.ctx
+                    .set_paint(AlphaColor::<Srgb>::from_rgba8(0, 0, 0, 255));
+            }
+        }
+        return;
+    }
+
+    let center = Point::from_xy(cx, cy);
+    let shader = match RadialGradient::new(
+        center,
+        center,
+        grad_radius,
+        parsed,
+        tiny_skia::SpreadMode::Pad,
+        Transform::identity(),
+    ) {
+        Some(sh) => sh,
+        None => {
+            ar_fill_rect(
+                ptr,
+                x,
+                y,
+                w,
+                h,
+                radius,
+                raw[1] as u8,
+                raw[2] as u8,
+                raw[3] as u8,
+                raw[4] as u8,
+            );
+            return;
+        }
     };
     let path = match rounded_path(x, y, w, h, radius) {
         Some(p) => p,
@@ -1700,6 +1870,60 @@ mod gpu_abi {
     }
 
     #[no_mangle]
+    pub extern "C" fn ar_win_fill_radial_gradient(
+        ptr: *mut Windowed,
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        radius: f32,
+        _rotation: f32,
+        stops: *const f32,
+        stop_count: u32,
+    ) {
+        let win = match unsafe { ptr.as_mut() } {
+            Some(v) => v,
+            None => return,
+        };
+        if stops.is_null() || stop_count == 0 {
+            return;
+        }
+        let raw = unsafe { std::slice::from_raw_parts(stops, (stop_count as usize) * 5) };
+        let mut parsed: Vec<ColorStop> = (0..stop_count as usize)
+            .map(|i| ColorStop {
+                offset: raw[i * 5].clamp(0.0, 1.0),
+                color: DynamicColor::from_alpha_color(AlphaColor::<Srgb>::from_rgba8(
+                    raw[i * 5 + 1] as u8,
+                    raw[i * 5 + 2] as u8,
+                    raw[i * 5 + 3] as u8,
+                    raw[i * 5 + 4] as u8,
+                )),
+            })
+            .collect();
+        if parsed.len() < 2 {
+            if let Some(first) = parsed.first() {
+                parsed.push(ColorStop {
+                    offset: 1.0,
+                    color: first.color,
+                });
+            }
+        }
+        if parsed.len() < 2 {
+            return;
+        }
+        let (cx, cy) = (x + w / 2.0, y + h / 2.0);
+        let grad_radius = (w / 2.0).min(h / 2.0);
+        let grad = VGradient::new_radial(
+            vello_cpu::kurbo::Point::new(cx as f64, cy as f64),
+            grad_radius,
+        )
+        .with_stops(parsed.as_slice());
+        if let Some(path) = Windowed::path(x, y, w, h, radius) {
+            win.gradient(&path, grad);
+        }
+    }
+
+    #[no_mangle]
     pub extern "C" fn ar_win_clip_push(ptr: *mut Windowed, x: i32, y: i32, w: i32, h: i32) {
         if let Some(win) = unsafe { ptr.as_mut() } {
             win.clip_push(x, y, w, h);
@@ -2200,6 +2424,30 @@ mod tests {
             assert_eq!(
                 outside, 0x000B_0D12,
                 "backend {backend}: the background should be (11,13,18), got {outside:#08x}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_backend_paints_a_radial_gradient() {
+        for backend in [0u32, 1u32] {
+            let s = ar_surface_new_backend(100, 50, backend);
+            assert!(!s.is_null());
+            ar_begin(s, 0, 0, 0);
+            let stops = [
+                0.0f32, 255.0, 255.0, 255.0, 255.0, 1.0, 0.0, 0.0, 0.0, 255.0,
+            ];
+            ar_fill_radial_gradient(s, 0.0, 0.0, 100.0, 50.0, 0.0, 0.0, stops.as_ptr(), 2);
+            let center = ar_pixel(s, 50, 25);
+            let corner = ar_pixel(s, 2, 2);
+            ar_surface_free(s);
+            assert_eq!(
+                corner, 0x0000_0000,
+                "backend {backend}: corner must be black"
+            );
+            assert!(
+                center > 0x00e0_e0e0,
+                "backend {backend}: center must be near white"
             );
         }
     }

@@ -47,7 +47,9 @@
 //!
 //! So: enough to put a real tree on screen, and no claim beyond that.
 
-use dew_runtime::frame::{Align, Frame, Image, Node, Rect, Rgb, Scale, Stroke};
+use dew_runtime::frame::{
+    Align, AlphaStop, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale, Stop, Stroke,
+};
 use rbx_types::{Variant, Vector2};
 
 use super::{Dom, SharedDom};
@@ -354,6 +356,95 @@ fn stroke_of(dom: &Dom, id: usize) -> Option<Stroke> {
                 colour: colour(dom, child, "Color"),
                 thickness: number(dom, child, "Thickness").unwrap_or(1.0),
                 alpha: alpha_from(dom, child, "Transparency"),
+            });
+        }
+    }
+    None
+}
+
+fn gradient_kind(dom: &Dom, id: usize) -> GradientKind {
+    if let Some(prop) = dom.property(id, "Type") {
+        match prop {
+            Variant::Enum(raw) => {
+                if let Some(item) = super::enums::item_by_value("GradientType", raw.to_u32()) {
+                    if item.name.eq_ignore_ascii_case("radial") {
+                        return GradientKind::Radial;
+                    }
+                }
+                if raw.to_u32() == 1 {
+                    return GradientKind::Radial;
+                }
+            }
+            Variant::String(s) if s.eq_ignore_ascii_case("radial") => {
+                return GradientKind::Radial;
+            }
+            _ => {}
+        }
+    }
+    if let Some(Variant::String(s)) = dom.property(id, "Shape") {
+        if s.eq_ignore_ascii_case("radial") {
+            return GradientKind::Radial;
+        }
+    }
+    GradientKind::Linear
+}
+
+fn gradient_of(dom: &Dom, id: usize) -> Option<Gradient> {
+    for child in dom.children(id) {
+        if dom.class_of(child).as_deref() == Some("UIGradient") {
+            if boolean(dom, child, "Enabled") == Some(false) {
+                continue;
+            }
+            let rotation = number(dom, child, "Rotation").unwrap_or(0.0);
+            let kind = gradient_kind(dom, child);
+            let mut stops = Vec::new();
+            if let Some(Variant::ColorSequence(cs)) = dom.property(child, "Color") {
+                for kp in &cs.keypoints {
+                    stops.push(Stop {
+                        at: kp.time,
+                        colour: Rgb(
+                            (kp.color.r.clamp(0.0, 1.0) * 255.0).round() as u8,
+                            (kp.color.g.clamp(0.0, 1.0) * 255.0).round() as u8,
+                            (kp.color.b.clamp(0.0, 1.0) * 255.0).round() as u8,
+                        ),
+                    });
+                }
+            }
+            let mut alpha_stops = Vec::new();
+            if let Some(Variant::NumberSequence(ns)) = dom.property(child, "Transparency") {
+                for kp in &ns.keypoints {
+                    alpha_stops.push(AlphaStop {
+                        at: kp.time,
+                        alpha: 1.0 - kp.value.clamp(0.0, 1.0),
+                    });
+                }
+            }
+
+            let color_varies =
+                !stops.is_empty() && stops.iter().any(|s| s.colour != stops[0].colour);
+            let alpha_varies = !alpha_stops.is_empty()
+                && alpha_stops
+                    .iter()
+                    .any(|s| (s.alpha - alpha_stops[0].alpha).abs() > 0.001);
+            if !color_varies && !alpha_varies {
+                stops = vec![
+                    Stop {
+                        at: 0.0,
+                        colour: Rgb(255, 255, 255),
+                    },
+                    Stop {
+                        at: 1.0,
+                        colour: Rgb(0, 0, 0),
+                    },
+                ];
+                alpha_stops = Vec::new();
+            }
+
+            return Some(Gradient {
+                kind,
+                stops,
+                alpha_stops,
+                rotation,
             });
         }
     }
@@ -875,7 +966,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
             h: c.h,
         }),
         stroke: stroke_of(dom, id),
-        gradient: None,
+        gradient: gradient_of(dom, id),
         text: if draws_text(&class) {
             text(dom, id, "Text").filter(|t| !t.is_empty())
         } else {

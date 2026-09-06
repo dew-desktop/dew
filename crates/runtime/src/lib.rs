@@ -48,7 +48,7 @@ pub mod session;
 pub mod vm;
 
 pub use driver::Driver;
-pub use frame::{Bitmap, Delta, Frame, Image, Node, Rect, Rgb, Scale};
+pub use frame::{Bitmap, Delta, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale};
 pub use painter::Painter;
 #[cfg(feature = "raster")]
 pub use raster::RasterPainter;

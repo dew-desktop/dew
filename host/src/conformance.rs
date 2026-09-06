@@ -14,7 +14,7 @@ use crate::datamodel::{install, install_vocabulary, render::frame_of, SharedDom}
 use dew_raster::Backend;
 use dew_runtime::{Painter, RasterPainter};
 use mlua::prelude::*;
-use mlua::{Table, Value};
+use mlua::{Function, Table, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -28,6 +28,7 @@ pub static SUPPORTS: &[&str] = &[
     "AnchorPoint",
     "ClipsDescendants",
     "UICorner",
+    "UIGradient.Radial",
     "UIStroke",
     "Visible",
     "ZIndex",
@@ -1143,7 +1144,7 @@ fn finalize_result(case: &Case, detail: String, remediation: Option<String>) -> 
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct SuiteSummary {
     pub total: usize,
     pub passed: usize,
@@ -1153,6 +1154,134 @@ pub struct SuiteSummary {
     pub unsupported: usize,
     pub undecodable: usize,
     pub verified_against_roblox: usize,
+    pub disagreed_open: usize,
+}
+
+/// Pure-Rust tally calculation matching `conformance/tally.luau` semantics.
+pub fn compute_summary_native(results: &[CaseResult]) -> SuiteSummary {
+    let total = results.len();
+    let mut passed = 0;
+    let mut divergent = 0;
+    let mut failed = 0;
+    let mut disagreed_open = 0;
+    let mut unsupported = 0;
+    let mut undecodable = 0;
+
+    for r in results {
+        match &r.status {
+            CaseStatus::Pass => {
+                passed += 1;
+            }
+            CaseStatus::Divergent => {
+                passed += 1;
+                divergent += 1;
+            }
+            CaseStatus::Fail { .. } => {
+                failed += 1;
+            }
+            CaseStatus::OpenQuestion { .. } => {
+                disagreed_open += 1;
+            }
+            CaseStatus::Unsupported { .. } => {
+                unsupported += 1;
+            }
+            CaseStatus::Undecodable { .. } => {
+                undecodable += 1;
+            }
+        }
+    }
+
+    let mut verified_against_roblox = 0;
+    let mut open_questions = 0;
+
+    for r in results {
+        let is_unsupported = matches!(r.status, CaseStatus::Unsupported { .. });
+        let is_undecodable = matches!(r.status, CaseStatus::Undecodable { .. });
+        if !is_unsupported && !is_undecodable {
+            if r.provenance == "roblox" {
+                verified_against_roblox += 1;
+            } else if r.provenance == "asserted" {
+                open_questions += 1;
+            }
+        }
+    }
+
+    SuiteSummary {
+        total,
+        passed,
+        failed,
+        open_questions,
+        divergent,
+        unsupported,
+        undecodable,
+        verified_against_roblox,
+        disagreed_open,
+    }
+}
+
+/// Compute summary using shared `tally.luau` when available, falling back to native Rust.
+pub fn compute_summary(cases_dir: Option<&Path>, results: &[CaseResult]) -> SuiteSummary {
+    if let Some(dir) = cases_dir {
+        let tally_path = dir.parent().map(|p| p.join("tally.luau"));
+        if let Some(ref path) = tally_path {
+            if let Ok(source) = std::fs::read_to_string(path) {
+                let lua = Lua::new();
+                if let Ok(tally_module) = lua.load(&source).set_name("tally.luau").eval::<Table>() {
+                    if let Ok(summarize_fn) = tally_module.get::<Function>("summarize") {
+                        if let Ok(lua_results) = lua.create_table() {
+                            for (i, r) in results.iter().enumerate() {
+                                if let Ok(item) = lua.create_table() {
+                                    let _ = item.set("name", r.name.as_str());
+                                    let _ = item.set("provenance", r.provenance.as_str());
+                                    let _ = item.set(
+                                        "ok",
+                                        matches!(
+                                            r.status,
+                                            CaseStatus::Pass | CaseStatus::Divergent
+                                        ),
+                                    );
+                                    let _ = item.set(
+                                        "unsupported",
+                                        matches!(r.status, CaseStatus::Unsupported { .. }),
+                                    );
+                                    let _ = item.set(
+                                        "divergent",
+                                        matches!(r.status, CaseStatus::Divergent),
+                                    );
+                                    let _ = item.set(
+                                        "undecodable",
+                                        matches!(r.status, CaseStatus::Undecodable { .. }),
+                                    );
+                                    let _ = lua_results.set(i + 1, item);
+                                }
+                            }
+                            if let Ok(summary_table) = summarize_fn.call::<Table>(lua_results) {
+                                return SuiteSummary {
+                                    total: summary_table.get("total").unwrap_or(results.len()),
+                                    passed: summary_table.get("passed").unwrap_or(0),
+                                    failed: summary_table.get("failed").unwrap_or(0),
+                                    open_questions: summary_table
+                                        .get("open_questions")
+                                        .unwrap_or(0),
+                                    divergent: summary_table.get("divergent").unwrap_or(0),
+                                    unsupported: summary_table.get("unsupported").unwrap_or(0),
+                                    undecodable: summary_table.get("undecodable").unwrap_or(0),
+                                    verified_against_roblox: summary_table
+                                        .get("verified_against_roblox")
+                                        .unwrap_or(0),
+                                    disagreed_open: summary_table
+                                        .get("disagreed_open")
+                                        .unwrap_or(0),
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    compute_summary_native(results)
 }
 
 /// Run all conformance cases in `cases_dir` with optional filter.
@@ -1231,40 +1360,7 @@ pub fn run_suite_with_options(
 
     results.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let mut summary = SuiteSummary {
-        total: results.len(),
-        ..Default::default()
-    };
-
-    for r in &results {
-        match &r.status {
-            CaseStatus::Pass => {
-                summary.passed += 1;
-                if r.provenance == "roblox" {
-                    summary.verified_against_roblox += 1;
-                }
-            }
-            CaseStatus::Divergent => {
-                summary.passed += 1;
-                summary.divergent += 1;
-                if r.provenance == "roblox" {
-                    summary.verified_against_roblox += 1;
-                }
-            }
-            CaseStatus::Fail { .. } => {
-                summary.failed += 1;
-            }
-            CaseStatus::OpenQuestion { .. } => {
-                summary.open_questions += 1;
-            }
-            CaseStatus::Unsupported { .. } => {
-                summary.unsupported += 1;
-            }
-            CaseStatus::Undecodable { .. } => {
-                summary.undecodable += 1;
-            }
-        }
-    }
+    let summary = compute_summary(Some(cases_dir), &results);
 
     (results, summary)
 }
@@ -1326,6 +1422,21 @@ pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
         }
     );
 
+    if summary.open_questions > 0 {
+        let disagree_note = if summary.disagreed_open > 0 {
+            format!(
+                ", {} of which this implementation disagrees with",
+                summary.disagreed_open
+            )
+        } else {
+            String::new()
+        };
+        println!(
+            "  {} case(s) state a belief nobody has checked in Studio{}. See conformance/README.md for how to verify one.",
+            summary.open_questions, disagree_note
+        );
+    }
+
     if summary.failed > 0 {
         println!();
         println!("FAILURES REQUIRING TEXT METRICS (Sprint 3 backlog):");
@@ -1360,14 +1471,15 @@ mod tests {
             summary.total
         );
         assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
-        assert_eq!(summary.unsupported, 4, "expected 4 unsupported cases");
+        assert_eq!(summary.unsupported, 3, "expected 3 unsupported cases");
         assert_eq!(
-            summary.passed, 20,
-            "expected all 20 executable conformance cases to pass"
+            summary.passed, 21,
+            "expected all 21 executable conformance cases to pass"
         );
         assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
+        assert_eq!(summary.open_questions, 1, "expected 1 open question");
 
-        // Verify the 20 passing cases
+        // Verify the 21 passing cases
         let passing_names: Vec<&str> = results
             .iter()
             .filter(|r| matches!(r.status, CaseStatus::Pass | CaseStatus::Divergent))
@@ -1382,6 +1494,7 @@ mod tests {
         assert!(passing_names.contains(&"ZIndex orders the paint, then depth, then declaration"));
         assert!(passing_names
             .contains(&"a clipped child keeps its rectangle (the radius gap is invisible here)"));
+        assert!(passing_names.contains(&"a radial UIGradient reaches the display list as radial"));
 
         // 11 native geometry cases
         assert!(passing_names.contains(&"AnchorPoint offsets by the size AutomaticSize produced"));
@@ -1450,18 +1563,13 @@ mod tests {
     }
 
     #[test]
-    fn radial_gradient_case_remains_unsupported_until_display_list_carries_gradient_kind() {
+    fn radial_gradient_case_reaches_display_list_and_renders() {
         let dir = find_cases_dir(None).expect("cases dir");
         let (results, summary) = run_suite(&dir, Some("uigradient_radial"));
         assert_eq!(results.len(), 1);
-        assert_eq!(summary.passed, 0);
-        assert_eq!(summary.unsupported, 1);
-        assert_eq!(
-            results[0].status,
-            CaseStatus::Unsupported {
-                feature: "UIGradient.Radial".to_string()
-            }
-        );
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.unsupported, 0);
+        assert_eq!(results[0].status, CaseStatus::Pass);
     }
 
     #[test]
@@ -1470,11 +1578,19 @@ mod tests {
         let (_results, summary) = run_suite_pixel(&dir, None, false, false);
         assert_eq!(summary.total, 24);
         assert_eq!(summary.undecodable, 0);
-        assert_eq!(summary.unsupported, 4);
-        assert_eq!(summary.passed, 20);
+        assert_eq!(summary.unsupported, 3);
+        assert_eq!(summary.passed, 21);
         assert_eq!(summary.failed, 0);
         assert_eq!(summary.divergent, 1);
         assert_eq!(summary.verified_against_roblox, 18);
-        assert_eq!(summary.open_questions, 0);
+        assert_eq!(summary.open_questions, 1);
+    }
+
+    #[test]
+    fn shared_and_native_tally_produce_identical_summaries() {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let (results, summary_shared) = run_suite(&dir, None);
+        let summary_native = compute_summary_native(&results);
+        assert_eq!(summary_shared, summary_native);
     }
 }

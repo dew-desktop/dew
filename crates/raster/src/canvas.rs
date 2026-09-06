@@ -20,9 +20,10 @@
 
 use crate::{
     ar_begin, ar_begin_alpha, ar_begin_rect_alpha, ar_bgra, ar_clip_pop, ar_clip_push,
-    ar_draw_image, ar_fill_gradient, ar_fill_rect, ar_fill_text, ar_font_load, ar_image_free,
-    ar_image_size, ar_image_upload, ar_png, ar_stroke_rect, ar_surface_free,
-    ar_surface_new_backend, ar_text_ascent, ar_text_line_height, ar_text_width, Surface,
+    ar_draw_image, ar_fill_gradient, ar_fill_radial_gradient, ar_fill_rect, ar_fill_text,
+    ar_font_load, ar_image_free, ar_image_size, ar_image_upload, ar_png, ar_stroke_rect,
+    ar_surface_free, ar_surface_new_backend, ar_text_ascent, ar_text_line_height, ar_text_width,
+    Surface,
 };
 
 /// Which rasteriser paints.
@@ -213,7 +214,7 @@ impl Canvas {
     }
 
     /// Fill with a gradient. Each stop is `(at, r, g, b, a)`, flattened, which is
-    /// the layout the ABI reads five floats at a time.
+    /// the layout the ABI reads five floats at a time. `kind` is 0 for Linear, 1 for Radial.
     pub fn fill_gradient(
         &mut self,
         x: f32,
@@ -222,23 +223,38 @@ impl Canvas {
         h: f32,
         radius: f32,
         rotation: f32,
+        kind: u32,
         stops: &[[f32; 5]],
     ) {
         if stops.is_empty() {
             return;
         }
         let flat: Vec<f32> = stops.iter().flatten().copied().collect();
-        ar_fill_gradient(
-            self.ptr,
-            x,
-            y,
-            w,
-            h,
-            radius,
-            rotation,
-            flat.as_ptr(),
-            stops.len() as u32,
-        );
+        if kind == 1 {
+            ar_fill_radial_gradient(
+                self.ptr,
+                x,
+                y,
+                w,
+                h,
+                radius,
+                rotation,
+                flat.as_ptr(),
+                stops.len() as u32,
+            );
+        } else {
+            ar_fill_gradient(
+                self.ptr,
+                x,
+                y,
+                w,
+                h,
+                radius,
+                rotation,
+                flat.as_ptr(),
+                stops.len() as u32,
+            );
+        }
     }
 
     /// Draw a run. `x`/`y` are the TOP-LEFT of the text box, matching every other

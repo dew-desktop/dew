@@ -64,6 +64,16 @@ pub struct AlphaStop {
     pub alpha: f32,
 }
 
+/// The shape of a gradient ramp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GradientKind {
+    /// A straight ramp along a line, rotated by `rotation` degrees.
+    #[default]
+    Linear,
+    /// A circular or elliptical ramp spreading outward from the center.
+    Radial,
+}
+
 /// A UIGradient.
 ///
 /// `stops` is a COLOUR ramp and `alpha_stops` an ALPHA ramp, and a gradient may
@@ -74,6 +84,7 @@ pub struct AlphaStop {
 /// bug, so both are decoded here whether or not a painter uses them yet.
 #[derive(Debug, Clone, Default)]
 pub struct Gradient {
+    pub kind: GradientKind,
     pub stops: Vec<Stop>,
     pub alpha_stops: Vec<AlphaStop>,
     pub rotation: f32,
@@ -431,10 +442,20 @@ impl Node {
             alpha: s.get("alpha").unwrap_or(1.0),
         });
 
-        let gradient = t.get::<Option<LuaTable>>("gradient")?.map(|g| Gradient {
-            stops: stops_from(g.get("stops").ok()),
-            alpha_stops: alpha_stops_from(g.get("alphaStops").ok()),
-            rotation: g.get("rotation").unwrap_or(0.0),
+        let gradient = t.get::<Option<LuaTable>>("gradient")?.map(|g| {
+            let kind = match g.get::<Option<String>>("kind").ok().flatten() {
+                Some(s) if s.eq_ignore_ascii_case("radial") => GradientKind::Radial,
+                _ => match g.get::<Option<u32>>("kind").ok().flatten() {
+                    Some(1) => GradientKind::Radial,
+                    _ => GradientKind::Linear,
+                },
+            };
+            Gradient {
+                kind,
+                stops: stops_from(g.get("stops").ok()),
+                alpha_stops: alpha_stops_from(g.get("alphaStops").ok()),
+                rotation: g.get("rotation").unwrap_or(0.0),
+            }
         });
 
         Ok(Node {

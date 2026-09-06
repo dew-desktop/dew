@@ -241,6 +241,10 @@ impl Painter for RasterPainter {
             return;
         }
 
+        let kind = match gradient.kind {
+            crate::frame::GradientKind::Radial => 1,
+            crate::frame::GradientKind::Linear => 0,
+        };
         self.canvas.fill_gradient(
             rect.x,
             rect.y,
@@ -248,6 +252,7 @@ impl Painter for RasterPainter {
             rect.h,
             radius,
             gradient.rotation,
+            kind,
             &stops,
         );
     }
