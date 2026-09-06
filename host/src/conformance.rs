@@ -943,7 +943,7 @@ pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
 
     if summary.failed > 0 {
         println!();
-        println!("FAILURES REQUIRING NATIVE LAYOUT (Sprint 2 backlog):");
+        println!("FAILURES REQUIRING TEXT METRICS (Sprint 3 backlog):");
         for r in results {
             if let CaseStatus::Fail {
                 detail,
@@ -977,15 +977,15 @@ mod tests {
         assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
         assert_eq!(summary.unsupported, 4, "expected 4 unsupported cases");
         assert_eq!(
-            summary.passed, 6,
-            "expected exactly 6 passing cases on demo layout"
+            summary.passed, 17,
+            "expected exactly 17 passing cases on native layout (11 geometry + 6 baseline)"
         );
         assert_eq!(
-            summary.failed, 14,
-            "expected 14 failing cases on demo layout"
+            summary.failed, 3,
+            "expected 3 failing cases awaiting Sprint 3 text metrics"
         );
 
-        // Verify the 6 specific cases that pass on demo layout
+        // Verify the 17 passing cases
         let passing_names: Vec<&str> = results
             .iter()
             .filter(|r| matches!(r.status, CaseStatus::Pass | CaseStatus::Divergent))
@@ -1000,6 +1000,34 @@ mod tests {
         assert!(passing_names.contains(&"ZIndex orders the paint, then depth, then declaration"));
         assert!(passing_names
             .contains(&"a clipped child keeps its rectangle (the radius gap is invisible here)"));
+
+        // 11 native geometry cases
+        assert!(passing_names.contains(&"AnchorPoint offsets by the size AutomaticSize produced"));
+        assert!(passing_names.contains(&"AutomaticSize Y grows a frame to fit its children"));
+        assert!(passing_names.contains(&"AutomaticSize includes UIPadding in the measured size"));
+        assert!(passing_names
+            .contains(&"AutomaticSize resolves a Scale-sized child against the available space"));
+        assert!(passing_names.contains(&"AutomaticSize with a FULL scale-sized child"));
+        assert!(passing_names.contains(&"AutomaticSize with a Scale child and NO layout"));
+        assert!(passing_names
+            .contains(&"AutomaticSize with a Scale child that has content, under a layout"));
+        assert!(
+            passing_names.contains(&"AutomaticSize with a Scale child under a smaller grandparent")
+        );
+        assert!(passing_names.contains(&"AutomaticSize with a half-Scale child that HAS content"));
+        assert!(passing_names.contains(&"AutomaticSize with a quarter-Scale child under a layout"));
+        assert!(passing_names.contains(&"UIListLayout stacks children and ignores their Position"));
+
+        // Verify the 3 failing cases are strictly the text metrics backlog
+        let failing_names: Vec<&str> = results
+            .iter()
+            .filter(|r| matches!(r.status, CaseStatus::Fail { .. }))
+            .map(|r| r.name.as_str())
+            .collect();
+        assert_eq!(failing_names.len(), 3);
+        assert!(failing_names.contains(&"one line of text is a fixed multiple of TextSize"));
+        assert!(failing_names.contains(&"text measurement is linear in TextSize"));
+        assert!(failing_names.contains(&"text measurement is per glyph, not per character"));
     }
 
     #[test]

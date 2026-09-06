@@ -87,10 +87,42 @@ fn draws_image(class: &str) -> bool {
     matches!(class, "ImageLabel" | "ImageButton")
 }
 
+fn udim(dom: &Dom, id: usize, key: &str) -> (f32, f32) {
+    match dom.property(id, key) {
+        Some(Variant::UDim(v)) => (v.scale, v.offset as f32),
+        _ => (0.0, 0.0),
+    }
+}
+
 fn udim2(dom: &Dom, id: usize, key: &str) -> (f32, f32, f32, f32) {
     match dom.property(id, key) {
         Some(Variant::UDim2(v)) => (v.x.scale, v.x.offset as f32, v.y.scale, v.y.offset as f32),
         _ => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
+/// The UIPadding on a node, as four offsets: (left, top, right, bottom).
+fn padding_of(dom: &Dom, id: usize) -> (f32, f32, f32, f32) {
+    for child in dom.children(id) {
+        if dom.class_of(child).as_deref() == Some("UIPadding") {
+            let (_, l) = udim(dom, child, "PaddingLeft");
+            let (_, t) = udim(dom, child, "PaddingTop");
+            let (_, r) = udim(dom, child, "PaddingRight");
+            let (_, b) = udim(dom, child, "PaddingBottom");
+            return (l, t, r, b);
+        }
+    }
+    (0.0, 0.0, 0.0, 0.0)
+}
+
+/// The content box a container offers its children: its own rect, inset by any UIPadding.
+fn content_box(dom: &Dom, id: usize, own: Box2) -> Box2 {
+    let (l, t, r, b) = padding_of(dom, id);
+    Box2 {
+        x: own.x + l,
+        y: own.y + t,
+        w: (own.w - l - r).max(0.0),
+        h: (own.h - t - b).max(0.0),
     }
 }
 
@@ -158,6 +190,13 @@ fn align(dom: &Dom, id: usize, key: &str, enum_name: &str) -> Option<Align> {
     })
 }
 
+/// The UIListLayout child on a node, if any.
+fn list_layout_of(dom: &Dom, id: usize) -> Option<usize> {
+    dom.children(id)
+        .into_iter()
+        .find(|&child| dom.class_of(child).as_deref() == Some("UIListLayout"))
+}
+
 /// Resolve one element against the box its parent offers.
 ///
 /// THE COORDINATE MODEL, and it is `conformance/LAYOUT.md` section 1 rather than
@@ -165,9 +204,16 @@ fn align(dom: &Dom, id: usize, key: &str, enum_name: &str) -> Option<Align> {
 /// `AnchorPoint` then shifts the element by a fraction of ITS OWN resolved size.
 /// The ordering is size first, then anchor, which is the thing
 /// `anchor_point_after_automatic_size` was opened in Studio to confirm.
-fn resolve(dom: &Dom, id: usize, parent: Box2) -> Box2 {
+///
+/// `laid_out` marks an element positioned by a layout container (`UIListLayout`).
+/// Its own `Position` is ignored per LAYOUT.md section 4.
+fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
     let (sxs, sxo, sys, syo) = udim2(dom, id, "Size");
-    let (pxs, pxo, pys, pyo) = udim2(dom, id, "Position");
+    let (pxs, pxo, pys, pyo) = if laid_out {
+        (0.0, 0.0, 0.0, 0.0)
+    } else {
+        udim2(dom, id, "Position")
+    };
     let anchor = vector2(dom, id, "AnchorPoint");
 
     let w = sxs * parent.w + sxo;
@@ -175,8 +221,8 @@ fn resolve(dom: &Dom, id: usize, parent: Box2) -> Box2 {
     Box2 {
         x: parent.x + pxs * parent.w + pxo - anchor.x * w,
         y: parent.y + pys * parent.h + pyo - anchor.y * h,
-        w,
-        h,
+        w: w.max(0.0),
+        h: h.max(0.0),
     }
 }
 
@@ -342,6 +388,404 @@ pub struct Placed {
     pub clip: Option<Box2>,
 }
 
+/// The AutomaticSize axes requested by a node: (grow_x, grow_y).
+fn automatic_axes(dom: &Dom, id: usize) -> (bool, bool) {
+    let Some(Variant::Enum(raw)) = dom.property(id, "AutomaticSize") else {
+        return (false, false);
+    };
+    let Some(item) = super::enums::item_by_value("AutomaticSize", raw.to_u32()) else {
+        return (false, false);
+    };
+    match item.name {
+        "X" => (true, false),
+        "Y" => (false, true),
+        "XY" => (true, true),
+        _ => (false, false),
+    }
+}
+
+/// Intersect an inherited clip rectangle with an element's own rectangle.
+fn intersect_clip(clip: Option<Box2>, rect: Box2) -> Box2 {
+    match clip {
+        Some(c) => {
+            let x = c.x.max(rect.x);
+            let y = c.y.max(rect.y);
+            let right = (c.x + c.w).min(rect.x + rect.w);
+            let bottom = (c.y + c.h).min(rect.y + rect.h);
+            Box2 {
+                x,
+                y,
+                w: (right - x).max(0.0),
+                h: (bottom - y).max(0.0),
+            }
+        }
+        None => rect,
+    }
+}
+
+fn note_once_layout(key: &str, message: &str) {
+    static SAID: std::sync::Mutex<Option<std::collections::BTreeSet<String>>> =
+        std::sync::Mutex::new(None);
+    let mut guard = SAID.lock().expect("said");
+    if guard
+        .get_or_insert_with(std::collections::BTreeSet::new)
+        .insert(key.to_string())
+    {
+        eprintln!("[dew] {message}");
+    }
+}
+
+fn report_auto(dom: &Dom, id: usize, want_x: bool, want_y: bool, did_x: bool, did_y: bool) {
+    if (want_x && did_x || !want_x) && (want_y && did_y || !want_y) {
+        return;
+    }
+    let mut has_real_child = false;
+    for child in dom.children(id) {
+        if let Some(class) = dom.class_of(child) {
+            if !is_modifier(&class) {
+                has_real_child = true;
+                break;
+            }
+        }
+    }
+    if !has_real_child {
+        return;
+    }
+    let name = dom.name_of(id).unwrap_or_default();
+    if want_x && !did_x {
+        note_once_layout(
+            &format!("unmeasurable_x_{id}"),
+            &format!(
+                "{name}: AutomaticSize.X measured nothing -- every descendant is sized by scale on X, \
+                 so it kept its authored width"
+            ),
+        );
+    }
+    if want_y && !did_y {
+        note_once_layout(
+            &format!("unmeasurable_y_{id}"),
+            &format!(
+                "{name}: AutomaticSize.Y measured nothing -- every descendant is sized by scale on Y, \
+                 so it kept its authored height"
+            ),
+        );
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SolvedItem {
+    pub id: usize,
+    pub rect: Box2,
+    pub clip: Option<Box2>,
+    pub depth: usize,
+    pub z_index: i32,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn grow(
+    dom: &Dom,
+    node: usize,
+    mut entry_rect: Box2,
+    out: &[SolvedItem],
+    from: usize,
+    box_rect: Box2,
+    grow_x: bool,
+    grow_y: bool,
+    pad_l: f32,
+    pad_t: f32,
+    pad_r: f32,
+    pad_b: f32,
+    offered: Box2,
+) -> (Box2, bool, bool) {
+    if !grow_x && !grow_y {
+        return (entry_rect, false, false);
+    }
+    let child_depth = if out.len() > from { out[from].depth } else { 0 };
+    let has_layout = list_layout_of(dom, node).is_some();
+
+    let sweep = |base_x: Option<f32>, base_y: Option<f32>| -> (f32, f32) {
+        let mut right = -f32::INFINITY;
+        let mut bottom = -f32::INFINITY;
+        let mut inherit_x: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        let mut inherit_y: std::collections::HashMap<usize, f32> = std::collections::HashMap::new();
+        inherit_x.insert(child_depth, 0.0);
+        inherit_y.insert(child_depth, 0.0);
+
+        for i in from..out.len() {
+            let item = &out[i];
+            let (sxs, sxo, sys, syo) = udim2(dom, item.id, "Size");
+            let r = item.rect;
+            let d = item.depth;
+            let got_x = inherit_x.get(&d).copied().unwrap_or(0.0);
+            let got_y = inherit_y.get(&d).copied().unwrap_or(0.0);
+            let (_, _, own_r, own_b) = padding_of(dom, item.id);
+            let has_content = i + 1 < out.len() && out[i + 1].depth > d;
+
+            if grow_x {
+                if sxs == 0.0 {
+                    right = right.max(r.x + r.w + got_x);
+                    inherit_x.insert(d + 1, got_x);
+                } else if d == child_depth && sxs < 1.0 && (has_layout || !has_content) {
+                    let resolved = if let Some(bx) = base_x {
+                        bx * sxs + sxo
+                    } else {
+                        sxo
+                    };
+                    right = right.max(r.x + resolved + got_x);
+                    inherit_x.insert(d + 1, got_x);
+                } else {
+                    inherit_x.insert(d + 1, got_x + own_r);
+                }
+            }
+
+            if grow_y {
+                if sys == 0.0 {
+                    bottom = bottom.max(r.y + r.h + got_y);
+                    inherit_y.insert(d + 1, got_y);
+                } else if d == child_depth && sys < 1.0 && (has_layout || !has_content) {
+                    let resolved = if let Some(by) = base_y {
+                        by * sys + syo
+                    } else {
+                        syo
+                    };
+                    bottom = bottom.max(r.y + resolved + got_y);
+                    inherit_y.insert(d + 1, got_y);
+                } else {
+                    inherit_y.insert(d + 1, got_y + own_b);
+                }
+            }
+        }
+        (right, bottom)
+    };
+
+    let (right, bottom) = if has_layout {
+        sweep(Some(offered.w), Some(offered.h))
+    } else {
+        let (off_x, off_y) = sweep(None, None);
+        sweep(
+            if off_x != -f32::INFINITY {
+                Some((off_x - box_rect.x).max(0.0))
+            } else {
+                Some(0.0)
+            },
+            if off_y != -f32::INFINITY {
+                Some((off_y - box_rect.y).max(0.0))
+            } else {
+                Some(0.0)
+            },
+        )
+    };
+
+    let mut did_x = false;
+    let mut did_y = false;
+    if grow_x && right != -f32::INFINITY {
+        let measured_w = (right - box_rect.x) + pad_l + pad_r;
+        entry_rect.w = entry_rect.w.max(measured_w);
+        did_x = true;
+    }
+    if grow_y && bottom != -f32::INFINITY {
+        let measured_h = (bottom - box_rect.y) + pad_t + pad_b;
+        entry_rect.h = entry_rect.h.max(measured_h);
+        did_y = true;
+    }
+
+    (entry_rect, did_x, did_y)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn visit(
+    dom: &Dom,
+    id: usize,
+    parent_box: Box2,
+    clip: Option<Box2>,
+    depth: usize,
+    laid_out: bool,
+    offered: Box2,
+    out: &mut Vec<SolvedItem>,
+) {
+    if boolean(dom, id, "Visible") == Some(false) {
+        return;
+    }
+
+    let rect = solve_rect(dom, id, parent_box, laid_out);
+    let z = number(dom, id, "ZIndex").unwrap_or(1.0) as i32;
+    let entry_idx = out.len();
+    out.push(SolvedItem {
+        id,
+        rect,
+        clip,
+        depth,
+        z_index: z,
+    });
+
+    let box_rect = content_box(dom, id, rect);
+    let child_clip = if boolean(dom, id, "ClipsDescendants") == Some(true) {
+        Some(intersect_clip(clip, rect))
+    } else {
+        clip
+    };
+
+    let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
+    let (grow_x, grow_y) = automatic_axes(dom, id);
+    let children_from = out.len();
+
+    place_children(dom, id, box_rect, child_clip, depth, out);
+
+    let before_w = out[entry_idx].rect.w;
+    let before_h = out[entry_idx].rect.h;
+
+    let (new_rect, did_x, did_y) = grow(
+        dom,
+        id,
+        out[entry_idx].rect,
+        out,
+        children_from,
+        box_rect,
+        grow_x,
+        grow_y,
+        pad_l,
+        pad_t,
+        pad_r,
+        pad_b,
+        offered,
+    );
+    out[entry_idx].rect = new_rect;
+
+    let grew_w = out[entry_idx].rect.w > before_w;
+    let grew_h = out[entry_idx].rect.h > before_h;
+
+    // AnchorPoint post-growth adjustment
+    if grew_w || grew_h {
+        let anchor = vector2(dom, id, "AnchorPoint");
+        let dx = if grew_w {
+            (out[entry_idx].rect.w - before_w) * anchor.x
+        } else {
+            0.0
+        };
+        let dy = if grew_h {
+            (out[entry_idx].rect.h - before_h) * anchor.y
+        } else {
+            0.0
+        };
+        if dx != 0.0 || dy != 0.0 {
+            out[entry_idx].rect.x -= dx;
+            out[entry_idx].rect.y -= dy;
+            for item in &mut out[children_from..] {
+                item.rect.x -= dx;
+                item.rect.y -= dy;
+            }
+        }
+    }
+
+    // Re-placement: if any descendant depends on an axis that grew via scale
+    if grew_w || grew_h {
+        let mut dependent = false;
+        for item in &out[children_from..] {
+            let (sxs, _, sys, _) = udim2(dom, item.id, "Size");
+            if (grew_w && sxs != 0.0) || (grew_h && sys != 0.0) {
+                dependent = true;
+                break;
+            }
+        }
+        if dependent {
+            out.truncate(children_from);
+            let grown_box = content_box(dom, id, out[entry_idx].rect);
+            place_children(dom, id, grown_box, child_clip, depth, out);
+        }
+    }
+
+    report_auto(dom, id, grow_x, grow_y, did_x, did_y);
+}
+
+fn place_children(
+    dom: &Dom,
+    id: usize,
+    box_rect: Box2,
+    child_clip: Option<Box2>,
+    depth: usize,
+    out: &mut Vec<SolvedItem>,
+) {
+    if let Some(layout_id) = list_layout_of(dom, id) {
+        let (_, pad_offset) = udim(dom, layout_id, "Padding");
+        let is_horizontal =
+            if let Some(Variant::Enum(raw)) = dom.property(layout_id, "FillDirection") {
+                super::enums::item_by_value("FillDirection", raw.to_u32())
+                    .map(|item| item.name == "Horizontal")
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+
+        let mut kids: Vec<(usize, i32, usize)> = Vec::new();
+        for (idx, child) in dom.children(id).iter().copied().enumerate() {
+            let Some(class) = dom.class_of(child) else {
+                continue;
+            };
+            if is_modifier(&class) {
+                continue;
+            }
+            let order = number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32;
+            kids.push((child, order, idx));
+        }
+        kids.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
+
+        let mut cursor = 0.0;
+        for (child, _, _) in kids {
+            let slot = if is_horizontal {
+                Box2 {
+                    x: box_rect.x + cursor,
+                    y: box_rect.y,
+                    w: box_rect.w,
+                    h: box_rect.h,
+                }
+            } else {
+                Box2 {
+                    x: box_rect.x,
+                    y: box_rect.y + cursor,
+                    w: box_rect.w,
+                    h: box_rect.h,
+                }
+            };
+            let before = out.len();
+            visit(dom, child, slot, child_clip, depth + 1, true, box_rect, out);
+            if out.len() > before {
+                let placed_rect = out[before].rect;
+                cursor += (if is_horizontal {
+                    placed_rect.w
+                } else {
+                    placed_rect.h
+                }) + pad_offset;
+            }
+        }
+    } else {
+        for child in dom.children(id) {
+            let Some(class) = dom.class_of(child) else {
+                continue;
+            };
+            if is_modifier(&class) {
+                continue;
+            }
+            visit(
+                dom,
+                child,
+                box_rect,
+                child_clip,
+                depth + 1,
+                false,
+                box_rect,
+                out,
+            );
+        }
+    }
+}
+
+pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
+    let mut out: Vec<SolvedItem> = Vec::new();
+    let root_box = content_box(dom, root, surface);
+    place_children(dom, root, root_box, None, 0, &mut out);
+    out
+}
+
 /// Resolve everything under `root` into paint order, back to front.
 ///
 /// `root` itself is the surface and is not placed; its children are laid out
@@ -358,58 +802,21 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
         w: width,
         h: height,
     };
-
-    let mut collected: Vec<(i32, Placed)> = Vec::new();
-
-    fn walk(
-        dom: &Dom,
-        id: usize,
-        parent: Box2,
-        clip: Option<Box2>,
-        collected: &mut Vec<(i32, Placed)>,
-    ) {
-        for child in dom.children(id) {
-            let Some(class) = dom.class_of(child) else {
-                continue;
-            };
-            if is_modifier(&class) {
-                continue;
-            }
-            // INVISIBLE HIDES THE SUBTREE, not just the element. A child of an
-            // invisible parent is not drawn in the engine either -- and it is not
-            // clickable there either, which now follows from the same line.
-            if boolean(dom, child, "Visible") == Some(false) {
-                continue;
-            }
-
-            let rect = resolve(dom, child, parent);
-
-            // ZERO AREA IS ABSENT FROM THE DISPLAY LIST, which the conformance
-            // case `zero_area_nodes_are_not_drawn` verifies against the engine.
-            // Its children still lay out against it. A zero-area box could not
-            // contain a point either, so the hit test needs no rule of its own.
-            if rect.w > 0.0 && rect.h > 0.0 {
-                let z = number(dom, child, "ZIndex").unwrap_or(1.0) as i32;
-                collected.push((
-                    z,
-                    Placed {
-                        id: child,
-                        rect,
-                        clip,
-                    },
-                ));
-            }
-
-            let inner = if boolean(dom, child, "ClipsDescendants") == Some(true) {
-                Some(rect)
-            } else {
-                clip
-            };
-            walk(dom, child, rect, inner, collected);
-        }
-    }
-
-    walk(dom, root, surface, None, &mut collected);
+    let solved = solve_layout(dom, root, surface);
+    let mut collected: Vec<(i32, Placed)> = solved
+        .into_iter()
+        .filter(|item| item.rect.w > 0.0 && item.rect.h > 0.0)
+        .map(|item| {
+            (
+                item.z_index,
+                Placed {
+                    id: item.id,
+                    rect: item.rect,
+                    clip: item.clip,
+                },
+            )
+        })
+        .collect();
     collected.sort_by_key(|(z, _)| *z);
     collected.into_iter().map(|(_, placed)| placed).collect()
 }
@@ -498,32 +905,25 @@ pub fn frame(dom: &mut Dom, root: usize, width: f32, height: f32) -> Frame {
 /// assignment path, which refuses them as read-only, and that is correct on both
 /// counts: read-only to a guest, written by the host that computed them.
 pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
-    fn walk(dom: &mut Dom, id: usize, parent: Box2) {
-        for child in dom.children(id) {
-            let rect = resolve(dom, child, parent);
-            dom.set_internal(
-                child,
-                "AbsolutePosition",
-                Variant::Vector2(Vector2::new(rect.x, rect.y)),
-            );
-            dom.set_internal(
-                child,
-                "AbsoluteSize",
-                Variant::Vector2(Vector2::new(rect.w, rect.h)),
-            );
-            walk(dom, child, rect);
-        }
+    let surface = Box2 {
+        x: 0.0,
+        y: 0.0,
+        w: width,
+        h: height,
+    };
+    let solved = solve_layout(dom, root, surface);
+    for item in solved {
+        dom.set_internal(
+            item.id,
+            "AbsolutePosition",
+            Variant::Vector2(Vector2::new(item.rect.x, item.rect.y)),
+        );
+        dom.set_internal(
+            item.id,
+            "AbsoluteSize",
+            Variant::Vector2(Vector2::new(item.rect.w, item.rect.h)),
+        );
     }
-    walk(
-        dom,
-        root,
-        Box2 {
-            x: 0.0,
-            y: 0.0,
-            w: width,
-            h: height,
-        },
-    );
 }
 
 /// Render whatever is under `root` in a shared DOM.
@@ -818,6 +1218,41 @@ mod tests {
             f.nodes[0].clip.is_none(),
             "the clipper itself is not clipped"
         );
+    }
+
+    #[test]
+    fn ui_padding_insets_children() {
+        let f = render(
+            r#"
+            local a = Instance.new("Frame")
+            a.Size = UDim2.new(0, 100, 0, 100)
+            a.Parent = root
+
+            local pad = Instance.new("UIPadding")
+            pad.PaddingLeft = UDim.new(0, 10)
+            pad.PaddingTop = UDim.new(0, 15)
+            pad.PaddingRight = UDim.new(0, 20)
+            pad.PaddingBottom = UDim.new(0, 25)
+            pad.Parent = a
+
+            local b = Instance.new("Frame")
+            b.Size = UDim2.new(1, 0, 1, 0)
+            b.Parent = a
+        "#,
+            200.0,
+            200.0,
+        );
+        let parent = f.nodes.iter().find(|n| n.rect.w == 100.0).expect("parent");
+        assert_eq!(parent.rect.x, 0.0);
+        assert_eq!(parent.rect.y, 0.0);
+        assert_eq!(parent.rect.w, 100.0);
+        assert_eq!(parent.rect.h, 100.0);
+
+        let child = f.nodes.iter().find(|n| n.rect.w == 70.0).expect("child");
+        assert_eq!(child.rect.x, 10.0);
+        assert_eq!(child.rect.y, 15.0);
+        assert_eq!(child.rect.w, 70.0);
+        assert_eq!(child.rect.h, 60.0);
     }
 
     // ── Images ───────────────────────────────────────────────────────────────
@@ -1152,5 +1587,28 @@ mod tests {
             .eval()
             .expect("read back");
         assert_eq!(read, vec![20.0, 10.0, 100.0]);
+    }
+
+    #[test]
+    fn unmeasurable_axis_keeps_authored_size_and_reports() {
+        let f = render(
+            r#"
+            local a = Instance.new("Frame")
+            a.Name = "Auto"
+            a.Size = UDim2.new(0, 30, 0, 40)
+            a.AutomaticSize = Enum.AutomaticSize.X
+            a.Parent = root
+
+            local s = Instance.new("Frame")
+            s.Name = "Scaled"
+            s.Size = UDim2.fromScale(1, 1)
+            s.Parent = a
+        "#,
+            200.0,
+            200.0,
+        );
+        let auto = f.nodes.iter().find(|n| n.name == "Auto").expect("auto");
+        assert_eq!(auto.rect.w, 30.0, "keeps authored width");
+        assert_eq!(auto.rect.h, 40.0, "keeps authored height");
     }
 }
