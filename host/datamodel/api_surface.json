@@ -2,19 +2,36 @@
   "classes": {
     "CanvasGroup": {
       "members": {},
+      "properties": {
+        "GroupColor3": "Color3",
+        "GroupTransparency": "float"
+      },
       "superclass": "GuiObject"
     },
     "Frame": {
       "members": {},
+      "properties": {
+        "Style": "FrameStyle"
+      },
       "superclass": "GuiObject"
     },
     "GuiBase": {
       "members": {},
+      "properties": {},
       "superclass": "Instance"
     },
     "GuiBase2d": {
       "members": {
         "SelectionChanged": "Event"
+      },
+      "properties": {
+        "AutoLocalize": "bool",
+        "RootLocalizationTable": "LocalizationTable",
+        "SelectionBehaviorDown": "SelectionBehavior",
+        "SelectionBehaviorLeft": "SelectionBehavior",
+        "SelectionBehaviorRight": "SelectionBehavior",
+        "SelectionBehaviorUp": "SelectionBehavior",
+        "SelectionGroup": "bool"
       },
       "superclass": "GuiBase"
     },
@@ -29,10 +46,19 @@
         "MouseButton2Up": "Event",
         "SecondaryActivated": "Event"
       },
+      "properties": {
+        "AutoButtonColor": "bool",
+        "HoverHapticEffect": "HapticEffect",
+        "Modal": "bool",
+        "PressHapticEffect": "HapticEffect",
+        "Selected": "bool",
+        "Style": "ButtonStyle"
+      },
       "superclass": "GuiObject"
     },
     "GuiLabel": {
       "members": {},
+      "properties": {},
       "superclass": "GuiObject"
     },
     "GuiObject": {
@@ -57,18 +83,88 @@
         "TweenSize": "Function",
         "TweenSizeAndPosition": "Function"
       },
+      "properties": {
+        "Active": "bool",
+        "AnchorPoint": "Vector2",
+        "AutomaticSize": "AutomaticSize",
+        "BackgroundColor3": "Color3",
+        "BackgroundTransparency": "float",
+        "BorderColor3": "Color3",
+        "BorderMode": "BorderMode",
+        "BorderSizePixel": "int",
+        "ClipsDescendants": "bool",
+        "InputSink": "InputSink",
+        "Interactable": "bool",
+        "LayoutOrder": "int",
+        "NextSelectionDown": "GuiObject",
+        "NextSelectionLeft": "GuiObject",
+        "NextSelectionRight": "GuiObject",
+        "NextSelectionUp": "GuiObject",
+        "Position": "UDim2",
+        "Rotation": "float",
+        "Selectable": "bool",
+        "SelectionImageObject": "GuiObject",
+        "SelectionOrder": "int",
+        "Size": "UDim2",
+        "SizeConstraint": "SizeConstraint",
+        "Transparency": "float",
+        "Visible": "bool",
+        "ZIndex": "int"
+      },
       "superclass": "GuiBase2d"
     },
     "ImageButton": {
       "members": {},
+      "properties": {
+        "HoverImage": "ContentId",
+        "HoverImageContent": "Content",
+        "Image": "ContentId",
+        "ImageColor3": "Color3",
+        "ImageContent": "Content",
+        "ImageRectOffset": "Vector2",
+        "ImageRectSize": "Vector2",
+        "ImageTransparency": "float",
+        "PressedImage": "ContentId",
+        "PressedImageContent": "Content",
+        "ResampleMode": "ResamplerMode",
+        "ScaleType": "ScaleType",
+        "SliceCenter": "Rect",
+        "SliceScale": "float",
+        "TileSize": "UDim2"
+      },
       "superclass": "GuiButton"
     },
     "ImageLabel": {
       "members": {},
+      "properties": {
+        "Image": "ContentId",
+        "ImageColor3": "Color3",
+        "ImageContent": "Content",
+        "ImageRectOffset": "Vector2",
+        "ImageRectSize": "Vector2",
+        "ImageTransparency": "float",
+        "ResampleMode": "ResamplerMode",
+        "ScaleType": "ScaleType",
+        "SliceCenter": "Rect",
+        "SliceScale": "float",
+        "TileSize": "UDim2"
+      },
       "superclass": "GuiLabel"
     },
     "InputActionLabel": {
       "members": {},
+      "properties": {
+        "FontFace": "Font",
+        "ImageColor3": "Color3",
+        "ImageTransparency": "float",
+        "InputAction": "InputAction",
+        "TextColor3": "Color3",
+        "TextSize": "float",
+        "TextTransparency": "float",
+        "TextWrapped": "bool",
+        "TextXAlignment": "TextXAlignment",
+        "TextYAlignment": "TextYAlignment"
+      },
       "superclass": "GuiObject"
     },
     "Instance": {
@@ -112,6 +208,13 @@
         "StyledPropertiesChanged": "Event",
         "WaitForChild": "Function"
       },
+      "properties": {
+        "Archivable": "bool",
+        "Capabilities": "SecurityCapabilities",
+        "Name": "string",
+        "Parent": "Instance",
+        "Sandboxed": "bool"
+      },
       "superclass": "Object"
     },
     "Object": {
@@ -120,16 +223,38 @@
         "GetPropertyChangedSignal": "Function",
         "IsA": "Function"
       },
+      "properties": {},
       "superclass": "<<<ROOT>>>"
     },
     "RelativeGui": {
       "members": {},
+      "properties": {},
       "superclass": "GuiObject"
     },
     "ScrollingFrame": {
       "members": {
         "GetScrollVelocity": "Function",
         "ResetScrollVelocity": "Function"
+      },
+      "properties": {
+        "AutomaticCanvasSize": "AutomaticSize",
+        "BottomImage": "ContentId",
+        "BottomImageContent": "Content",
+        "CanvasPosition": "Vector2",
+        "CanvasSize": "UDim2",
+        "ElasticBehavior": "ElasticBehavior",
+        "HorizontalScrollBarInset": "ScrollBarInset",
+        "MidImage": "ContentId",
+        "MidImageContent": "Content",
+        "ScrollBarImageColor3": "Color3",
+        "ScrollBarImageTransparency": "float",
+        "ScrollBarThickness": "int",
+        "ScrollingDirection": "ScrollingDirection",
+        "ScrollingEnabled": "bool",
+        "TopImage": "ContentId",
+        "TopImageContent": "Content",
+        "VerticalScrollBarInset": "ScrollBarInset",
+        "VerticalScrollBarPosition": "VerticalScrollBarPosition"
       },
       "superclass": "GuiObject"
     },
@@ -142,66 +267,194 @@
         "ReleaseFocus": "Function",
         "ReturnPressedFromOnScreenKeyboard": "Event"
       },
+      "properties": {
+        "ClearTextOnFocus": "bool",
+        "CursorPosition": "int",
+        "Font": "Font",
+        "FontFace": "Font",
+        "LineHeight": "float",
+        "MaxVisibleGraphemes": "int",
+        "MultiLine": "bool",
+        "OpenTypeFeatures": "string",
+        "PlaceholderColor3": "Color3",
+        "PlaceholderText": "string",
+        "RichText": "bool",
+        "SelectionStart": "int",
+        "ShowNativeInput": "bool",
+        "Text": "string",
+        "TextColor3": "Color3",
+        "TextDirection": "TextDirection",
+        "TextEditable": "bool",
+        "TextScaled": "bool",
+        "TextSize": "float",
+        "TextStrokeColor3": "Color3",
+        "TextStrokeTransparency": "float",
+        "TextTransparency": "float",
+        "TextTruncate": "TextTruncate",
+        "TextWrapped": "bool",
+        "TextXAlignment": "TextXAlignment",
+        "TextYAlignment": "TextYAlignment"
+      },
       "superclass": "GuiObject"
     },
     "TextButton": {
       "members": {},
+      "properties": {
+        "Font": "Font",
+        "FontFace": "Font",
+        "LineHeight": "float",
+        "MaxVisibleGraphemes": "int",
+        "OpenTypeFeatures": "string",
+        "RichText": "bool",
+        "Text": "string",
+        "TextColor3": "Color3",
+        "TextDirection": "TextDirection",
+        "TextScaled": "bool",
+        "TextSize": "float",
+        "TextStrokeColor3": "Color3",
+        "TextStrokeTransparency": "float",
+        "TextTransparency": "float",
+        "TextTruncate": "TextTruncate",
+        "TextWrapped": "bool",
+        "TextXAlignment": "TextXAlignment",
+        "TextYAlignment": "TextYAlignment"
+      },
       "superclass": "GuiButton"
     },
     "TextChannelWindow": {
       "members": {},
+      "properties": {
+        "Target": "TextChannel"
+      },
       "superclass": "GuiObject"
     },
     "TextLabel": {
       "members": {},
+      "properties": {
+        "Font": "Font",
+        "FontFace": "Font",
+        "LineHeight": "float",
+        "MaxVisibleGraphemes": "int",
+        "OpenTypeFeatures": "string",
+        "RichText": "bool",
+        "Text": "string",
+        "TextColor3": "Color3",
+        "TextDirection": "TextDirection",
+        "TextScaled": "bool",
+        "TextSize": "float",
+        "TextStrokeColor3": "Color3",
+        "TextStrokeTransparency": "float",
+        "TextTransparency": "float",
+        "TextTruncate": "TextTruncate",
+        "TextWrapped": "bool",
+        "TextXAlignment": "TextXAlignment",
+        "TextYAlignment": "TextYAlignment"
+      },
       "superclass": "GuiLabel"
     },
     "UIAspectRatioConstraint": {
       "members": {},
+      "properties": {
+        "AspectRatio": "float",
+        "AspectType": "AspectType",
+        "DominantAxis": "DominantAxis"
+      },
       "superclass": "UIConstraint"
     },
     "UIBase": {
       "members": {},
+      "properties": {},
       "superclass": "Instance"
     },
     "UIComponent": {
       "members": {},
+      "properties": {},
       "superclass": "UIBase"
     },
     "UIConstraint": {
       "members": {},
+      "properties": {},
       "superclass": "UIComponent"
     },
     "UICorner": {
       "members": {},
+      "properties": {
+        "BottomLeftRadius": "UDim",
+        "BottomRightRadius": "UDim",
+        "CornerRadius": "UDim",
+        "TopLeftRadius": "UDim",
+        "TopRightRadius": "UDim"
+      },
       "superclass": "UIComponent"
     },
     "UIFlexItem": {
       "members": {},
+      "properties": {
+        "FlexMode": "UIFlexMode",
+        "GrowRatio": "float",
+        "ItemLineAlignment": "ItemLineAlignment",
+        "ShrinkRatio": "float"
+      },
       "superclass": "UIComponent"
     },
     "UIGradient": {
       "members": {},
+      "properties": {
+        "Color": "ColorSequence",
+        "Enabled": "bool",
+        "Offset": "Vector2",
+        "Rotation": "float",
+        "Scale": "float",
+        "TileMode": "GradientTileMode",
+        "Transparency": "NumberSequence",
+        "Type": "GradientType"
+      },
       "superclass": "UIComponent"
     },
     "UIGridLayout": {
       "members": {},
+      "properties": {
+        "CellPadding": "UDim2",
+        "CellSize": "UDim2",
+        "FillDirectionMaxCells": "int",
+        "StartCorner": "StartCorner"
+      },
       "superclass": "UIGridStyleLayout"
     },
     "UIGridStyleLayout": {
       "members": {},
+      "properties": {
+        "FillDirection": "FillDirection",
+        "HorizontalAlignment": "HorizontalAlignment",
+        "SortOrder": "SortOrder",
+        "VerticalAlignment": "VerticalAlignment"
+      },
       "superclass": "UILayout"
     },
     "UILayout": {
       "members": {},
+      "properties": {},
       "superclass": "UIComponent"
     },
     "UIListLayout": {
       "members": {},
+      "properties": {
+        "HorizontalFlex": "UIFlexAlignment",
+        "ItemLineAlignment": "ItemLineAlignment",
+        "Padding": "UDim",
+        "VerticalFlex": "UIFlexAlignment",
+        "Wraps": "bool"
+      },
       "superclass": "UIGridStyleLayout"
     },
     "UIPadding": {
       "members": {},
+      "properties": {
+        "PaddingBottom": "UDim",
+        "PaddingLeft": "UDim",
+        "PaddingRight": "UDim",
+        "PaddingTop": "UDim"
+      },
       "superclass": "UIComponent"
     },
     "UIPageLayout": {
@@ -214,26 +467,66 @@
         "Previous": "Function",
         "Stopped": "Event"
       },
+      "properties": {
+        "Animated": "bool",
+        "Circular": "bool",
+        "EasingDirection": "EasingDirection",
+        "EasingStyle": "EasingStyle",
+        "GamepadInputEnabled": "bool",
+        "Padding": "UDim",
+        "ScrollWheelInputEnabled": "bool",
+        "TouchInputEnabled": "bool",
+        "TweenTime": "float"
+      },
       "superclass": "UIGridStyleLayout"
     },
     "UIScale": {
       "members": {},
+      "properties": {
+        "Scale": "float"
+      },
       "superclass": "UIComponent"
     },
     "UISizeConstraint": {
       "members": {},
+      "properties": {
+        "MaxSize": "Vector2",
+        "MinSize": "Vector2"
+      },
       "superclass": "UIConstraint"
     },
     "UIStroke": {
       "members": {},
+      "properties": {
+        "ApplyStrokeMode": "ApplyStrokeMode",
+        "BorderOffset": "UDim",
+        "BorderStrokePosition": "BorderStrokePosition",
+        "Color": "Color3",
+        "Enabled": "bool",
+        "LineJoinMode": "LineJoinMode",
+        "StrokeSizingMode": "StrokeSizingMode",
+        "Thickness": "float",
+        "Transparency": "float",
+        "ZIndex": "int"
+      },
       "superclass": "UIComponent"
     },
     "UITableLayout": {
       "members": {},
+      "properties": {
+        "FillEmptySpaceColumns": "bool",
+        "FillEmptySpaceRows": "bool",
+        "MajorAxis": "TableMajorAxis",
+        "Padding": "UDim2"
+      },
       "superclass": "UIGridStyleLayout"
     },
     "UITextSizeConstraint": {
       "members": {},
+      "properties": {
+        "MaxTextSize": "int",
+        "MinTextSize": "int"
+      },
       "superclass": "UIConstraint"
     },
     "VideoDisplay": {
@@ -242,6 +535,15 @@
         "GetInputPins": "Function",
         "GetOutputPins": "Function",
         "WiringChanged": "Event"
+      },
+      "properties": {
+        "ResampleMode": "ResamplerMode",
+        "ScaleType": "ScaleType",
+        "TileSize": "UDim2",
+        "VideoColor3": "Color3",
+        "VideoRectOffset": "Vector2",
+        "VideoRectSize": "Vector2",
+        "VideoTransparency": "float"
       },
       "superclass": "GuiObject"
     },
@@ -255,13 +557,34 @@
         "Play": "Function",
         "Played": "Event"
       },
+      "properties": {
+        "InternalVideoUsage": "InternalVideoUsage",
+        "Looped": "bool",
+        "MaximumResolution": "VideoSampleSize",
+        "Playing": "bool",
+        "RollOffMaxDistance": "float",
+        "RollOffMinDistance": "float",
+        "RollOffMode": "RollOffMode",
+        "TimePosition": "double",
+        "Video": "ContentId",
+        "VideoContent": "Content",
+        "Volume": "float"
+      },
       "superclass": "GuiObject"
     },
     "ViewportFrame": {
       "members": {},
+      "properties": {
+        "Ambient": "Color3",
+        "CurrentCamera": "Camera",
+        "ImageColor3": "Color3",
+        "ImageTransparency": "float",
+        "LightColor": "Color3",
+        "LightDirection": "Vector3"
+      },
       "superclass": "GuiObject"
     }
   },
-  "note": "Methods and events only. Properties come from rbx_reflection_database. Generated by scripts/fetch_api_surface.luau; do not edit by hand.",
+  "note": "Classes, properties, methods and events pinned from Roblox's API dump at 0.736.0.7361346. Generated by scripts/fetch_api_surface.luau; do not edit by hand.",
   "version": "0.736.0.7361346"
 }

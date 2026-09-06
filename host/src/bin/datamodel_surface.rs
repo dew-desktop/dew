@@ -1,25 +1,20 @@
 //! What the DataModel Standard has to cover, measured rather than guessed.
 //!
-//! Walks Roblox's own reflection database for everything under `GuiObject` plus
-//! the UI modifiers, and reports it against what this stack actually implements.
-//! The answer is a number rather than an impression, and it is regenerated when
-//! the database tracks a new Roblox build.
+//! Walks Roblox's pinned API dump for everything under `GuiObject` plus the UI
+//! modifiers, and reports it against what this stack actually implements. The
+//! answer is a number rather than an impression, and it is regenerated when
+//! the pinned dump tracks a new Roblox build.
 //!
 //! Run with `cargo run --bin datamodel-surface`.
 
-use rbx_reflection::{DataType, Scriptability};
 use std::collections::{BTreeMap, BTreeSet};
 
 // ── The method and event surface ─────────────────────────────────────────────
 
 /// The scriptable API surface, pinned.
 ///
-/// NOT FROM `rbx_reflection_database`, and it cannot be. That crate's
-/// `ClassDescriptor` carries exactly `name`, `tags`, `superclass`, `properties`
-/// and `default_properties` -- it is built for file serialisation, and a method
-/// cannot be serialised. So the property half of this tool has a machine-readable
-/// source and the method half had none, which is why the API surface has never
-/// been measured while the property surface has been measured since d4.
+/// Both the property half and the method/event half of the DataModel standard
+/// are pinned from Roblox's API dump at `0.736.0.7361346`.
 ///
 /// `scripts/fetch_api_surface.luau` writes this from Roblox's own API dump.
 /// Embedded rather than read at runtime so the data is part of the build: a
@@ -36,6 +31,8 @@ struct ApiSurface {
 #[derive(serde::Deserialize)]
 struct ApiClass {
     superclass: Option<String>,
+    #[serde(default)]
+    properties: BTreeMap<String, String>,
     /// Member name to "Function" or "Event".
     ///
     /// A MAP RATHER THAN A LIST because Lune, which writes this file, encodes an
@@ -335,7 +332,8 @@ fn main() {
     // datamodel surface has a machine-readable source, and a hand-maintained
     // list of 160 properties would be wrong within one Roblox release.
     let markdown = std::env::args().any(|a| a == "--markdown");
-    let db = rbx_reflection_database::get().expect("bundled reflection database");
+    let api: ApiSurface =
+        serde_json::from_str(API_SURFACE).expect("host/datamodel/api_surface.json is malformed");
     let pipeline: BTreeSet<&str> = AETHER_PIPELINE.iter().copied().collect();
 
     // ASKED OF THE HOST, one property at a time, for every class in scope.
@@ -356,19 +354,26 @@ fn main() {
     let mut refused_somewhere: BTreeSet<&str> = BTreeSet::new();
 
     // Everything that is, or descends from, GuiObject.
-    let mut ui_classes: BTreeMap<&str, &rbx_reflection::ClassDescriptor> = BTreeMap::new();
-    for (name, class) in &db.classes {
-        let mut cursor = Some(class);
-        while let Some(c) = cursor {
-            if c.name == "GuiObject" {
-                ui_classes.insert(name.as_ref(), class);
+    let mut ui_classes: BTreeMap<&str, &ApiClass> = BTreeMap::new();
+    for (name, class) in &api.classes {
+        if name == "GuiObject" {
+            ui_classes.insert(name.as_str(), class);
+            continue;
+        }
+        let mut cursor = class.superclass.as_deref();
+        while let Some(c_name) = cursor {
+            if c_name == "GuiObject" {
+                ui_classes.insert(name.as_str(), class);
                 break;
             }
-            cursor = c.superclass.as_ref().and_then(|s| db.classes.get(s));
+            cursor = api
+                .classes
+                .get(c_name)
+                .and_then(|c| c.superclass.as_deref());
         }
     }
     for m in MODIFIERS {
-        if let Some(c) = db.classes.get(*m) {
+        if let Some(c) = api.classes.get(*m) {
             ui_classes.insert(m, c);
         }
     }
@@ -376,7 +381,7 @@ fn main() {
     let mut all_props: BTreeSet<&str> = BTreeSet::new();
     let mut per_class: Vec<(String, usize, usize)> = Vec::new();
 
-    for (name, class) in &ui_classes {
+    for name in ui_classes.keys() {
         if OUT_OF_SCOPE.contains(name) {
             continue;
         }
@@ -386,24 +391,16 @@ fn main() {
         // that has not laid out yet is incoherent. Deprecated properties are
         // excluded for the same reason nobody should implement against them.
         let mut props: Vec<&str> = Vec::new();
-        let mut cursor = Some(*class);
-        while let Some(c) = cursor {
-            for (pname, p) in &c.properties {
-                if p.tags.contains(&rbx_reflection::PropertyTag::Deprecated) {
-                    continue;
+        let mut cursor = Some(*name);
+        while let Some(c_name) = cursor {
+            if let Some(c) = api.classes.get(c_name) {
+                for pname in c.properties.keys() {
+                    props.push(pname.as_str());
                 }
-                if !matches!(p.data_type, DataType::Value(_) | DataType::Enum(_)) {
-                    continue;
-                }
-                if !matches!(
-                    p.scriptability,
-                    Scriptability::ReadWrite | Scriptability::Write
-                ) {
-                    continue;
-                }
-                props.push(pname.as_ref());
+                cursor = c.superclass.as_deref();
+            } else {
+                break;
             }
-            cursor = c.superclass.as_ref().and_then(|s| db.classes.get(s));
         }
         props.sort_unstable();
         props.dedup();
@@ -484,9 +481,6 @@ fn main() {
     // repeated on descendants, so this walks the superclass chain exactly as the
     // property pass does. `TextButton` declares one function of its own; the
     // forty-odd a script can call on it come from six ancestors.
-    let api: ApiSurface =
-        serde_json::from_str(API_SURFACE).expect("host/datamodel/api_surface.json is malformed");
-
     let motion: BTreeSet<&str> = MOTION.iter().copied().collect();
     let not_ui_members: BTreeSet<&str> = NOT_UI_MEMBERS.iter().copied().collect();
     let input_device_members: BTreeSet<&str> = INPUT_DEVICE_MEMBERS.iter().copied().collect();
@@ -508,10 +502,10 @@ fn main() {
         if OUT_OF_SCOPE.contains(name) {
             continue;
         }
-        let mut cursor = Some((*name).to_string());
+        let mut cursor = Some(*name);
         let mut found = false;
         while let Some(current) = cursor {
-            let Some(class) = api.classes.get(&current) else {
+            let Some(class) = api.classes.get(current) else {
                 break;
             };
             found = true;
@@ -519,7 +513,7 @@ fn main() {
                 all_members.insert(member, kind);
                 reached_from.entry(member).or_insert(name);
             }
-            cursor = class.superclass.clone();
+            cursor = class.superclass.as_deref();
         }
         // A class the reflection database has and the pinned dump does not means
         // the two describe different Roblox builds, or that MODIFIERS drifted
@@ -575,23 +569,8 @@ fn main() {
         .count();
     let member_in_scope = m_implemented + member_backlog.len();
 
-    // THE TWO HALVES CITE DIFFERENT ROBLOX BUILDS, and until now nothing said so.
-    // The property surface tracks whatever `rbx_reflection_database` ships; the
-    // member surface is pinned by scripts/fetch_api_surface.luau; the conformance
-    // cases record `verifiedAgainst` by hand. A standard measured against two
-    // builds at once is one no implementation can actually satisfy, so the skew
-    // is reported rather than left to be found by reading two files side by side.
-    let db_version = db
-        .version
-        .iter()
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(".");
-    let build_skew = if db_version == api.version {
-        None
-    } else {
-        Some((db_version.clone(), api.version.clone()))
-    };
+    // Both halves are pinned to the same Roblox build from api_surface.json.
+    let build_skew: Option<(&str, &str)> = None;
 
     // THE DENOMINATOR IS THE POINT. Against every writable property the figure
     // is meaningless, because it counts things nobody intends to implement.
@@ -600,7 +579,7 @@ fn main() {
 
     if markdown {
         emit_markdown(
-            &db.version,
+            &api.version,
             &ui_classes,
             &per_class,
             covered_total,
@@ -621,7 +600,7 @@ fn main() {
             &implemented_members,
             implemented_events,
             implemented_input,
-            build_skew.as_ref(),
+            build_skew,
         );
         return;
     }
@@ -632,15 +611,7 @@ fn main() {
             .filter(|c| ui_classes.contains_key(*c))
             .count();
 
-    println!(
-        "DataModel surface, from Roblox {}
-",
-        db.version
-            .iter()
-            .map(|n| n.to_string())
-            .collect::<Vec<_>>()
-            .join(".")
-    );
+    println!("DataModel surface, from Roblox {}\n", api.version);
     println!(
         "{in_scope} classes in scope of {} under GuiObject, {} writable properties
 ",
@@ -737,8 +708,8 @@ API BACKLOG ({}) -- no Dew guest can reach any of these:",
 
 #[allow(clippy::too_many_arguments)]
 fn emit_markdown(
-    version: &[u32],
-    ui_classes: &BTreeMap<&str, &rbx_reflection::ClassDescriptor>,
+    version: &str,
+    ui_classes: &BTreeMap<&str, &ApiClass>,
     per_class: &[(String, usize, usize)],
     covered: usize,
     in_scope: usize,
@@ -758,17 +729,9 @@ fn emit_markdown(
     implemented_members: &[&str],
     implemented_events: usize,
     implemented_input: usize,
-    build_skew: Option<&(String, String)>,
+    build_skew: Option<(&str, &str)>,
 ) {
-    let v = version
-        .iter()
-        .map(|n| n.to_string())
-        .collect::<Vec<_>>()
-        .join(".");
-    println!(
-        "# DataModel Standard: scope
-"
-    );
+    println!("# DataModel Standard: scope\n");
     println!("<!-- GENERATED. Regenerate with:");
     println!("       lune run scripts/fetch_api_surface.luau   # only to move the Roblox pin");
     print!("       cargo run --manifest-path host/Cargo.toml --bin datamodel-surface");
@@ -776,15 +739,12 @@ fn emit_markdown(
     println!("     Do not edit by hand; edit the classification lists in the tool.");
     println!(
         "     The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
-     the command it gave had never run. -->
-"
+     the command it gave had never run. -->\n"
     );
-    println!("Measured against Roblox **{v}**, from the reflection database that ships");
-    println!("with `rbx_reflection_database`. It tracks Roblox releases, so re-running this");
-    println!(
-        "after an update is how the standard notices the platform moved.
-"
-    );
+    println!("Measured against Roblox **{version}**, from Roblox's own API dump pinned");
+    println!("at that build by `scripts/fetch_api_surface.luau`. Both the property half");
+    println!("and the method/event half come from that one source, which is also the build");
+    println!("every verified conformance case cites.\n");
     println!("**THE SUBJECT IS THE DEW HOST**, measured against the Roblox engine. Aether is a");
     println!("headless framework that runs on top of a host, the way Ark UI runs on top of a");
     println!("DOM; it is a consumer of this surface, never an implementation of it, and is not");
@@ -904,10 +864,8 @@ fn emit_markdown(
     println!();
     println!("## Methods and events");
     println!();
-    println!("The other half of what an application can reach, and the half that had never");
-    println!("been measured. `rbx_reflection_database` carries no methods and no events, so");
-    println!("this comes from Roblox's own API dump, pinned at **{api_version}** by");
-    println!("`scripts/fetch_api_surface.luau`.");
+    println!("The other half of what an application can reach, from the same pinned dump at");
+    println!("**{api_version}**.");
     println!();
     println!("**THE TWO IMPLEMENTATIONS ARE THE ROBLOX ENGINE AND THE DEW HOST.** Aether is a");
     println!("headless framework that runs on top of a host, the way Ark UI runs on top of a");

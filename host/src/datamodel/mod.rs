@@ -418,17 +418,43 @@ impl InstanceRef {
 /// no `Name` of its own; it has `Instance`'s.
 fn describe(class: &str, property: &str) -> Option<&'static PropertyDescriptor<'static>> {
     let db = rbx_reflection_database::get().ok()?;
-    let mut cursor = db.classes.get(class);
-    while let Some(current) = cursor {
-        if let Some(descriptor) = current.properties.get(property) {
-            return Some(descriptor);
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        if let Some(current) = db.classes.get(c) {
+            if let Some(descriptor) = current.properties.get(property) {
+                return Some(descriptor);
+            }
+            cursor = current.superclass;
+        } else if c == "InputActionLabel" {
+            // InputActionLabel is introduced in Roblox 0.736 and is not yet in
+            // rbx_reflection_database 0.728. It inherits from GuiObject and declares
+            // text and image properties matching TextLabel and ImageLabel.
+            if let Some(desc) = db
+                .classes
+                .get("TextLabel")
+                .and_then(|cl| cl.properties.get(property))
+            {
+                return Some(desc);
+            }
+            if let Some(desc) = db
+                .classes
+                .get("ImageLabel")
+                .and_then(|cl| cl.properties.get(property))
+            {
+                return Some(desc);
+            }
+            cursor = Some("GuiObject");
+        } else {
+            break;
         }
-        cursor = current.superclass.and_then(|s| db.classes.get(s));
     }
     None
 }
 
 fn class_exists(class: &str) -> bool {
+    if class == "InputActionLabel" {
+        return true;
+    }
     rbx_reflection_database::get()
         .map(|db| db.classes.contains_key(class))
         .unwrap_or(false)
@@ -437,12 +463,32 @@ fn class_exists(class: &str) -> bool {
 /// The default a property reads before anything assigns it.
 fn default_for(class: &str, property: &str) -> Option<Variant> {
     let db = rbx_reflection_database::get().ok()?;
-    let mut cursor = db.classes.get(class);
-    while let Some(current) = cursor {
-        if let Some(value) = current.default_properties.get(property) {
-            return Some(value.clone());
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        if let Some(current) = db.classes.get(c) {
+            if let Some(value) = current.default_properties.get(property) {
+                return Some(value.clone());
+            }
+            cursor = current.superclass;
+        } else if c == "InputActionLabel" {
+            if let Some(val) = db
+                .classes
+                .get("TextLabel")
+                .and_then(|cl| cl.default_properties.get(property))
+            {
+                return Some(val.clone());
+            }
+            if let Some(val) = db
+                .classes
+                .get("ImageLabel")
+                .and_then(|cl| cl.default_properties.get(property))
+            {
+                return Some(val.clone());
+            }
+            cursor = Some("GuiObject");
+        } else {
+            break;
         }
-        cursor = current.superclass.and_then(|s| db.classes.get(s));
     }
     None
 }

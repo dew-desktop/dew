@@ -7,9 +7,10 @@
      The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
      the command it gave had never run. -->
 
-Measured against Roblox **0.728.0.7280895**, from the reflection database that ships
-with `rbx_reflection_database`. It tracks Roblox releases, so re-running this
-after an update is how the standard notices the platform moved.
+Measured against Roblox **0.736.0.7361346**, from Roblox's own API dump pinned
+at that build by `scripts/fetch_api_surface.luau`. Both the property half
+and the method/event half come from that one source, which is also the build
+every verified conformance case cites.
 
 **THE SUBJECT IS THE DEW HOST**, measured against the Roblox engine. Aether is a
 headless framework that runs on top of a host, the way Ark UI runs on top of a
@@ -17,10 +18,10 @@ DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or
 without Aether**.
 
-**136 of 138 in-scope properties accepted by the host.** 22 more are
-excluded by decision, and 24 classes under `GuiObject` are in scope.
+**136 of 139 in-scope properties accepted by the host.** 22 more are
+excluded by decision, and 25 classes under `GuiObject` are in scope.
 
-Of those 138, **35 are already honoured by Aether's
+Of those 139, **35 are already honoured by Aether's
 renderer**. That is not a conformance figure; it splits the backlog by cost.
 
 ## Coverage by class
@@ -37,6 +38,7 @@ property the host stores but the pipeline ignores is stored and not drawn.
 | `ScrollingFrame` | 15 | 56 |
 | `TextLabel` | 20 | 56 |
 | `ImageLabel` | 17 | 49 |
+| `InputActionLabel` | 21 | 48 |
 | `GuiButton` | 14 | 44 |
 | `CanvasGroup` | 14 | 40 |
 | `Frame` | 14 | 39 |
@@ -50,7 +52,6 @@ property the host stores but the pipeline ignores is stored and not drawn.
 | `UITableLayout` | 4 | 13 |
 | `UICorner` | 3 | 10 |
 | `UIFlexItem` | 2 | 9 |
-| `UIPadding` | 6 | 9 |
 
 ## Out of scope
 
@@ -60,7 +61,7 @@ conformant implementation may ignore it.
 **Classes.** Video, viewports and chat windows are engine features rather than
 layout: `VideoFrame`, `VideoDisplay`, `ViewportFrame`, `TextChannelWindow`, `RelativeGui`.
 
-**Properties.** `Archivable`, `AutoLocalize`, `GamepadInputEnabled`, `HoverHapticEffect`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `PressHapticEffect`, `RobloxLocked`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
+**Properties.** `Archivable`, `AutoLocalize`, `Capabilities`, `GamepadInputEnabled`, `HoverHapticEffect`, `NextSelectionDown`, `NextSelectionLeft`, `NextSelectionRight`, `NextSelectionUp`, `PressHapticEffect`, `RootLocalizationTable`, `Sandboxed`, `Selectable`, `SelectionBehaviorDown`, `SelectionBehaviorLeft`, `SelectionBehaviorRight`, `SelectionBehaviorUp`, `SelectionGroup`, `SelectionImageObject`, `SelectionOrder`, `ShowNativeInput`, `TouchInputEnabled`
 
 ## Names the host is split on
 
@@ -77,7 +78,7 @@ still unassignable.
 
 ## Property backlog
 
-What conformance actually requires, split by what it costs. 2 properties.
+What conformance actually requires, split by what it costs. 3 properties.
 
 ### Host work only (2)
 
@@ -86,15 +87,14 @@ store them and nothing else has to change.
 
 - `Color`, `Transparency`
 
-### Host and rendering (0)
+### Host and rendering (1)
 
+- `InputAction`
 
 ## Methods and events
 
-The other half of what an application can reach, and the half that had never
-been measured. `rbx_reflection_database` carries no methods and no events, so
-this comes from Roblox's own API dump, pinned at **0.736.0.7361346** by
-`scripts/fetch_api_surface.luau`.
+The other half of what an application can reach, from the same pinned dump at
+**0.736.0.7361346**.
 
 **THE TWO IMPLEMENTATIONS ARE THE ROBLOX ENGINE AND THE DEW HOST.** Aether is a
 headless framework that runs on top of a host, the way Ark UI runs on top of a
@@ -133,14 +133,3 @@ What parity actually requires. No Dew guest can reach any of these.
 
 - `CaptureFocus`, `FocusLost`, `Focused`, `GetScrollVelocity`, `IsFocused`, `JumpTo`, `JumpToIndex`, `Next`
 - `PageEnter`, `PageLeave`, `Previous`, `ReleaseFocus`, `ResetScrollVelocity`, `Stopped`, `WaitForChild`
-
-### This document measures two Roblox builds at once
-
-| half | build | pinned by |
-| :--- | :--- | :--- |
-| properties | 0.728.0.7280895 | whatever `rbx_reflection_database` ships |
-| methods and events | 0.736.0.7361346 | `scripts/fetch_api_surface.luau` |
-
-Conformance against two builds at once is not a thing an implementation can
-satisfy. Closing this means moving the property half onto the pinned dump too,
-or pinning the crate to the build the dump names.

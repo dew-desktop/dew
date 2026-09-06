@@ -263,12 +263,18 @@ pub fn class_is_a(class: &str, ancestor: &str) -> bool {
     let Ok(db) = rbx_reflection_database::get() else {
         return false;
     };
-    let mut cursor = db.classes.get(class);
-    while let Some(current) = cursor {
-        if current.name == ancestor {
+    let mut cursor = Some(class);
+    while let Some(c) = cursor {
+        if c == ancestor {
             return true;
         }
-        cursor = current.superclass.and_then(|s| db.classes.get(s));
+        if let Some(current) = db.classes.get(c) {
+            cursor = current.superclass;
+        } else if c == "InputActionLabel" {
+            cursor = Some("GuiObject");
+        } else {
+            break;
+        }
     }
     false
 }
