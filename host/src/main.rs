@@ -546,6 +546,9 @@ pub enum Command {
     Conformance {
         filter: Option<String>,
         dir: Option<PathBuf>,
+        pixel: bool,
+        generate_goldens: bool,
+        run_unsupported: bool,
     },
     Help {
         subcommand: Option<String>,
@@ -840,6 +843,9 @@ fn parse_test(args: &[String]) -> Result<Command, String> {
 fn parse_conformance(args: &[String]) -> Result<Command, String> {
     let mut filter: Option<String> = None;
     let mut dir: Option<PathBuf> = None;
+    let mut pixel = false;
+    let mut generate_goldens = false;
+    let mut run_unsupported = false;
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
@@ -847,6 +853,16 @@ fn parse_conformance(args: &[String]) -> Result<Command, String> {
             "--dir" | "-d" => {
                 let val = iter.next().ok_or("missing value for --dir")?;
                 dir = Some(PathBuf::from(val));
+            }
+            "--pixel" | "-p" => {
+                pixel = true;
+            }
+            "--generate-goldens" => {
+                pixel = true;
+                generate_goldens = true;
+            }
+            "--run-unsupported" => {
+                run_unsupported = true;
             }
             s if !s.starts_with('-') => {
                 if filter.is_none() {
@@ -859,7 +875,13 @@ fn parse_conformance(args: &[String]) -> Result<Command, String> {
         }
     }
 
-    Ok(Command::Conformance { filter, dir })
+    Ok(Command::Conformance {
+        filter,
+        dir,
+        pixel,
+        generate_goldens,
+        run_unsupported,
+    })
 }
 
 fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, String> {
@@ -1784,6 +1806,11 @@ fn execute_help(subcommand: Option<String>) {
             println!(
                 "  --dir, -d <PATH>      Directory containing cases (defaults to auto-discovery)"
             );
+            println!(
+                "  --pixel, -p           Enable pixel-level probe and golden image verification"
+            );
+            println!("  --generate-goldens    Generate reference golden PNGs from rendered output");
+            println!("  --run-unsupported     Execute cases marked with unsupported requirements");
         }
         _ => {
             println!("Dew -- desktop applet platform over a native DataModel");
@@ -1809,16 +1836,37 @@ fn execute_help(subcommand: Option<String>) {
     }
 }
 
-fn execute_conformance(filter: Option<String>, dir: Option<PathBuf>) -> Result<(), String> {
+fn execute_conformance(
+    filter: Option<String>,
+    dir: Option<PathBuf>,
+    pixel: bool,
+    generate_goldens: bool,
+    run_unsupported: bool,
+) -> Result<(), String> {
     let cases_dir = dew_host::conformance::find_cases_dir(dir.as_deref())?;
     println!(
-        "[dew] running conformance suite from {}",
-        cases_dir.display()
+        "[dew] running conformance suite from {}{}",
+        cases_dir.display(),
+        if pixel {
+            " [pixel verification enabled]"
+        } else {
+            ""
+        }
     );
-    let (results, summary) = dew_host::conformance::run_suite(&cases_dir, filter.as_deref());
+    let options = dew_host::conformance::PixelOptions {
+        enabled: pixel,
+        generate_goldens,
+        run_unsupported,
+        tolerance: 8,
+    };
+    let (results, summary) =
+        dew_host::conformance::run_suite_with_options(&cases_dir, filter.as_deref(), &options);
     dew_host::conformance::print_report(&results, &summary);
     if summary.undecodable > 0 {
         return Err(format!("{} case(s) failed to decode", summary.undecodable));
+    }
+    if summary.failed > 0 {
+        return Err(format!("{} case(s) failed", summary.failed));
     }
     Ok(())
 }
@@ -1840,7 +1888,13 @@ fn run() -> Result<(), String> {
             size,
         } => execute_init(name, runtime, surface, size),
         Command::Test { filter, dir } => execute_test(filter, dir),
-        Command::Conformance { filter, dir } => execute_conformance(filter, dir),
+        Command::Conformance {
+            filter,
+            dir,
+            pixel,
+            generate_goldens,
+            run_unsupported,
+        } => execute_conformance(filter, dir, pixel, generate_goldens, run_unsupported),
         Command::Help { subcommand } => {
             execute_help(subcommand);
             Ok(())
@@ -2271,9 +2325,18 @@ mod tests {
         let args = ["conformance"].iter().map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Conformance { filter, dir } => {
+            Command::Conformance {
+                filter,
+                dir,
+                pixel,
+                generate_goldens,
+                run_unsupported,
+            } => {
                 assert_eq!(filter, None);
                 assert_eq!(dir, None);
+                assert!(!pixel);
+                assert!(!generate_goldens);
+                assert!(!run_unsupported);
             }
             _ => panic!("expected Conformance command"),
         }
@@ -2284,7 +2347,7 @@ mod tests {
         let args = ["conformance", "01_"].iter().map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Conformance { filter, dir } => {
+            Command::Conformance { filter, dir, .. } => {
                 assert_eq!(filter.as_deref(), Some("01_"));
                 assert_eq!(dir, None);
             }
@@ -2299,7 +2362,7 @@ mod tests {
             .map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Conformance { filter, dir } => {
+            Command::Conformance { filter, dir, .. } => {
                 assert_eq!(filter, None);
                 assert_eq!(dir, Some(PathBuf::from("cases")));
             }
@@ -2314,9 +2377,35 @@ mod tests {
             .map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Conformance { filter, dir } => {
+            Command::Conformance { filter, dir, .. } => {
                 assert_eq!(filter.as_deref(), Some("01_"));
                 assert_eq!(dir, Some(PathBuf::from("cases")));
+            }
+            _ => panic!("expected Conformance command"),
+        }
+    }
+
+    #[test]
+    fn subcommand_conformance_pixel_flags() {
+        let args = [
+            "conformance",
+            "--pixel",
+            "--generate-goldens",
+            "--run-unsupported",
+        ]
+        .iter()
+        .map(|s| s.to_string());
+        let cmd = parse_args(args, false).unwrap();
+        match cmd {
+            Command::Conformance {
+                pixel,
+                generate_goldens,
+                run_unsupported,
+                ..
+            } => {
+                assert!(pixel);
+                assert!(generate_goldens);
+                assert!(run_unsupported);
             }
             _ => panic!("expected Conformance command"),
         }

@@ -10,6 +10,9 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut filter = None;
     let mut custom_dir = None;
+    let mut pixel = false;
+    let mut generate_goldens = false;
+    let mut run_unsupported = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -22,6 +25,16 @@ fn main() -> ExitCode {
                     return ExitCode::FAILURE;
                 }
             }
+            "--pixel" | "-p" => {
+                pixel = true;
+            }
+            "--generate-goldens" => {
+                pixel = true;
+                generate_goldens = true;
+            }
+            "--run-unsupported" => {
+                run_unsupported = true;
+            }
             "--help" | "-h" => {
                 println!("Usage: conformance [FILTER] [OPTIONS]");
                 println!();
@@ -32,6 +45,13 @@ fn main() -> ExitCode {
                 println!();
                 println!("Options:");
                 println!("  --dir, -d <PATH>      Directory containing cases (defaults to auto-discovery)");
+                println!("  --pixel, -p           Enable pixel-level probe and golden image verification");
+                println!(
+                    "  --generate-goldens    Generate reference golden PNGs from rendered output"
+                );
+                println!(
+                    "  --run-unsupported     Execute cases marked with unsupported requirements"
+                );
                 println!("  --help, -h            Show this help text");
                 return ExitCode::SUCCESS;
             }
@@ -59,10 +79,22 @@ fn main() -> ExitCode {
     };
 
     println!(
-        "[dew] running conformance suite from {}",
-        cases_dir.display()
+        "[dew] running conformance suite from {}{}",
+        cases_dir.display(),
+        if pixel {
+            " [pixel verification enabled]"
+        } else {
+            ""
+        }
     );
-    let (results, summary) = dew_host::conformance::run_suite(&cases_dir, filter.as_deref());
+    let options = dew_host::conformance::PixelOptions {
+        enabled: pixel,
+        generate_goldens,
+        run_unsupported,
+        tolerance: 8,
+    };
+    let (results, summary) =
+        dew_host::conformance::run_suite_with_options(&cases_dir, filter.as_deref(), &options);
     dew_host::conformance::print_report(&results, &summary);
 
     if summary.undecodable > 0 {
@@ -70,6 +102,10 @@ fn main() -> ExitCode {
             "conformance: {} case(s) failed to decode",
             summary.undecodable
         );
+        return ExitCode::FAILURE;
+    }
+
+    if summary.failed > 0 {
         return ExitCode::FAILURE;
     }
 

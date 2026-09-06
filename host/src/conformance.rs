@@ -11,6 +11,8 @@
 //! arena storage, and render::frame_of) rather than a mock fixture.
 
 use crate::datamodel::{install, install_vocabulary, render::frame_of, SharedDom};
+use dew_raster::Backend;
+use dew_runtime::{Painter, RasterPainter};
 use mlua::prelude::*;
 use mlua::{Table, Value};
 use std::collections::HashMap;
@@ -60,6 +62,37 @@ pub struct Ratio {
     pub integral: Option<bool>,
 }
 
+/// A pixel probe at integer surface coordinates (x, y).
+#[derive(Debug, Clone)]
+pub struct PixelProbe {
+    pub x: u32,
+    pub y: u32,
+    pub expected: [u8; 4], // RGBA
+    pub divergent: Option<[u8; 4]>,
+    pub tolerance: u8,
+    pub note: Option<String>,
+}
+
+/// Options controlling conformance suite execution.
+#[derive(Debug, Clone)]
+pub struct PixelOptions {
+    pub enabled: bool,
+    pub generate_goldens: bool,
+    pub run_unsupported: bool,
+    pub tolerance: u8,
+}
+
+impl Default for PixelOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            generate_goldens: false,
+            run_unsupported: false,
+            tolerance: 8,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Case {
     pub file_stem: String,
@@ -73,6 +106,8 @@ pub struct Case {
     pub ratios: Vec<Ratio>,
     pub order: Option<Vec<String>>,
     pub expect_absent: Option<Vec<String>>,
+    pub pixels: Vec<PixelProbe>,
+    pub golden: Option<String>,
     pub tree_val: mlua::RegistryKey,
 }
 
@@ -103,6 +138,80 @@ pub struct CaseResult {
     pub provenance: String,
     pub status: CaseStatus,
     pub note: Option<String>,
+}
+
+/// Find the `conformance/goldens` directory located alongside `conformance/cases`.
+pub fn find_goldens_dir(cases_dir: &Path) -> PathBuf {
+    cases_dir
+        .parent()
+        .map(|p| p.join("goldens"))
+        .unwrap_or_else(|| PathBuf::from("conformance/goldens"))
+}
+
+/// Decode an RGBA color value from a Lua value (hex string or table).
+fn decode_color(val: &Value) -> Result<[u8; 4], String> {
+    match val {
+        Value::String(s) => {
+            let hex = s.to_str().map_err(|e| e.to_string())?;
+            let clean = hex.trim_start_matches('#');
+            match clean.len() {
+                6 => {
+                    let r = u8::from_str_radix(&clean[0..2], 16).map_err(|e| e.to_string())?;
+                    let g = u8::from_str_radix(&clean[2..4], 16).map_err(|e| e.to_string())?;
+                    let b = u8::from_str_radix(&clean[4..6], 16).map_err(|e| e.to_string())?;
+                    Ok([r, g, b, 255])
+                }
+                8 => {
+                    let r = u8::from_str_radix(&clean[0..2], 16).map_err(|e| e.to_string())?;
+                    let g = u8::from_str_radix(&clean[2..4], 16).map_err(|e| e.to_string())?;
+                    let b = u8::from_str_radix(&clean[4..6], 16).map_err(|e| e.to_string())?;
+                    let a = u8::from_str_radix(&clean[6..8], 16).map_err(|e| e.to_string())?;
+                    Ok([r, g, b, a])
+                }
+                _ => Err(format!("invalid hex color: '{hex}'")),
+            }
+        }
+        Value::Table(t) => {
+            if let Ok(first) = t.get::<String>(1) {
+                if first == "Color3" {
+                    let r: f32 = t.get(2).unwrap_or(0.0);
+                    let g: f32 = t.get(3).unwrap_or(0.0);
+                    let b: f32 = t.get(4).unwrap_or(0.0);
+                    return Ok([
+                        (r.clamp(0.0, 1.0) * 255.0).round() as u8,
+                        (g.clamp(0.0, 1.0) * 255.0).round() as u8,
+                        (b.clamp(0.0, 1.0) * 255.0).round() as u8,
+                        255,
+                    ]);
+                }
+            }
+            if let (Ok(r), Ok(g), Ok(b)) = (t.get::<f32>(1), t.get::<f32>(2), t.get::<f32>(3)) {
+                let a = t.get::<f32>(4).unwrap_or(255.0);
+                let to_u8 = |v: f32| -> u8 {
+                    if v <= 1.0 && v > 0.0 {
+                        (v * 255.0).round() as u8
+                    } else {
+                        v.clamp(0.0, 255.0).round() as u8
+                    }
+                };
+                return Ok([to_u8(r), to_u8(g), to_u8(b), to_u8(a)]);
+            }
+            if let (Ok(r), Ok(g), Ok(b)) = (t.get::<f32>("r"), t.get::<f32>("g"), t.get::<f32>("b"))
+            {
+                let a = t.get::<f32>("a").unwrap_or(255.0);
+                let to_u8 = |v: f32| -> u8 {
+                    if v <= 1.0 && v > 0.0 {
+                        (v * 255.0).round() as u8
+                    } else {
+                        v.clamp(0.0, 255.0).round() as u8
+                    }
+                };
+                return Ok([to_u8(r), to_u8(g), to_u8(b), to_u8(a)]);
+            }
+            Err("could not decode color from table".to_string())
+        }
+        other => Err(format!("unexpected color value: {:?}", other.type_name())),
+    }
 }
 
 /// Find the `conformance/cases` directory across possible workspace layouts.
@@ -340,6 +449,43 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
         .ok()
         .map(|t| t.sequence_values::<String>().flatten().collect());
 
+    let mut pixels = Vec::new();
+    if let Ok(pix_table) = table.get::<Table>("pixels") {
+        for v in pix_table.sequence_values::<Table>() {
+            let item = v.map_err(|e| format!("invalid pixel entry: {e}"))?;
+            let x: u32 = item
+                .get("x")
+                .map_err(|e| format!("pixel probe missing 'x': {e}"))?;
+            let y: u32 = item
+                .get("y")
+                .map_err(|e| format!("pixel probe missing 'y': {e}"))?;
+            let color_val: Value = item
+                .get("color")
+                .map_err(|e| format!("pixel probe missing 'color': {e}"))?;
+            let expected = decode_color(&color_val)?;
+            let divergent = item
+                .get::<Value>("divergentColor")
+                .ok()
+                .and_then(|v| decode_color(&v).ok());
+            let tolerance: u8 = item.get("tolerance").unwrap_or(5);
+            let note: Option<String> = item.get("note").ok();
+            pixels.push(PixelProbe {
+                x,
+                y,
+                expected,
+                divergent,
+                tolerance,
+                note,
+            });
+        }
+    }
+
+    let golden = match table.get::<Value>("golden") {
+        Ok(Value::String(s)) => s.to_str().ok().map(|s| s.to_string()),
+        Ok(Value::Boolean(true)) => Some(format!("{file_stem}.png")),
+        _ => None,
+    };
+
     Ok(Case {
         file_stem,
         name,
@@ -352,6 +498,8 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
         ratios,
         order,
         expect_absent,
+        pixels,
+        golden,
         tree_val,
     })
 }
@@ -377,6 +525,18 @@ fn diagnose_remediation(case: &Case, detail: &str) -> String {
     {
         needs.push("text bounds and glyph metric integration with layout");
     }
+    if detail.contains("radial") || name_lower.contains("radial") || stem_lower.contains("radial") {
+        needs.push("radial UIGradient rendering");
+    }
+    if detail.contains("paint order")
+        || name_lower.contains("zindex")
+        || stem_lower.contains("zindex")
+    {
+        needs.push("ZIndex paint sequence sorting");
+    }
+    if detail.contains("radius") || detail.contains("clip") {
+        needs.push("clip radius in display list");
+    }
 
     if needs.is_empty() {
         if detail.contains("AutomaticSize") {
@@ -391,25 +551,42 @@ fn diagnose_remediation(case: &Case, detail: &str) -> String {
     needs.join(", ")
 }
 
-/// Execute a single case against Dew's native DataModel.
+/// Execute a single case against Dew's native DataModel using default options.
 pub fn run_case(lua: &Lua, case: &Case) -> CaseResult {
+    run_case_with_options(lua, case, &PixelOptions::default(), None)
+}
+
+/// Execute a single case against Dew's native DataModel with configurable pixel/golden options.
+pub fn run_case_with_options(
+    lua: &Lua,
+    case: &Case,
+    options: &PixelOptions,
+    cases_dir: Option<&Path>,
+) -> CaseResult {
     // 1. Check feature support declared in `requires`
-    for req in &case.requires {
-        if !SUPPORTS.contains(&req.as_str()) {
-            return CaseResult {
-                file_stem: case.file_stem.clone(),
-                name: case.name.clone(),
-                provenance: case.provenance.clone(),
-                status: CaseStatus::Unsupported {
-                    feature: req.clone(),
-                },
-                note: Some("unsupported".to_string()),
-            };
+    if !options.run_unsupported {
+        for req in &case.requires {
+            if !SUPPORTS.contains(&req.as_str()) {
+                return CaseResult {
+                    file_stem: case.file_stem.clone(),
+                    name: case.name.clone(),
+                    provenance: case.provenance.clone(),
+                    status: CaseStatus::Unsupported {
+                        feature: req.clone(),
+                    },
+                    note: Some("unsupported".to_string()),
+                };
+            }
         }
     }
 
     // 2. A case that asserts nothing cannot pass
-    if case.expect.is_empty() && case.ratios.is_empty() && case.order.is_none() {
+    if case.expect.is_empty()
+        && case.ratios.is_empty()
+        && case.order.is_none()
+        && case.pixels.is_empty()
+        && case.golden.is_none()
+    {
         return CaseResult {
             file_stem: case.file_stem.clone(),
             name: case.name.clone(),
@@ -745,8 +922,191 @@ pub fn run_case(lua: &Lua, case: &Case) -> CaseResult {
         }
     }
 
+    // 10. Evaluate pixel probes and goldens if pixel execution is enabled
+    let mut matched_divergent = false;
+    if options.enabled {
+        let width = case.surface.width as usize;
+        let height = case.surface.height as usize;
+        let mut painter = match RasterPainter::new(
+            case.surface.width as u32,
+            case.surface.height as u32,
+            Backend::VelloCpu,
+        ) {
+            Some(p) => p,
+            None => {
+                return finalize_result(case, "failed to create raster painter".to_string(), None);
+            }
+        };
+        if let Some(font) = crate::services::face() {
+            painter = painter.with_font(font);
+        }
+        painter.paint_frame(&frame, None);
+
+        let bgra = match painter.canvas_mut().bgra() {
+            Some(b) => b,
+            None => {
+                return finalize_result(case, "rasteriser produced no pixels".to_string(), None);
+            }
+        };
+
+        // Convert BGRA to row-major RGBA
+        let mut rgba = vec![0u8; width * height * 4];
+        for i in 0..(width * height) {
+            rgba[i * 4] = bgra[i * 4 + 2];
+            rgba[i * 4 + 1] = bgra[i * 4 + 1];
+            rgba[i * 4 + 2] = bgra[i * 4];
+            rgba[i * 4 + 3] = bgra[i * 4 + 3];
+        }
+
+        // 10a. Probe pixels
+        for probe in &case.pixels {
+            let x = probe.x as usize;
+            let y = probe.y as usize;
+            if x >= width || y >= height {
+                let detail =
+                    format!("probe at ({x}, {y}) is out of surface bounds ({width}x{height})");
+                return finalize_result(case, detail, None);
+            }
+            let idx = (y * width + x) * 4;
+            let actual = [rgba[idx], rgba[idx + 1], rgba[idx + 2], rgba[idx + 3]];
+            let delta = (0..4)
+                .map(|c| actual[c].abs_diff(probe.expected[c]))
+                .max()
+                .unwrap_or(0);
+            if delta <= probe.tolerance {
+                continue;
+            }
+            if let Some(div) = probe.divergent {
+                let div_delta = (0..4)
+                    .map(|c| actual[c].abs_diff(div[c]))
+                    .max()
+                    .unwrap_or(0);
+                if div_delta <= probe.tolerance {
+                    matched_divergent = true;
+                    continue;
+                }
+            }
+            let detail = format!(
+                "pixel at ({x}, {y}): expected #{:02x}{:02x}{:02x}{:02x}, got #{:02x}{:02x}{:02x}{:02x} (delta {delta}){}",
+                probe.expected[0],
+                probe.expected[1],
+                probe.expected[2],
+                probe.expected[3],
+                actual[0],
+                actual[1],
+                actual[2],
+                actual[3],
+                probe
+                    .note
+                    .as_deref()
+                    .map(|n| format!(" ({n})"))
+                    .unwrap_or_default()
+            );
+            let remediation = diagnose_remediation(case, &detail);
+            return finalize_result(case, detail, Some(remediation));
+        }
+
+        // 10b. Golden comparison / generation
+        if let Some(dir) = cases_dir {
+            let goldens_dir = find_goldens_dir(dir);
+            let golden_name = case
+                .golden
+                .clone()
+                .unwrap_or_else(|| format!("{}.png", case.file_stem));
+            let golden_path = goldens_dir.join(&golden_name);
+
+            if options.generate_goldens {
+                if !case.pixels.is_empty() || case.golden.is_some() {
+                    let _ = std::fs::create_dir_all(&goldens_dir);
+                    let path_str = golden_path.to_string_lossy();
+                    if let Err(code) = painter.write_png(&path_str) {
+                        eprintln!(
+                            "failed to write golden {}: code {code}",
+                            golden_path.display()
+                        );
+                    } else {
+                        println!(
+                            "[golden] generated reference image {}",
+                            golden_path.display()
+                        );
+                    }
+                }
+            } else if golden_path.is_file() {
+                match image::open(&golden_path) {
+                    Ok(img) => {
+                        let golden_rgba = img.to_rgba8();
+                        if golden_rgba.width() != case.surface.width as u32
+                            || golden_rgba.height() != case.surface.height as u32
+                        {
+                            let detail = format!(
+                                "golden dimensions mismatch: expected {}x{}, got {}x{}",
+                                case.surface.width,
+                                case.surface.height,
+                                golden_rgba.width(),
+                                golden_rgba.height()
+                            );
+                            return finalize_result(case, detail, None);
+                        }
+                        let golden_raw = golden_rgba.as_raw();
+                        let mut mismatched_pixels = 0usize;
+                        let mut max_delta = 0u8;
+                        let mut diff_pixels = Vec::with_capacity(rgba.len());
+
+                        for i in 0..(width * height) {
+                            let p_act = &rgba[i * 4..i * 4 + 4];
+                            let p_gold = &golden_raw[i * 4..i * 4 + 4];
+                            let d = (0..4)
+                                .map(|c| p_act[c].abs_diff(p_gold[c]))
+                                .max()
+                                .unwrap_or(0);
+                            if d > options.tolerance {
+                                mismatched_pixels += 1;
+                                max_delta = max_delta.max(d);
+                                diff_pixels.extend_from_slice(&[255, 0, 255, 255]);
+                            } else {
+                                let gray = ((p_act[0] as u16 + p_act[1] as u16 + p_act[2] as u16)
+                                    / 6) as u8;
+                                diff_pixels.extend_from_slice(&[gray, gray, gray, p_act[3] / 2]);
+                            }
+                        }
+
+                        let mismatch_ratio = mismatched_pixels as f32 / (width * height) as f32;
+                        // 1.0% tolerance for cross-platform rasteriser antialiasing contour differences
+                        if mismatch_ratio > 0.01 {
+                            let diffs_dir = if Path::new("target").is_dir() {
+                                PathBuf::from("target/conformance_diffs")
+                            } else {
+                                goldens_dir.join(".diffs")
+                            };
+                            let _ = std::fs::create_dir_all(&diffs_dir);
+                            let diff_path = diffs_dir.join(format!("{}_diff.png", case.file_stem));
+                            if let Some(diff_img) =
+                                image::RgbaImage::from_raw(width as u32, height as u32, diff_pixels)
+                            {
+                                let _ = diff_img.save(&diff_path);
+                            }
+                            let detail = format!(
+                                "golden mismatch: {:.2}% pixels differ (max delta: {}) [diff written to {}]",
+                                mismatch_ratio * 100.0,
+                                max_delta,
+                                diff_path.display()
+                            );
+                            let remediation = diagnose_remediation(case, &detail);
+                            return finalize_result(case, detail, Some(remediation));
+                        }
+                    }
+                    Err(e) => {
+                        let detail =
+                            format!("could not open golden {}: {e}", golden_path.display());
+                        return finalize_result(case, detail, None);
+                    }
+                }
+            }
+        }
+    }
+
     // All assertions satisfied
-    let status = if case.provenance == "divergent" {
+    let status = if matched_divergent || case.provenance == "divergent" {
         CaseStatus::Divergent
     } else {
         CaseStatus::Pass
@@ -797,6 +1157,31 @@ pub struct SuiteSummary {
 
 /// Run all conformance cases in `cases_dir` with optional filter.
 pub fn run_suite(cases_dir: &Path, filter: Option<&str>) -> (Vec<CaseResult>, SuiteSummary) {
+    run_suite_with_options(cases_dir, filter, &PixelOptions::default())
+}
+
+/// Run all conformance cases in `cases_dir` with pixel-level verification.
+pub fn run_suite_pixel(
+    cases_dir: &Path,
+    filter: Option<&str>,
+    generate_goldens: bool,
+    run_unsupported: bool,
+) -> (Vec<CaseResult>, SuiteSummary) {
+    let options = PixelOptions {
+        enabled: true,
+        generate_goldens,
+        run_unsupported,
+        tolerance: 8,
+    };
+    run_suite_with_options(cases_dir, filter, &options)
+}
+
+/// Run conformance cases with specified pixel options.
+pub fn run_suite_with_options(
+    cases_dir: &Path,
+    filter: Option<&str>,
+    options: &PixelOptions,
+) -> (Vec<CaseResult>, SuiteSummary) {
     let mut entries: Vec<PathBuf> = match std::fs::read_dir(cases_dir) {
         Ok(read_dir) => read_dir
             .filter_map(|e| e.ok())
@@ -840,7 +1225,7 @@ pub fn run_suite(cases_dir: &Path, filter: Option<&str>) -> (Vec<CaseResult>, Su
             }
         }
 
-        let res = run_case(&lua, &case);
+        let res = run_case_with_options(&lua, &case, options, Some(cases_dir));
         results.push(res);
     }
 
@@ -1028,5 +1413,68 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(summary.passed, 1);
         assert_eq!(results[0].status, CaseStatus::Pass);
+    }
+
+    #[test]
+    fn pixel_runner_passes_paint_order_and_golden() {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let options = PixelOptions {
+            enabled: true,
+            generate_goldens: false,
+            run_unsupported: false,
+            tolerance: 8,
+        };
+        let (results, summary) =
+            run_suite_with_options(&dir, Some("zindex_orders_the_paint"), &options);
+        assert_eq!(results.len(), 1);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(results[0].status, CaseStatus::Pass);
+    }
+
+    #[test]
+    fn pixel_runner_observes_clip_radius_divergence() {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let options = PixelOptions {
+            enabled: true,
+            generate_goldens: false,
+            run_unsupported: false,
+            tolerance: 8,
+        };
+        let (results, summary) =
+            run_suite_with_options(&dir, Some("clips_descendants_has_no_radius"), &options);
+        assert_eq!(results.len(), 1);
+        assert_eq!(summary.passed, 1);
+        assert_eq!(summary.divergent, 1);
+        assert_eq!(results[0].status, CaseStatus::Divergent);
+    }
+
+    #[test]
+    fn radial_gradient_case_remains_unsupported_until_display_list_carries_gradient_kind() {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let (results, summary) = run_suite(&dir, Some("uigradient_radial"));
+        assert_eq!(results.len(), 1);
+        assert_eq!(summary.passed, 0);
+        assert_eq!(summary.unsupported, 1);
+        assert_eq!(
+            results[0].status,
+            CaseStatus::Unsupported {
+                feature: "UIGradient.Radial".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn pixel_runner_full_suite_passes() {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let (_results, summary) = run_suite_pixel(&dir, None, false, false);
+        assert_eq!(summary.total, 24);
+        assert_eq!(summary.undecodable, 0);
+        assert_eq!(summary.unsupported, 4);
+        assert_eq!(summary.passed, 20);
+        assert_eq!(summary.failed, 0);
+        assert_eq!(summary.divergent, 1);
+        assert_eq!(summary.verified_against_roblox, 18);
+        assert_eq!(summary.open_questions, 0);
     }
 }
