@@ -46,9 +46,27 @@ const CONFORMANCE_ONLY: &[&str] = &[
     "pixels",
 ];
 
+/// One property changed on one named node, to see whether it moves any pixels.
+///
+/// THE POINT OF THE WHOLE MILESTONE. "Demonstrated" as sprint 1 defined it means
+/// a scene SET the property -- which a property the renderer ignores entirely
+/// satisfies, because setting it changes nothing and nobody looks. A variant
+/// asks the question the other way: render it twice, once with the property
+/// different, and see whether the image changed. That cannot be satisfied by a
+/// property that does nothing.
+pub struct Variant {
+    /// The `name` of the node to change.
+    pub node: String,
+    pub property: String,
+    /// The replacement value, in the same typed encoding the tree uses.
+    pub value: RegistryKey,
+}
+
 /// One scene: a tree, a surface to draw it on, and what it demonstrates.
 pub struct Scene {
     pub file_stem: String,
+    /// The file this came from, so a variant can be reloaded into a fresh VM.
+    pub source: PathBuf,
     /// The directory under `gallery/scenes` this came from.
     pub pillar: String,
     pub name: String,
@@ -68,6 +86,8 @@ pub struct Scene {
     pub demonstrates_by_class: BTreeSet<(String, String)>,
     /// Classes the scene instantiates.
     pub classes: BTreeSet<String>,
+    /// Property changes this scene offers for differential comparison.
+    pub variants: Vec<Variant>,
 }
 
 /// Where the scenes live.
@@ -264,10 +284,37 @@ pub fn decode_scene(lua: &Lua, path: &Path, pillar: &str) -> Result<Scene, Strin
     )
     .map_err(|e| format!("{file_stem}: {e}"))?;
 
+    let mut variants = Vec::new();
+    if let Ok(Some(list)) = table.get::<Option<Table>>("variants") {
+        for entry in list.sequence_values::<Table>() {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let node: String = entry
+                .get::<Option<String>>("node")
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{file_stem}: a variant has no 'node'"))?;
+            let property: String = entry
+                .get::<Option<String>>("prop")
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{file_stem}: a variant has no 'prop'"))?;
+            let value: Value = entry
+                .get::<Option<Value>>("value")
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{file_stem}: variant '{property}' has no 'value'"))?;
+            variants.push(Variant {
+                node,
+                property,
+                value: lua
+                    .create_registry_value(value)
+                    .map_err(|e| e.to_string())?,
+            });
+        }
+    }
+
     let tree_val = lua.create_registry_value(tree).map_err(|e| e.to_string())?;
 
     Ok(Scene {
         file_stem,
+        source: path.to_path_buf(),
         pillar: pillar.to_string(),
         name,
         shows,
@@ -276,15 +323,133 @@ pub fn decode_scene(lua: &Lua, path: &Path, pillar: &str) -> Result<Scene, Strin
         demonstrates,
         demonstrates_by_class,
         classes,
+        variants,
     })
 }
 
-/// Build the scene through Dew's own `Instance.new` and property setters, then
-/// paint it and write a PNG.
+/// Deep-copies a tree table and overrides one property on one named node.
+///
+/// IN THE SCENE TABLE, BEFORE THE BUILDER RUNS, so the changed value goes
+/// through the host's ordinary property setter exactly as the base value does.
+/// Mutating the built instance afterwards would exercise a different path and
+/// prove less.
+const VARIANT_CHUNK: &str = r#"
+    local function clone(v)
+        if type(v) ~= "table" then return v end
+        local out = {}
+        for k, item in pairs(v) do out[k] = clone(item) end
+        return out
+    end
+
+    local function apply(node, wanted, prop, value)
+        local hit = false
+        if node.name == wanted then
+            node.props = node.props or {}
+            node.props[prop] = value
+            hit = true
+        end
+        for _, child in ipairs(node.children or {}) do
+            if apply(child, wanted, prop, value) then hit = true end
+        end
+        return hit
+    end
+
+    return function(tree, wanted, prop, value)
+        local copy = clone(tree)
+        if not apply(copy, wanted, prop, value) then
+            error("no node named '" .. tostring(wanted) .. "' in this scene")
+        end
+        return copy
+    end
+"#;
+
+/// A painted surface: row-major RGBA, and its dimensions.
+pub struct Painted {
+    pub rgba: Vec<u8>,
+    pub width: usize,
+    pub height: usize,
+}
+
+/// Build the scene through Dew's own `Instance.new` and property setters and
+/// paint it, optionally with one property overridden.
 ///
 /// THROUGH THE REAL PATH, not a fixture. The tree is built by the same setters a
 /// guest calls, laid out by `frame_of`, and painted by `dew_raster`. A scene
 /// that renders is a scene whose properties the host actually took.
+pub fn paint_scene(
+    lua: &Lua,
+    scene: &Scene,
+    override_with: Option<&Variant>,
+) -> Result<Painted, String> {
+    let dom = SharedDom::default();
+    install(lua, &dom).map_err(|e| format!("failed to install DataModel: {e}"))?;
+    install_vocabulary(lua).map_err(|e| format!("failed to install vocabulary: {e}"))?;
+
+    let root_id = dom
+        .lock()
+        .map_err(|_| "dom lock")?
+        .insert("ScreenGui".into(), "DewRoot".into());
+    let root_handle = handle(lua, &dom, root_id).map_err(|e| format!("root handle: {e}"))?;
+
+    let mut tree_table: Table = lua
+        .registry_value(&scene.tree_val)
+        .map_err(|e| format!("tree lookup: {e}"))?;
+
+    if let Some(v) = override_with {
+        let variant_fn: mlua::Function = lua
+            .load(VARIANT_CHUNK)
+            .eval()
+            .map_err(|e| format!("variant chunk: {e}"))?;
+        let value: Value = lua
+            .registry_value(&v.value)
+            .map_err(|e| format!("variant value: {e}"))?;
+        tree_table = variant_fn
+            .call::<Table>((tree_table, v.node.clone(), v.property.clone(), value))
+            .map_err(|e| format!("variant '{}': {e}", v.property))?;
+    }
+
+    let build_fn: mlua::Function = lua
+        .load(TREE_BUILDER)
+        .eval()
+        .map_err(|e| format!("tree builder: {e}"))?;
+    build_fn
+        .call::<Value>((tree_table, root_handle))
+        .map_err(|e| format!("the tree failed to build: {e}"))?;
+
+    let frame = frame_of(&dom, root_id, scene.surface.width, scene.surface.height);
+
+    let width = scene.surface.width as usize;
+    let height = scene.surface.height as usize;
+    let mut painter = RasterPainter::new(
+        scene.surface.width as u32,
+        scene.surface.height as u32,
+        Backend::VelloCpu,
+    )
+    .ok_or("failed to create raster painter")?;
+    if let Some(font) = crate::services::face() {
+        painter = painter.with_font(font);
+    }
+    painter.paint_frame(&frame, None);
+
+    let bgra = painter
+        .canvas_mut()
+        .bgra()
+        .ok_or("rasteriser produced no pixels")?;
+    let mut rgba = vec![0u8; width * height * 4];
+    for i in 0..(width * height) {
+        rgba[i * 4] = bgra[i * 4 + 2];
+        rgba[i * 4 + 1] = bgra[i * 4 + 1];
+        rgba[i * 4 + 2] = bgra[i * 4];
+        rgba[i * 4 + 3] = bgra[i * 4 + 3];
+    }
+    Ok(Painted {
+        rgba,
+        width,
+        height,
+    })
+}
+
+/// Paint the scene and write it out as a PNG.
 pub fn render_scene(lua: &Lua, scene: &Scene, out: &Path) -> Result<(), String> {
     let dom = SharedDom::default();
     install(lua, &dom).map_err(|e| format!("failed to install DataModel: {e}"))?;
@@ -330,10 +495,68 @@ pub fn render_scene(lua: &Lua, scene: &Scene, out: &Path) -> Result<(), String> 
     Ok(())
 }
 
+/// How many pixels differ between two paints of the same surface.
+///
+/// A COUNT RATHER THAN A BOOLEAN, so the report can say how much a property
+/// moved and a caller can require more than one stray pixel.
+pub fn pixels_differing(a: &Painted, b: &Painted) -> usize {
+    if a.width != b.width || a.height != b.height {
+        return a.width * a.height;
+    }
+    a.rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.rgba.as_chunks::<4>().0.iter())
+        .filter(|(x, y)| x != y)
+        .count()
+}
+
+/// Properties that cannot move a pixel on their own, with the reason.
+///
+/// AN EXCUSE LIST, AND EVERY ENTRY IS A CLAIM. A property here is one where
+/// "changing it changed nothing" is the CORRECT outcome, so a differential test
+/// would be asking the wrong question. The reason is the whole value of the
+/// entry -- a bare name would be indistinguishable from something nobody got
+/// round to, which is how an exclusion list becomes a place to hide work.
+///
+/// Kept short on purpose. An excuse written to finish a sprint is the thing this
+/// milestone is against, and sprint 6 re-reads every one of these.
+pub const CANNOT_DIFFER: &[(&str, &str)] = &[
+    (
+        "Name",
+        "an instance's identity. Two names render identically by design, and a          gallery that made them differ would be drawing the name.",
+    ),
+    (
+        "Parent",
+        "reparenting moves an instance in the tree rather than changing how it          paints in place. The pixels move because the LAYOUT moved, which is a          different property's demonstration.",
+    ),
+    (
+        "Active",
+        "input routing. It decides whether a GuiObject swallows a click and has          no paint of its own.",
+    ),
+    (
+        "InputSink",
+        "input routing, as above. Nothing about it reaches the display list.",
+    ),
+];
+
+/// Is this property excused from the differential test, and why?
+pub fn excused(property: &str) -> Option<&'static str> {
+    CANNOT_DIFFER
+        .iter()
+        .find(|(name, _)| *name == property)
+        .map(|(_, reason)| *reason)
+}
+
 /// What the gallery demonstrates, against the standard's own denominator.
 pub struct Coverage {
     pub in_scope: BTreeSet<String>,
     pub demonstrated: BTreeSet<String>,
+    /// Properties whose variant changed the image. The strong claim.
+    pub differential: BTreeSet<String>,
+    /// In scope, and excused from the differential test with a stated reason.
+    pub excused: BTreeSet<String>,
     pub missing: Vec<String>,
     /// (class, property) pairs the scenes set that are in scope for that class.
     pub pairs_demonstrated: usize,
@@ -355,6 +578,53 @@ impl Coverage {
 /// `datamodel-surface` reads, so the two tools cannot drift into disagreeing
 /// about what the standard covers.
 pub fn coverage(scenes: &[Scene]) -> Coverage {
+    coverage_with_moved(scenes, &BTreeSet::new())
+}
+
+/// Run every scene's variants and report which properties moved pixels.
+///
+/// ONE VM PER PAINT. `install` puts a DataModel into a Lua state; reusing one
+/// across a base and its variant would let the first tree's arena leak into the
+/// second, and a difference caused by leftover state is not a difference caused
+/// by the property.
+///
+/// A VARIANT THAT CHANGES NOTHING IS REPORTED, NOT SWALLOWED. That is the whole
+/// signal: it means the property reached the host and did not reach the pixels.
+pub fn differential(scenes: &[Scene]) -> Result<(BTreeSet<String>, Vec<String>), String> {
+    let mut moved: BTreeSet<String> = BTreeSet::new();
+    let mut inert: Vec<String> = Vec::new();
+    for scene in scenes {
+        if scene.variants.is_empty() {
+            continue;
+        }
+        for v in &scene.variants {
+            let lua_base = Lua::new();
+            let base_scene = decode_scene(&lua_base, &scene.source, &scene.pillar)?;
+            let base = paint_scene(&lua_base, &base_scene, None)?;
+
+            let lua_var = Lua::new();
+            let var_scene = decode_scene(&lua_var, &scene.source, &scene.pillar)?;
+            let want = var_scene
+                .variants
+                .iter()
+                .find(|c| c.property == v.property && c.node == v.node)
+                .ok_or_else(|| format!("{}: variant vanished on reload", scene.file_stem))?;
+            let changed = paint_scene(&lua_var, &var_scene, Some(want))?;
+
+            if pixels_differing(&base, &changed) > 0 {
+                moved.insert(v.property.clone());
+            } else {
+                inert.push(format!(
+                    "{}/{}: {} on {} changed no pixels",
+                    scene.pillar, scene.file_stem, v.property, v.node
+                ));
+            }
+        }
+    }
+    Ok((moved, inert))
+}
+
+pub fn coverage_with_moved(scenes: &[Scene], moved: &BTreeSet<String>) -> Coverage {
     let in_scope = crate::scope::in_scope_properties();
     let by_class = crate::scope::in_scope_by_class();
 
@@ -375,10 +645,18 @@ pub fn coverage(scenes: &[Scene]) -> Coverage {
 
     let pairs_in_scope: usize = by_class.values().map(|s| s.len()).sum();
     let missing: Vec<String> = in_scope.difference(&demonstrated).cloned().collect();
+    let differential: BTreeSet<String> = moved.intersection(&in_scope).cloned().collect();
+    let excused: BTreeSet<String> = in_scope
+        .iter()
+        .filter(|p| excused(p).is_some())
+        .cloned()
+        .collect();
 
     Coverage {
         in_scope,
         demonstrated,
+        differential,
+        excused,
         missing,
         pairs_demonstrated: pairs.len(),
         pairs_in_scope,
@@ -583,5 +861,79 @@ mod tests {
             pillar_of(Path::new("gallery/scenes/loose.luau"), root),
             "ungrouped"
         );
+    }
+
+    #[test]
+    fn a_variant_needs_a_node_a_prop_and_a_value() {
+        for (src, want) in [
+            (
+                r#"return { name="x", shows="y", tree={class="Frame",name="R",props={}},
+                 variants = { { prop = "Visible", value = false } } }"#,
+                "node",
+            ),
+            (
+                r#"return { name="x", shows="y", tree={class="Frame",name="R",props={}},
+                 variants = { { node = "R", value = false } } }"#,
+                "prop",
+            ),
+            (
+                r#"return { name="x", shows="y", tree={class="Frame",name="R",props={}},
+                 variants = { { node = "R", prop = "Visible" } } }"#,
+                "value",
+            ),
+        ] {
+            let err = match scene_from(src) {
+                Ok(_) => panic!("an incomplete variant must be refused ({want})"),
+                Err(e) => e,
+            };
+            assert!(err.contains(want), "expected {want} in: {err}");
+        }
+    }
+
+    #[test]
+    fn variants_are_read_in_order() {
+        let scene = scene_from(
+            r#"return { name="x", shows="y",
+                 tree = { class="Frame", name="R", props={} },
+                 variants = {
+                   { node = "R", prop = "Visible", value = false },
+                   { node = "R", prop = "BackgroundTransparency", value = 1 },
+                 } }"#,
+        )
+        .unwrap_or_else(|e| panic!("loads: {e}"));
+        assert_eq!(scene.variants.len(), 2);
+        assert_eq!(scene.variants[0].property, "Visible");
+        assert_eq!(scene.variants[1].node, "R");
+    }
+
+    /// Every excuse carries a reason, because a bare name is indistinguishable
+    /// from something nobody got round to.
+    #[test]
+    fn every_excuse_states_a_reason() {
+        assert!(!CANNOT_DIFFER.is_empty());
+        for (name, reason) in CANNOT_DIFFER {
+            assert!(
+                reason.len() > 30,
+                "{name} needs a reason, not a note: {reason:?}"
+            );
+        }
+        assert!(excused("Name").is_some());
+        assert!(excused("BackgroundColor3").is_none());
+    }
+
+    #[test]
+    fn identical_paints_differ_nowhere() {
+        let a = Painted {
+            rgba: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            width: 2,
+            height: 1,
+        };
+        let b = Painted {
+            rgba: vec![1, 2, 3, 4, 5, 6, 7, 9],
+            width: 2,
+            height: 1,
+        };
+        assert_eq!(pixels_differing(&a, &a), 0);
+        assert_eq!(pixels_differing(&a, &b), 1);
     }
 }

@@ -15,6 +15,23 @@ return {
 	shows = "Three frames: a solid rounded block, a translucent one overlapping it above in ZIndex, and an anchored square whose scale corner radius does NOT round -- a stated gap in corner_radius.",
 	surface = { width = 260, height = 140 },
 
+	--- Each entry repaints the scene with one property changed and asks whether
+	--- the image moved. A property that changes nothing here reached the host
+	--- and did not reach the pixels.
+	variants = {
+		{ node = "Solid", prop = "BackgroundColor3", value = { "Color3", 1, 0, 0 } },
+		{ node = "Solid", prop = "BackgroundTransparency", value = 1 },
+		{ node = "Solid", prop = "Visible", value = false },
+		{ node = "Solid", prop = "Size", value = { "UDim2", 0, 40, 0, 20 } },
+		{ node = "Solid", prop = "Position", value = { "UDim2", 0, 60, 0, 60 } },
+		{ node = "Translucent", prop = "ZIndex", value = 0 },
+		{ node = "AnchoredRight", prop = "AnchorPoint", value = { "Vector2", 0, 0 } },
+		{ node = "Round", prop = "CornerRadius", value = { "UDim", 0, 0 } },
+		--- EXPECTED TO CHANGE NOTHING, and left in for that reason: the scale
+		--- component of a corner radius is dropped by `corner_radius`.
+		{ node = "Round", prop = "CornerRadius", value = { "UDim", 1, 0 } },
+	},
+
 	tree = {
 		class = "Frame",
 		name = "Backdrop",
