@@ -555,6 +555,79 @@ fn diagnose_remediation(case: &Case, detail: &str) -> String {
 }
 
 /// Execute a single case against Dew's native DataModel using default options.
+/// The tree builder, shared with the gallery.
+///
+/// SHARED ON PURPOSE, and only this. ADR-005 keeps the gallery and the
+/// conformance suite apart as artifacts -- separate directories, separate
+/// tallies, no provenance -- while letting them share the scene FORMAT and the
+/// renderer. This chunk is that format: the decoder that turns
+/// `{ "UDim2", 0, 100, 0, 90 }` into a value and walks `class` / `props` /
+/// `children`. Two copies of it would be two dialects of one format within a
+/// release.
+pub const TREE_BUILDER: &str = r#"
+        local decode_val
+        function decode_val(v)
+            if type(v) ~= "table" then return v end
+            local k = v[1]
+            if k == "UDim2" then return UDim2.new(v[2], v[3], v[4], v[5])
+            elseif k == "UDim" then return UDim.new(v[2], v[3])
+            elseif k == "Color3" then return Color3.new(v[2], v[3], v[4])
+            elseif k == "Vector2" then return Vector2.new(v[2], v[3])
+            elseif k == "Rect" then return Rect.new(v[2], v[3], v[4], v[5])
+            elseif k == "Enum" then
+                local cat = Enum[v[2]]
+                if not cat then error("no enum category " .. tostring(v[2])) end
+                local mem = cat[v[3]]
+                if not mem then error("no enum member " .. tostring(v[3])) end
+                return mem
+            elseif k == "ColorSequence" then
+                if type(v[2]) == "table" and type(v[2][1]) == "table" then
+                    local keypoints = {}
+                    for i, kp in ipairs(v[2]) do
+                        keypoints[i] = decode_val(kp)
+                    end
+                    return ColorSequence.new(keypoints)
+                else
+                    local c1 = decode_val(v[2])
+                    local c2 = v[3] and decode_val(v[3]) or nil
+                    return ColorSequence.new(c1, c2)
+                end
+            elseif k == "ColorSequenceKeypoint" then
+                return ColorSequenceKeypoint.new(v[2], decode_val(v[3]))
+            elseif k == "NumberSequence" then
+                if type(v[2]) == "table" and type(v[2][1]) == "table" then
+                    local keypoints = {}
+                    for i, kp in ipairs(v[2]) do
+                        keypoints[i] = decode_val(kp)
+                    end
+                    return NumberSequence.new(keypoints)
+                else
+                    return NumberSequence.new(v[2], v[3])
+                end
+            elseif k == "NumberSequenceKeypoint" then
+                return NumberSequenceKeypoint.new(v[2], v[3], v[4])
+            end
+            error("unknown encoded type " .. tostring(k))
+        end
+
+        local function build_node(node, parent)
+            local inst = Instance.new(node.class)
+            if node.name then inst.Name = node.name end
+            for k, v in pairs(node.props or {}) do
+                inst[k] = decode_val(v)
+            end
+            inst.Parent = parent
+            for _, child in ipairs(node.children or {}) do
+                build_node(child, inst)
+            end
+            return inst
+        end
+
+        return function(tree, root)
+            return build_node(tree, root)
+        end
+    "#;
+
 pub fn run_case(lua: &Lua, case: &Case) -> CaseResult {
     run_case_with_options(lua, case, &PixelOptions::default(), None)
 }
@@ -651,71 +724,8 @@ pub fn run_case_with_options(
     };
 
     // 4. Build the tree through Dew's Instance.new and property setters
-    let builder_chunk = r#"
-        local decode_val
-        function decode_val(v)
-            if type(v) ~= "table" then return v end
-            local k = v[1]
-            if k == "UDim2" then return UDim2.new(v[2], v[3], v[4], v[5])
-            elseif k == "UDim" then return UDim.new(v[2], v[3])
-            elseif k == "Color3" then return Color3.new(v[2], v[3], v[4])
-            elseif k == "Vector2" then return Vector2.new(v[2], v[3])
-            elseif k == "Rect" then return Rect.new(v[2], v[3], v[4], v[5])
-            elseif k == "Enum" then
-                local cat = Enum[v[2]]
-                if not cat then error("no enum category " .. tostring(v[2])) end
-                local mem = cat[v[3]]
-                if not mem then error("no enum member " .. tostring(v[3])) end
-                return mem
-            elseif k == "ColorSequence" then
-                if type(v[2]) == "table" and type(v[2][1]) == "table" then
-                    local keypoints = {}
-                    for i, kp in ipairs(v[2]) do
-                        keypoints[i] = decode_val(kp)
-                    end
-                    return ColorSequence.new(keypoints)
-                else
-                    local c1 = decode_val(v[2])
-                    local c2 = v[3] and decode_val(v[3]) or nil
-                    return ColorSequence.new(c1, c2)
-                end
-            elseif k == "ColorSequenceKeypoint" then
-                return ColorSequenceKeypoint.new(v[2], decode_val(v[3]))
-            elseif k == "NumberSequence" then
-                if type(v[2]) == "table" and type(v[2][1]) == "table" then
-                    local keypoints = {}
-                    for i, kp in ipairs(v[2]) do
-                        keypoints[i] = decode_val(kp)
-                    end
-                    return NumberSequence.new(keypoints)
-                else
-                    return NumberSequence.new(v[2], v[3])
-                end
-            elseif k == "NumberSequenceKeypoint" then
-                return NumberSequenceKeypoint.new(v[2], v[3], v[4])
-            end
-            error("unknown encoded type " .. tostring(k))
-        end
 
-        local function build_node(node, parent)
-            local inst = Instance.new(node.class)
-            if node.name then inst.Name = node.name end
-            for k, v in pairs(node.props or {}) do
-                inst[k] = decode_val(v)
-            end
-            inst.Parent = parent
-            for _, child in ipairs(node.children or {}) do
-                build_node(child, inst)
-            end
-            return inst
-        end
-
-        return function(tree, root)
-            return build_node(tree, root)
-        end
-    "#;
-
-    let build_fn: mlua::Function = match lua.load(builder_chunk).eval() {
+    let build_fn: mlua::Function = match lua.load(TREE_BUILDER).eval() {
         Ok(f) => f,
         Err(e) => {
             return CaseResult {

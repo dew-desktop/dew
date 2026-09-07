@@ -389,6 +389,25 @@ jobs:
           rm -rf mods/test_scaffold
           echo "Scaffolded, checked, and rendered test_scaffold mod successfully"
 
+      # THE GALLERY RENDERS, AND SAYS HOW MUCH IT SHOWS.
+      #
+      # `datamodel-surface` reports what the host ACCEPTS; this reports what
+      # anything actually DRAWS, and the gap between them is milestone 5. The
+      # render runs here because a gallery of images nobody re-renders is a
+      # folder of screenshots that rots -- a scene that stops rendering has to
+      # fail a build, or it stops being evidence of anything.
+      #
+      # The coverage number is printed rather than gated. Gating it on a
+      # threshold would make the honest early figure a build failure; the number
+      # moving is a sprint's job to report, not CI's to enforce.
+      - name: Render the gallery and report coverage
+        shell: bash
+        run: |
+          cargo run --quiet --manifest-path host/Cargo.toml --bin gallery-coverage --             --render "$RUNNER_TEMP/gallery"
+          count=$(ls "$RUNNER_TEMP/gallery"/*.png 2>/dev/null | wc -l)
+          test "$count" -gt 0 || { echo "the gallery rendered no images"; exit 1; }
+          echo "gallery rendered $count image(s)"
+
       # BACKWARD COMPATIBILITY: legacy flags without subcommands still work
       - name: Verify legacy flag compatibility
         shell: bash

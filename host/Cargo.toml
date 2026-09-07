@@ -48,6 +48,10 @@ path = "src/bin/datamodel_surface.rs"
 name = "conformance"
 path = "src/bin/conformance.rs"
 
+[[bin]]
+name = "gallery-coverage"
+path = "src/bin/gallery_coverage.rs"
+
 [dependencies]
 # THE NAMES ARE STILL AETHER'S, AND THAT IS THIS SPRINT REFUSING TO DO TWO
 # THINGS AT ONCE. A move and a rename in one diff is a diff nobody can review:
