@@ -49,7 +49,17 @@ const CONFORMANCE_ONLY: &[&str] = &[
 /// One scene: a tree, a surface to draw it on, and what it demonstrates.
 pub struct Scene {
     pub file_stem: String,
+    /// The directory under `gallery/scenes` this came from.
+    pub pillar: String,
     pub name: String,
+    /// One sentence: what a reader should look for in the image.
+    ///
+    /// REQUIRED, because the generated index is built from it and an index
+    /// entry with nothing to say is a thumbnail nobody can act on. This is the
+    /// only prose that grows with the gallery -- everything navigable is
+    /// derived from it, so there is one place to write it and no second copy to
+    /// drift.
+    pub shows: String,
     pub surface: SurfaceSize,
     pub tree_val: RegistryKey,
     /// Property names set anywhere in the tree.
@@ -85,15 +95,51 @@ pub fn find_scenes_dir(custom: Option<&Path>) -> Result<PathBuf, String> {
     }
 }
 
-/// Every `.luau` scene in the directory, sorted, so a run is reproducible.
+/// Every `.luau` scene under the directory, sorted, so a run is reproducible.
+///
+/// ONE LEVEL OF GROUPING, and it is the PILLAR. Scenes sit in
+/// `gallery/scenes/<pillar>/`, where a pillar is an area of behaviour a person
+/// can hold in their head -- `paint`, `text`, `layout`. Flat was fine at four
+/// scenes and unnavigable at sixty.
+///
+/// NOT GROUPED BY CLASS, deliberately. Properties cross classes --
+/// `BackgroundColor3` is on every `GuiObject`, and every scene here already
+/// spans two to four classes -- so a class tree forces arbitrary choices about
+/// where a shared property's scene lives. Per-class coverage is a number the
+/// tool computes; do not encode in directories what a tool can derive.
 pub fn scene_paths(dir: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
-        .map_err(|e| format!("cannot read {}: {e}", dir.display()))?
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("luau"))
-        .collect();
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+        for entry in
+            std::fs::read_dir(dir).map_err(|e| format!("cannot read {}: {e}", dir.display()))?
+        {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            if path.is_dir() {
+                walk(&path, out)?;
+            } else if path.extension().and_then(|s| s.to_str()) == Some("luau") {
+                out.push(path);
+            }
+        }
+        Ok(())
+    }
+    let mut out = Vec::new();
+    walk(dir, &mut out)?;
     out.sort();
     Ok(out)
+}
+
+/// Which pillar a scene file belongs to: the directory under `scenes/`.
+///
+/// A scene sitting directly in `scenes/` has no pillar and is reported as
+/// `ungrouped` rather than refused -- the point is to make it visible in the
+/// report, not to stop someone sketching.
+pub fn pillar_of(path: &Path, scenes_root: &Path) -> String {
+    path.strip_prefix(scenes_root)
+        .ok()
+        .and_then(|rel| rel.parent())
+        .and_then(|p| p.components().next())
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "ungrouped".to_string())
 }
 
 /// Collect `class` and `props` keys from a tree table, recursively.
@@ -109,6 +155,23 @@ fn walk(
         .ok_or("a node has no class")?;
     classes.insert(class.clone());
 
+    // `Name` AND `Parent` ARE SET, JUST NOT THROUGH `props`.
+    //
+    // The tree builder assigns them structurally -- `inst.Name = node.name` and
+    // `inst.Parent = parent` -- and both go through the host's ordinary property
+    // setters. Counting only `props` keys reported them as demonstrated by
+    // nothing while every scene in the gallery set both, which understated the
+    // figure by two. A coverage tool wrong about its own inputs is the failure
+    // this gallery exists to catch, so it does not get to make it.
+    if node
+        .get::<Option<String>>("name")
+        .map_err(|e| e.to_string())?
+        .is_some()
+    {
+        props.insert("Name".to_string());
+        by_class.insert((class.clone(), "Name".to_string()));
+    }
+
     if let Ok(Some(p)) = node.get::<Option<Table>>("props") {
         for pair in p.pairs::<String, Value>() {
             let (k, _) = pair.map_err(|e| e.to_string())?;
@@ -118,14 +181,21 @@ fn walk(
     }
     if let Ok(Some(children)) = node.get::<Option<Table>>("children") {
         for child in children.sequence_values::<Table>() {
-            walk(&child.map_err(|e| e.to_string())?, props, by_class, classes)?;
+            let child = child.map_err(|e| e.to_string())?;
+            // Every child is parented by the builder, so the child's class is
+            // the one that demonstrates `Parent`.
+            if let Ok(Some(child_class)) = child.get::<Option<String>>("class") {
+                props.insert("Parent".to_string());
+                by_class.insert((child_class, "Parent".to_string()));
+            }
+            walk(&child, props, by_class, classes)?;
         }
     }
     Ok(())
 }
 
 /// Load one scene, refusing anything that belongs to a conformance case.
-pub fn decode_scene(lua: &Lua, path: &Path) -> Result<Scene, String> {
+pub fn decode_scene(lua: &Lua, path: &Path, pillar: &str) -> Result<Scene, String> {
     let file_stem = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -153,6 +223,19 @@ pub fn decode_scene(lua: &Lua, path: &Path) -> Result<Scene, String> {
         .get::<Option<String>>("name")
         .map_err(|e| e.to_string())?
         .unwrap_or_else(|| file_stem.clone());
+
+    // REQUIRED, and refused rather than defaulted. The generated index is built
+    // from this line; a scene without one becomes a thumbnail with no caption,
+    // and the person who could have written the sentence is the person who just
+    // wrote the scene.
+    let shows: String = table
+        .get::<Option<String>>("shows")
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| {
+            format!(
+                "{file_stem}: no 'shows'. Every scene needs one sentence saying what to look                  for in the image -- it is what the generated index prints under the thumbnail."
+            )
+        })?;
 
     let surface = match table.get::<Option<Table>>("surface") {
         Ok(Some(s)) => SurfaceSize {
@@ -185,7 +268,9 @@ pub fn decode_scene(lua: &Lua, path: &Path) -> Result<Scene, String> {
 
     Ok(Scene {
         file_stem,
+        pillar: pillar.to_string(),
         name,
+        shows,
         surface,
         tree_val,
         demonstrates,
@@ -300,11 +385,60 @@ pub fn coverage(scenes: &[Scene]) -> Coverage {
     }
 }
 
+/// Where rendered images go by default.
+///
+/// NOT `target/`. That directory belongs to cargo, and `cargo clean` deleted
+/// the whole gallery twice on the day it was written -- build cache and
+/// review artifacts have opposite lifetimes and should not share a home.
+/// Gitignored, and beside the scenes it renders.
+pub fn default_render_dir(scenes_dir: &Path) -> PathBuf {
+    scenes_dir
+        .parent()
+        .map(|p| p.join("renders"))
+        .unwrap_or_else(|| PathBuf::from("gallery/renders"))
+}
+
+/// Scene and property counts per pillar, for the report.
+///
+/// A pillar nobody has written a scene for is the useful thing to see, so this
+/// reports every pillar DIRECTORY that exists, not only the ones with scenes in
+/// them.
+pub fn by_pillar(scenes_dir: &Path, scenes: &[Scene]) -> BTreeMap<String, (usize, usize)> {
+    let mut out: BTreeMap<String, (usize, usize)> = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(scenes_dir) {
+        for e in entries.flatten() {
+            if e.path().is_dir() {
+                let name = e.file_name().to_string_lossy().to_string();
+                out.insert(name, (0, 0));
+            }
+        }
+    }
+    let in_scope = crate::scope::in_scope_properties();
+    let mut props: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for scene in scenes {
+        let entry = out.entry(scene.pillar.clone()).or_insert((0, 0));
+        entry.0 += 1;
+        let set = props.entry(scene.pillar.clone()).or_default();
+        for p in &scene.demonstrates {
+            if in_scope.contains(p) {
+                set.insert(p.clone());
+            }
+        }
+    }
+    for (pillar, set) in props {
+        if let Some(e) = out.get_mut(&pillar) {
+            e.1 = set.len();
+        }
+    }
+    out
+}
+
 /// Load every scene in a directory.
 pub fn load_all(lua: &Lua, dir: &Path) -> Result<Vec<Scene>, String> {
     let mut scenes = Vec::new();
     for path in scene_paths(dir)? {
-        scenes.push(decode_scene(lua, &path)?);
+        let pillar = pillar_of(&path, dir);
+        scenes.push(decode_scene(lua, &path, &pillar)?);
     }
     Ok(scenes)
 }
@@ -337,7 +471,7 @@ mod tests {
         let path = dir.join(format!("probe_{n}.luau"));
         std::fs::write(&path, src).unwrap();
         let lua = Lua::new();
-        let r = decode_scene(&lua, &path);
+        let r = decode_scene(&lua, &path, "testpillar");
         let _ = std::fs::remove_file(&path);
         r
     }
@@ -352,7 +486,7 @@ mod tests {
         // `match` rather than `expect_err`, which would require `Scene: Debug`
         // and a Debug on a `RegistryKey` for no benefit to the assertion.
         let err = match scene_from(
-            r#"return { name = "x", provenance = "roblox",
+            r#"return { name = "x", shows = "y", provenance = "roblox",
                        tree = { class = "Frame", name = "R", props = {} } }"#,
         ) {
             Ok(_) => panic!("a scene with provenance must be refused"),
@@ -367,6 +501,7 @@ mod tests {
         let scene = scene_from(
             r#"return {
                 name = "x",
+                shows = "a frame with a label in it",
                 surface = { width = 10, height = 10 },
                 tree = {
                     class = "Frame", name = "R",
@@ -397,5 +532,56 @@ mod tests {
         assert_eq!(cov.total(), crate::scope::in_scope_properties().len());
         assert_eq!(cov.count(), 0, "no scenes demonstrates nothing");
         assert_eq!(cov.missing.len(), cov.total());
+    }
+
+    /// A scene without `shows` is refused, because the generated index is built
+    /// from it and a caption nobody wrote is a caption nobody can add later.
+    #[test]
+    fn a_scene_without_shows_is_refused() {
+        let err = match scene_from(
+            r#"return { name = "x", tree = { class = "Frame", name = "R", props = {} } }"#,
+        ) {
+            Ok(_) => panic!("a scene without shows must be refused"),
+            Err(e) => e,
+        };
+        assert!(err.contains("shows"), "{err}");
+    }
+
+    /// `Name` and `Parent` are set by the tree builder rather than through
+    /// `props`, and counting only `props` understated the figure by two.
+    #[test]
+    fn name_and_parent_are_counted_though_they_are_not_props() {
+        let scene = scene_from(
+            r#"return {
+                name = "x",
+                shows = "a parent and a child",
+                tree = {
+                    class = "Frame", name = "R", props = {},
+                    children = { { class = "TextLabel", name = "T", props = {} } },
+                },
+            }"#,
+        )
+        .unwrap_or_else(|e| panic!("loads: {e}"));
+        assert!(scene.demonstrates.contains("Name"), "Name not counted");
+        assert!(scene.demonstrates.contains("Parent"), "Parent not counted");
+        // `Parent` is attributed to the CHILD, which is the instance parented.
+        assert!(scene
+            .demonstrates_by_class
+            .contains(&("TextLabel".to_string(), "Parent".to_string())));
+    }
+
+    /// The pillar is the directory under `scenes/`, and a scene sitting loose is
+    /// reported rather than refused.
+    #[test]
+    fn the_pillar_is_the_directory() {
+        let root = Path::new("gallery/scenes");
+        assert_eq!(
+            pillar_of(Path::new("gallery/scenes/paint/a.luau"), root),
+            "paint"
+        );
+        assert_eq!(
+            pillar_of(Path::new("gallery/scenes/loose.luau"), root),
+            "ungrouped"
+        );
     }
 }

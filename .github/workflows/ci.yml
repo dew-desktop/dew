@@ -403,8 +403,11 @@ jobs:
       - name: Render the gallery and report coverage
         shell: bash
         run: |
-          cargo run --quiet --manifest-path host/Cargo.toml --bin gallery-coverage --             --render "$RUNNER_TEMP/gallery"
-          count=$(ls "$RUNNER_TEMP/gallery"/*.png 2>/dev/null | wc -l)
+          cargo run --quiet --manifest-path host/Cargo.toml --bin gallery-coverage --             --render "$RUNNER_TEMP/gallery" --scenes
+          # `find`, NOT `ls *.png`. Renders are nested one level by pillar, and a
+          # flat glob silently found nothing the moment the scenes were grouped
+          # -- which would have counted zero and failed for the wrong reason.
+          count=$(find "$RUNNER_TEMP/gallery" -name '*.png' | wc -l)
           test "$count" -gt 0 || { echo "the gallery rendered no images"; exit 1; }
           echo "gallery rendered $count image(s)"
 

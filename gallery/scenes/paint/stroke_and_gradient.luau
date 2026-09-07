@@ -12,6 +12,7 @@
 ]]
 return {
 	name = "UIGradient and UIStroke",
+	shows = "A red-to-blue ColorSequence gradient rotated 35 degrees, beside a frame outlined by a green UIStroke. Not white-to-black, so a fallback ramp could not fake it.",
 	surface = { width = 280, height = 130 },
 
 	tree = {

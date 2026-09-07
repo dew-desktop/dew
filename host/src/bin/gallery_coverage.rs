@@ -3,8 +3,10 @@
 //! `datamodel-surface` answers "does the host accept this". This answers "does
 //! anything show it doing something", and the gap between the two is the point.
 //!
-//! Run with `cargo run --bin gallery-coverage`, or
-//! `cargo run --bin gallery-coverage -- --render <dir>` to write the PNGs.
+//!     cargo run --bin gallery-coverage                  # the number
+//!     cargo run --bin gallery-coverage -- --render      # write the PNGs too
+//!     cargo run --bin gallery-coverage -- --missing     # and what is not shown
+//!     cargo run --bin gallery-coverage -- --scenes      # every scene, by pillar
 
 use dew_host::gallery;
 use mlua::Lua;
@@ -12,12 +14,8 @@ use std::path::PathBuf;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let render_to: Option<PathBuf> = args
-        .iter()
-        .position(|a| a == "--render")
-        .and_then(|i| args.get(i + 1))
-        .map(PathBuf::from);
     let list_missing = args.iter().any(|a| a == "--missing");
+    let list_scenes = args.iter().any(|a| a == "--scenes");
 
     let dir = match gallery::find_scenes_dir(None) {
         Ok(d) => d,
@@ -26,6 +24,15 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    // `--render` TAKES AN OPTIONAL PATH. With none, it writes beside the scenes
+    // rather than into `target/`, which belongs to cargo and gets cleaned.
+    let render_to: Option<PathBuf> = args.iter().position(|a| a == "--render").map(|i| {
+        args.get(i + 1)
+            .filter(|v| !v.starts_with("--"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| gallery::default_render_dir(&dir))
+    });
 
     // ONE VM PER SCENE. `install` puts a DataModel into a Lua state, and a
     // second scene sharing that state would inherit the first one's globals and
@@ -39,13 +46,16 @@ fn main() {
             std::process::exit(1);
         }
     } {
+        let pillar = gallery::pillar_of(&path, &dir);
         let lua = Lua::new();
-        match gallery::decode_scene(&lua, &path) {
+        match gallery::decode_scene(&lua, &path, &pillar) {
             Ok(scene) => {
                 if let Some(ref out_dir) = render_to {
-                    let out = out_dir.join(format!("{}.png", scene.file_stem));
+                    let out = out_dir
+                        .join(&scene.pillar)
+                        .join(format!("{}.png", scene.file_stem));
                     if let Err(e) = gallery::render_scene(&lua, &scene, &out) {
-                        eprintln!("FAIL {}: {e}", scene.file_stem);
+                        eprintln!("FAIL {}/{}: {e}", scene.pillar, scene.file_stem);
                         std::process::exit(1);
                     }
                     println!("  rendered {}", out.display());
@@ -83,8 +93,32 @@ fn main() {
         cov.pairs_demonstrated, cov.pairs_in_scope
     );
 
+    // PER PILLAR, INCLUDING THE EMPTY ONES. A pillar with no scenes is the most
+    // useful line in this report: it is where the next scene should go. Printing
+    // only the pillars that have scenes would hide exactly that.
+    println!();
+    println!("BY PILLAR:");
+    for (pillar, (n, props)) in gallery::by_pillar(&dir, &scenes) {
+        let note = if n == 0 { "   <- no scenes yet" } else { "" };
+        println!("  {pillar:<12} {n:>2} scene(s), {props:>3} propert(ies){note}");
+    }
+
+    if list_scenes {
+        println!();
+        println!("SCENES:");
+        let mut current = String::new();
+        for s in &scenes {
+            if s.pillar != current {
+                println!("  {}/", s.pillar);
+                current = s.pillar.clone();
+            }
+            println!("    {:<34} {}", s.file_stem, s.shows);
+        }
+    }
+
     // SAY WHAT IS MISSING, and say how much. A coverage tool that prints only a
     // percentage tells you to feel bad without telling you what to do.
+    println!();
     println!(
         "  {} property name(s) not demonstrated by any scene",
         cov.missing.len()

@@ -20,6 +20,7 @@
 ]]
 return {
 	name = "TextLabel: colour, size and alignment",
+	shows = "The same font at four alignments and transparencies -- and a TextWrapped label that does NOT wrap, painting one clipped line while its box grows.",
 	surface = { width = 300, height = 160 },
 
 	tree = {

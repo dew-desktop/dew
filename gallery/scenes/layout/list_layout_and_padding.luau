@@ -6,6 +6,7 @@
 ]]
 return {
 	name = "UIListLayout and UIPadding",
+	shows = "UIListLayout stacking three rows in LayoutOrder with 8px between them, inset on all four sides by UIPadding.",
 	surface = { width = 200, height = 170 },
 
 	tree = {
