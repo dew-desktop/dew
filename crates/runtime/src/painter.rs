@@ -115,6 +115,17 @@ pub trait Painter {
     }
 
     fn clip_push(&mut self, rect: Rect);
+
+    /// A clip with rounded corners.
+    ///
+    /// DEFAULTED TO THE SQUARE PUSH so an implementor that has no rounded
+    /// clipping keeps compiling and keeps its old behaviour. A painter that can
+    /// mask corners overrides it; one that cannot leaks them exactly as it did
+    /// before, which is the honest fallback.
+    fn clip_push_rounded(&mut self, rect: Rect, _radius: f32) {
+        self.clip_push(rect);
+    }
+
     fn clip_pop(&mut self);
 
     /// Present. Returns whether the surface accepted it.
@@ -151,7 +162,7 @@ pub trait Painter {
 pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
     let clipped = node.clip.is_some();
     if let Some(clip) = node.clip {
-        painter.clip_push(clip);
+        painter.clip_push_rounded(clip, node.clip_radius);
     }
 
     // A NODE WITH NO FILL IS NOT A BLACK NODE. Live.luau emits nil when nothing

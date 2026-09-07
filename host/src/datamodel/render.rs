@@ -468,6 +468,12 @@ pub struct Placed {
     /// and it is the one thing a hit test needs and drawing does not.
     pub id: usize,
     pub rect: Box2,
+    /// The corner radius of that clipping box, 0.0 when it is square.
+    ///
+    /// Set from the `UICorner` on the ancestor that does the clipping, because
+    /// that is the shape Roblox masks against. Beside the box rather than inside
+    /// it: both are written at one site and the compiler checks every reader.
+    pub clip_radius: f32,
     /// The clipping box inherited from the nearest `ClipsDescendants` ancestor.
     ///
     /// APPLIES TO HIT TESTING AS WELL AS DRAWING. A child outside a clipping
@@ -562,6 +568,8 @@ fn report_auto(dom: &Dom, id: usize, want_x: bool, want_y: bool, did_x: bool, di
 
 #[derive(Clone, Copy, Debug)]
 pub struct SolvedItem {
+    /// The corner radius of `clip`, 0.0 when square.
+    pub clip_radius: f32,
     pub id: usize,
     pub rect: Box2,
     pub clip: Option<Box2>,
@@ -721,6 +729,7 @@ fn visit(
     id: usize,
     parent_box: Box2,
     clip: Option<Box2>,
+    clip_radius: f32,
     depth: usize,
     laid_out: bool,
     offered: Box2,
@@ -738,21 +747,31 @@ fn visit(
         rect,
         clip,
         depth,
+        clip_radius,
         z_index: z,
     });
 
     let box_rect = content_box(dom, id, rect);
-    let child_clip = if boolean(dom, id, "ClipsDescendants") == Some(true) {
-        Some(intersect_clip(clip, rect))
+    // A ROUNDED PARENT MASKS ITS DESCENDANTS TO THE ROUNDING. Roblox does; Dew
+    // clipped to a rectangle and leaked the corner pixels, which milestone 3
+    // recorded as an observable divergence rather than fixing.
+    //
+    // THE ROUNDER OF THE TWO WINS on nesting, matching `ar_clip_push_rounded`: a
+    // square clip inside a rounded one is still inside the rounded one.
+    let (child_clip, child_clip_radius) = if boolean(dom, id, "ClipsDescendants") == Some(true) {
+        (
+            Some(intersect_clip(clip, rect)),
+            corner_radius(dom, id).max(clip_radius),
+        )
     } else {
-        clip
+        (clip, clip_radius)
     };
 
     let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
     let (grow_x, grow_y) = automatic_axes(dom, id);
     let children_from = out.len();
 
-    place_children(dom, id, box_rect, child_clip, depth, out);
+    place_children(dom, id, box_rect, child_clip, child_clip_radius, depth, out);
 
     let before_w = out[entry_idx].rect.w;
     let before_h = out[entry_idx].rect.h;
@@ -813,7 +832,15 @@ fn visit(
         if dependent {
             out.truncate(children_from);
             let grown_box = content_box(dom, id, out[entry_idx].rect);
-            place_children(dom, id, grown_box, child_clip, depth, out);
+            place_children(
+                dom,
+                id,
+                grown_box,
+                child_clip,
+                child_clip_radius,
+                depth,
+                out,
+            );
         }
     }
 
@@ -858,6 +885,7 @@ fn place_children(
     id: usize,
     box_rect: Box2,
     child_clip: Option<Box2>,
+    child_clip_radius: f32,
     depth: usize,
     out: &mut Vec<SolvedItem>,
 ) {
@@ -906,7 +934,17 @@ fn place_children(
                 }
             };
             let before = out.len();
-            visit(dom, child, slot, child_clip, depth + 1, true, box_rect, out);
+            visit(
+                dom,
+                child,
+                slot,
+                child_clip,
+                child_clip_radius,
+                depth + 1,
+                true,
+                box_rect,
+                out,
+            );
             if out.len() > before {
                 // ALIGNMENT SHIFTS THE RUN ON THE CROSS AXIS, after the child has
                 // resolved its own size against the full slot. Doing it before
@@ -964,6 +1002,7 @@ fn place_children(
                 child,
                 box_rect,
                 child_clip,
+                child_clip_radius,
                 depth + 1,
                 false,
                 box_rect,
@@ -976,7 +1015,7 @@ fn place_children(
 pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
     let mut out: Vec<SolvedItem> = Vec::new();
     let root_box = content_box(dom, root, surface);
-    place_children(dom, root, root_box, None, 0, &mut out);
+    place_children(dom, root, root_box, None, 0.0, 0, &mut out);
     out
 }
 
@@ -1007,6 +1046,7 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
                     id: item.id,
                     rect: item.rect,
                     clip: item.clip,
+                    clip_radius: item.clip_radius,
                 },
             )
         })
@@ -1095,6 +1135,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         fill: colour(dom, id, "BackgroundColor3"),
         alpha: alpha_from(dom, id, "BackgroundTransparency"),
         radius: corner_radius(dom, id),
+        clip_radius: placed.clip_radius,
         clip: placed.clip.map(|c| Rect {
             x: c.x,
             y: c.y,
@@ -1276,6 +1317,45 @@ mod tests {
     /// The host accepted `TextTransparency` and the display list had nowhere to
     /// put it, so every run painted solid. Found by the gallery's differential
     /// pass, which reported that changing the property moved no pixels.
+    /// Roblox masks descendants against the clipping parent's `UICorner`. The
+    /// display list carried a bare rectangle, so corner pixels leaked --
+    /// milestone 3 recorded it as an observable divergence rather than fixing it.
+    #[test]
+    fn a_clipping_parent_passes_its_corner_radius_to_its_children() {
+        let f = render(
+            r#"
+            local card = Instance.new("Frame")
+            card.Size = UDim2.new(0, 120, 0, 60)
+            card.ClipsDescendants = true
+            card.Parent = root
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 14)
+            corner.Parent = card
+            local bar = Instance.new("Frame")
+            bar.Size = UDim2.new(1, 0, 0, 20)
+            bar.Parent = card
+        "#,
+            200.0,
+            100.0,
+        );
+        let bar = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.h == 20.0)
+            .expect("the titlebar is in the display list");
+        assert_eq!(
+            bar.clip_radius, 14.0,
+            "the clip radius did not reach the child"
+        );
+        // The card itself is not clipped BY itself.
+        let card = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.h == 60.0)
+            .expect("the card is in the display list");
+        assert_eq!(card.clip_radius, 0.0);
+    }
+
     #[test]
     fn text_transparency_reaches_the_display_list() {
         let f = render(

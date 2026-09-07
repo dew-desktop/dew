@@ -61,6 +61,7 @@ fn node(image: Option<Image>) -> Node {
         alpha: 1.0,
         radius: 0.0,
         clip: None,
+        clip_radius: 0.0,
         stroke: None,
         gradient: None,
         text: None,
@@ -341,5 +342,63 @@ fn an_image_is_drawn_even_when_the_background_is_fully_transparent() {
         pixel(painter.canvas_mut(), 20, 20),
         (200, 60, 40),
         "an image on a transparent plate",
+    );
+}
+
+/// A ROUNDED CLIP MUST MASK THE CORNER.
+///
+/// Roblox clips descendants to the parent's `UICorner` shape; Dew clipped to a
+/// bare rectangle and the corner pixels leaked, which milestone 3 recorded as an
+/// observable divergence rather than fixing.
+///
+/// ASSERTED ON PIXELS because nothing else can see it. The child's RECTANGLE is
+/// identical either way -- clipping to a rounded parent does not move a child,
+/// it changes which of its pixels survive -- so every geometric assertion in the
+/// suite passes with the corner leaking.
+#[test]
+fn a_rounded_clip_masks_the_corner_and_keeps_the_middle() {
+    let bar = Node {
+        id: 1,
+        name: "Titlebar".into(),
+        rect: Rect {
+            x: 0.0,
+            y: 0.0,
+            w: W as f32,
+            h: 10.0,
+        },
+        fill: Some(Rgb(255, 0, 0)),
+        alpha: 1.0,
+        radius: 0.0,
+        clip: Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            w: W as f32,
+            h: 30.0,
+        }),
+        clip_radius: 12.0,
+        stroke: None,
+        gradient: None,
+        text: None,
+        text_size: 14.0,
+        text_align_x: None,
+        text_align_y: None,
+        text_colour: None,
+        text_alpha: 1.0,
+        image: None,
+    };
+    let mut painter = painted(bar);
+    let canvas = painter.canvas_mut();
+
+    // Well inside both the bar and the rounded shape.
+    assert_eq!(
+        pixel(canvas, 20, 5),
+        (255, 0, 0),
+        "the middle of the bar should be red"
+    );
+    // Inside the bar's RECTANGLE, outside the radius-12 corner arc.
+    assert_ne!(
+        pixel(canvas, 1, 1),
+        (255, 0, 0),
+        "the rounded clip did not mask the corner; red leaked"
     );
 }

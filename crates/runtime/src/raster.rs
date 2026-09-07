@@ -298,6 +298,16 @@ impl Painter for RasterPainter {
         );
     }
 
+    fn clip_push_rounded(&mut self, rect: Rect, radius: f32) {
+        self.canvas.clip_push_rounded(
+            rect.x as i32,
+            rect.y as i32,
+            rect.w as i32,
+            rect.h as i32,
+            radius.round() as i32,
+        );
+    }
+
     fn clip_push(&mut self, rect: Rect) {
         self.canvas
             .clip_push(rect.x as i32, rect.y as i32, rect.w as i32, rect.h as i32);

@@ -300,6 +300,13 @@ pub struct Node {
     pub alpha: f32,
     pub radius: f32,
     pub clip: Option<Rect>,
+    /// The corner radius of that clip, 0.0 for a square one.
+    ///
+    /// BESIDE `clip` RATHER THAN INSIDE IT. An enum would be tidier in Rust and
+    /// would change the shape `Live.luau` emits, which lives in the other
+    /// repository; an added optional key is a change Aether does not have to
+    /// make on the same day. The observable outcome is identical.
+    pub clip_radius: f32,
     pub stroke: Option<Stroke>,
     pub gradient: Option<Gradient>,
     pub text: Option<String>,
@@ -366,6 +373,7 @@ impl Frame {
         "alpha",
         "radius",
         "clip",
+        "clipRadius",
         "stroke",
         "gradient",
         "text",
@@ -483,6 +491,7 @@ impl Node {
             alpha: t.get::<Option<f32>>("alpha")?.unwrap_or(1.0),
             radius: t.get::<Option<f32>>("radius")?.unwrap_or(0.0),
             clip: rect_from_array(t.get("clip")?),
+            clip_radius: t.get::<Option<f32>>("clipRadius")?.unwrap_or(0.0),
             stroke,
             gradient,
             text: t.get("text")?,
@@ -588,6 +597,7 @@ mod tests {
             alpha: 1.0,
             radius: 0.0,
             clip: None,
+            clip_radius: 0.0,
             stroke: None,
             gradient: None,
             text: None,
@@ -606,6 +616,7 @@ mod tests {
             alpha: _,
             radius: _,
             clip: _,
+            clip_radius: _,
             stroke: _,
             gradient: _,
             text: _,
@@ -630,6 +641,7 @@ mod tests {
             "alpha",
             "radius",
             "clip",
+            "clipRadius",
             "stroke",
             "gradient",
             "text",
