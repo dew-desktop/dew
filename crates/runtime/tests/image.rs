@@ -68,6 +68,7 @@ fn node(image: Option<Image>) -> Node {
         text_align_x: None,
         text_align_y: None,
         text_colour: None,
+        text_alpha: 1.0,
         image,
     }
 }

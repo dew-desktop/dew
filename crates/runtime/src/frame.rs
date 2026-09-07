@@ -307,6 +307,17 @@ pub struct Node {
     pub text_align_x: Option<Align>,
     pub text_align_y: Option<Align>,
     pub text_colour: Option<Rgb>,
+    /// How opaque the text is, 1.0 for solid.
+    ///
+    /// SEPARATE FROM `alpha`, which is the node's BACKGROUND. Roblox has
+    /// `BackgroundTransparency` and `TextTransparency` as independent
+    /// properties, and a label with an invisible background and solid text is
+    /// the ordinary case rather than an exotic one.
+    ///
+    /// The host accepted `TextTransparency` and had nowhere to put it, so the
+    /// painter filled every run at 1.0 and the property reached no pixels. Found
+    /// by the gallery's differential pass, not by a test.
+    pub text_alpha: f32,
     /// What this node draws as an image, if anything.
     ///
     /// NOT DECODED FROM LUA, and it is the first field of which that is true —
@@ -362,6 +373,7 @@ impl Frame {
         "textAlignX",
         "textAlignY",
         "textColour",
+        "textAlpha",
     ];
 
     /// Node fields a host fills in directly, which no display-list table carries.
@@ -478,6 +490,7 @@ impl Node {
             text_align_x: Align::parse(t.get("textAlignX")?),
             text_align_y: Align::parse(t.get("textAlignY")?),
             text_colour: Rgb::from_table(t.get("textColour")?),
+            text_alpha: t.get::<Option<f32>>("textAlpha")?.unwrap_or(1.0),
             // NOT READ FROM THE TABLE, and `Frame::HOST_FIELDS` says why. A
             // display list built in Luau names an asset; it cannot carry one.
             image: None,
@@ -582,6 +595,7 @@ mod tests {
             text_align_x: None,
             text_align_y: None,
             text_colour: None,
+            text_alpha: 1.0,
             image: None,
         };
         let Node {
@@ -599,6 +613,7 @@ mod tests {
             text_align_x: _,
             text_align_y: _,
             text_colour: _,
+            text_alpha: _,
             image: _,
         } = node;
 
@@ -622,6 +637,7 @@ mod tests {
             "textAlignX",
             "textAlignY",
             "textColour",
+            "textAlpha",
             "image",
         ];
         for key in named {

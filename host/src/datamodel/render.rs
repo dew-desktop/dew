@@ -820,6 +820,39 @@ fn visit(
     report_auto(dom, id, grow_x, grow_y, did_x, did_y);
 }
 
+/// Which end of the cross axis a `UIListLayout` gathers its children against.
+///
+/// `Left` and `Top` are the same answer on different axes, and Roblox spells
+/// them differently for the two enums, so both map onto one three-way.
+#[derive(Clone, Copy, PartialEq)]
+enum CrossAlign {
+    Start,
+    Center,
+    End,
+}
+
+fn alignment_of(dom: &Dom, layout_id: usize, property: &str) -> CrossAlign {
+    let Some(Variant::Enum(raw)) = dom.property(layout_id, property) else {
+        return CrossAlign::Start;
+    };
+    match super::enums::item_by_value(property, raw.to_u32()).map(|item| item.name) {
+        Some("Center") => CrossAlign::Center,
+        Some("Right") | Some("Bottom") => CrossAlign::End,
+        // `Left`, `Top`, and anything a newer build adds that this does not know.
+        _ => CrossAlign::Start,
+    }
+}
+
+/// How far to move a placed child along the cross axis to satisfy the alignment.
+fn cross_shift(align: CrossAlign, slot_start: f32, slot_len: f32, at: f32, len: f32) -> f32 {
+    let target = match align {
+        CrossAlign::Start => slot_start,
+        CrossAlign::Center => slot_start + (slot_len - len) / 2.0,
+        CrossAlign::End => slot_start + slot_len - len,
+    };
+    target - at
+}
+
 fn place_children(
     dom: &Dom,
     id: usize,
@@ -838,6 +871,9 @@ fn place_children(
             } else {
                 false
             };
+
+        let align_x = alignment_of(dom, layout_id, "HorizontalAlignment");
+        let align_y = alignment_of(dom, layout_id, "VerticalAlignment");
 
         let mut kids: Vec<(usize, i32, usize)> = Vec::new();
         for (idx, child) in dom.children(id).iter().copied().enumerate() {
@@ -872,6 +908,41 @@ fn place_children(
             let before = out.len();
             visit(dom, child, slot, child_clip, depth + 1, true, box_rect, out);
             if out.len() > before {
+                // ALIGNMENT SHIFTS THE RUN ON THE CROSS AXIS, after the child has
+                // resolved its own size against the full slot. Doing it before
+                // would change what a `Scale` size resolves against, which is a
+                // different behaviour wearing the same name.
+                //
+                // The host accepted `HorizontalAlignment` and `VerticalAlignment`
+                // and the solver read neither, so a centred list drew flush to
+                // the corner. Found by the gallery's differential pass.
+                let placed_rect = out[before].rect;
+                let cross = if is_horizontal {
+                    cross_shift(
+                        align_y,
+                        box_rect.y,
+                        box_rect.h,
+                        placed_rect.y,
+                        placed_rect.h,
+                    )
+                } else {
+                    cross_shift(
+                        align_x,
+                        box_rect.x,
+                        box_rect.w,
+                        placed_rect.x,
+                        placed_rect.w,
+                    )
+                };
+                if cross != 0.0 {
+                    for item in out[before..].iter_mut() {
+                        if is_horizontal {
+                            item.rect.y += cross;
+                        } else {
+                            item.rect.x += cross;
+                        }
+                    }
+                }
                 let placed_rect = out[before].rect;
                 cursor += (if is_horizontal {
                     placed_rect.w
@@ -1045,6 +1116,13 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
         text_colour: colour(dom, id, "TextColor3"),
+        // TRANSPARENCY IS THE INVERSE OF ALPHA, as it is everywhere in this
+        // vocabulary: Roblox counts how see-through a thing is and the painter
+        // counts how solid it is.
+        text_alpha: 1.0
+            - number(dom, id, "TextTransparency")
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0),
         image,
     }
 }
@@ -1193,6 +1271,100 @@ mod tests {
             .write_to(&mut buffer, image::ImageFormat::Png)
             .expect("encode");
         buffer.into_inner()
+    }
+
+    /// The host accepted `TextTransparency` and the display list had nowhere to
+    /// put it, so every run painted solid. Found by the gallery's differential
+    /// pass, which reported that changing the property moved no pixels.
+    #[test]
+    fn text_transparency_reaches_the_display_list() {
+        let f = render(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(0, 100, 0, 20)
+            t.Text = "hello"
+            t.TextTransparency = 0.25
+            t.Parent = root
+        "#,
+            200.0,
+            100.0,
+        );
+        assert_eq!(f.nodes.len(), 1);
+        assert!(
+            (f.nodes[0].text_alpha - 0.75).abs() < 0.001,
+            "text_alpha was {}",
+            f.nodes[0].text_alpha
+        );
+    }
+
+    #[test]
+    fn text_with_no_transparency_is_solid() {
+        let f = render(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(0, 100, 0, 20)
+            t.Text = "hello"
+            t.Parent = root
+        "#,
+            200.0,
+            100.0,
+        );
+        assert_eq!(f.nodes[0].text_alpha, 1.0);
+    }
+
+    /// The solver read neither alignment enum, so a centred list drew flush to
+    /// the corner. Also found by the differential pass.
+    #[test]
+    fn a_list_layout_centres_its_children_on_the_cross_axis() {
+        let f = render(
+            r#"
+            local panel = Instance.new("Frame")
+            panel.Size = UDim2.new(0, 200, 0, 100)
+            panel.Parent = root
+            local layout = Instance.new("UIListLayout")
+            layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            layout.Parent = panel
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(0, 100, 0, 20)
+            row.Parent = panel
+        "#,
+            200.0,
+            100.0,
+        );
+        let row = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.w == 100.0 && n.rect.h == 20.0)
+            .expect("the row is in the display list");
+        // 200 wide panel, 100 wide row, centred -> x = 50.
+        assert_eq!(row.rect.x, 50.0, "row was not centred");
+    }
+
+    #[test]
+    fn a_list_layout_defaults_to_the_start_of_the_cross_axis() {
+        let f = render(
+            r#"
+            local panel = Instance.new("Frame")
+            panel.Size = UDim2.new(0, 200, 0, 100)
+            panel.Parent = root
+            local layout = Instance.new("UIListLayout")
+            layout.Parent = panel
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(0, 100, 0, 20)
+            row.Parent = panel
+        "#,
+            200.0,
+            100.0,
+        );
+        let row = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.w == 100.0 && n.rect.h == 20.0)
+            .expect("the row is in the display list");
+        assert_eq!(
+            row.rect.x, 0.0,
+            "an unset alignment should not move a child"
+        );
     }
 
     #[test]

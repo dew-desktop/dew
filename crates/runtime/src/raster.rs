@@ -183,7 +183,7 @@ impl Painter for RasterPainter {
         };
 
         self.canvas
-            .fill_text(font, size, x, y, rgba(colour, 1.0), text);
+            .fill_text(font, size, x, y, rgba(colour, node.text_alpha), text);
     }
 
     /// Both ramps, resolved into the flat `(at, r, g, b, a)` stops the ABI reads.
