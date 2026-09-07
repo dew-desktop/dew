@@ -1,4 +1,4 @@
-//! Methods a guest can call on an instance, and the predicate that says which.
+﻿//! Methods a guest can call on an instance, and the predicate that says which.
 //!
 //! WHY A PREDICATE AND NOT A LIST
 //! The property half of `datamodel-surface` used to keep a hand-written array of
@@ -28,13 +28,15 @@
 //! a signal out. That split is the point: `__index` cannot tell an input event
 //! from a property one, and it should not have to.
 //!
-//! STILL NOT HERE, AND EACH FOR A STATED REASON. `Focused`, `FocusLost`,
-//! `CaptureFocus`, `ReleaseFocus` and `IsFocused` need an owner and keyboard
-//! routing, which is a mechanism of its own rather than the second half of this
-//! one. `PageEnter`, `PageLeave`, `Stopped`, `Next`, `Previous`, `JumpTo`,
-//! `JumpToIndex`, `GetScrollVelocity` and `ResetScrollVelocity` are
-//! `UIPageLayout` and `ScrollingFrame` behaviour, and neither class is rendered
-//! yet -- offering those members would be offering a scroll that cannot scroll.
+//! STILL NOT HERE, AND EACH FOR A STATED REASON. `PageEnter`, `PageLeave`,
+//! `Stopped`, `Next`, `Previous`, `JumpTo`, `JumpToIndex`,
+//! `GetScrollVelocity` and `ResetScrollVelocity` are `UIPageLayout` and
+//! `ScrollingFrame` behaviour, and neither class is rendered yet -- offering
+//! those members would be offering a scroll that cannot scroll.
+//!
+//! FOCUS REACHED THE HOST IN MILESTONE 4 SPRINT 3: `Focused`, `FocusLost`,
+//! `CaptureFocus`, `ReleaseFocus` and `IsFocused` are implemented on `TextBox`,
+//! with focus ownership in [`super::input`] and keyboard routing from the window.
 //!
 //! WHY `WaitForChild` IS NOT HERE, decided rather than overlooked
 //! On the engine it YIELDS: it returns the child if one exists and otherwise
@@ -151,6 +153,27 @@ const MEMBERS: &[Member] = &[
     Member {
         name: "InputEnded",
         introduced_on: "GuiObject",
+    },
+    // -- Focus, milestone 4 sprint 3 ──────────────────────────────────────────
+    Member {
+        name: "CaptureFocus",
+        introduced_on: "TextBox",
+    },
+    Member {
+        name: "ReleaseFocus",
+        introduced_on: "TextBox",
+    },
+    Member {
+        name: "IsFocused",
+        introduced_on: "TextBox",
+    },
+    Member {
+        name: "Focused",
+        introduced_on: "TextBox",
+    },
+    Member {
+        name: "FocusLost",
+        introduced_on: "TextBox",
     },
     // -- Everything an instance says about itself -----------------------------
     Member {
@@ -413,6 +436,8 @@ pub fn lookup(
         "InputBegan" => Some(signal::Kind::InputBegan),
         "InputChanged" => Some(signal::Kind::InputChanged),
         "InputEnded" => Some(signal::Kind::InputEnded),
+        "Focused" => Some(signal::Kind::Focused),
+        "FocusLost" => Some(signal::Kind::FocusLost),
         _ => None,
     };
     if let Some(kind) = event {
@@ -690,6 +715,32 @@ pub fn lookup(
             }
             Ok(out)
         })?,
+        "CaptureFocus" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            drop(dom);
+            super::input::capture_focus(lua, &this.dom, this.id)?;
+            Ok(())
+        })?,
+        "ReleaseFocus" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            drop(dom);
+            super::input::release_focus(lua, &this.dom, this.id, false)?;
+            Ok(())
+        })?,
+        "IsFocused" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            drop(dom);
+            super::input::is_focused(lua, this.id)
+        })?,
         other => unreachable!("implements() admitted {other} and lookup has no arm for it"),
     };
     Ok(Some(LuaValue::Function(f)))
@@ -734,12 +785,14 @@ mod tests {
         // true for any of it would print a number the dispatch cannot honour --
         // exactly the failure the hand-written list produced.
         //
-        // THIS TEST HAS NOW BEEN REPOINTED TWICE, and that is it working rather
-        // than it failing at its job. Sprint 8 found `Changed` and
-        // `GetPropertyChangedSignal` in it; this sprint found `Activated` and
-        // `InputBegan`. Whatever is left is what the next sprint owes.
+        // THIS TEST HAS NOW BEEN REPOINTED THREE TIMES, and that is it working
+        // rather than it failing at its job. Sprint 8 found `Changed` and
+        // `GetPropertyChangedSignal` in it; sprint 9 found `Activated` and
+        // `InputBegan`; milestone 4 sprint 3 found `CaptureFocus`, `ReleaseFocus`,
+        // `IsFocused`, `Focused`, and `FocusLost`. Whatever is left is what the
+        // next sprint owes.
         //
-        // FOCUS, which needs an owner and keyboard routing.
+        // FOCUS IS IMPLEMENTED on TextBox, and refused on Frame:
         for member in [
             "CaptureFocus",
             "ReleaseFocus",
@@ -747,7 +800,8 @@ mod tests {
             "Focused",
             "FocusLost",
         ] {
-            assert!(!implements("TextBox", member), "{member}");
+            assert!(implements("TextBox", member), "{member}");
+            assert!(!implements("Frame", member), "{member}");
         }
         // `UIPageLayout` AND `ScrollingFrame`, neither of which is rendered.
         for member in ["GetScrollVelocity", "ResetScrollVelocity"] {
@@ -759,6 +813,7 @@ mod tests {
             "Stopped",
             "Next",
             "Previous",
+            "JumpTo",
             "JumpToIndex",
         ] {
             assert!(!implements("UIPageLayout", member), "{member}");

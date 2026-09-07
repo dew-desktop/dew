@@ -1,4 +1,4 @@
-//! 💧 Dew — a desktop applet platform.
+﻿//! 💧 Dew — a desktop applet platform.
 //!
 //! WHAT IS NOT IN THIS CRATE, and deliberately: text measurement,
 //! rasterisation, the Luau VM, and the frame loop. Those are in `crates/raster`,
@@ -371,6 +371,32 @@ impl Renderer {
                     x,
                     y,
                     delta,
+                )
+                .map_err(|e| e.to_string()),
+        }
+    }
+
+    #[cfg(windows)]
+    fn key(&mut self, name: &str) -> Result<(), String> {
+        match self {
+            Renderer::Aether { .. } => Ok(()),
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .key(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    name,
                 )
                 .map_err(|e| e.to_string()),
         }
@@ -1124,7 +1150,8 @@ fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), Str
                     }
                     Event::Resized { .. } | Event::Exposed => renderer.invalidate(),
                     Event::CloseRequested => return Ok(()),
-                    Event::Char(_) | Event::Key { .. } => {}
+                    Event::Key { name, .. } => renderer.key(&name)?,
+                    Event::Char(_) => {}
                 }
             }
 
