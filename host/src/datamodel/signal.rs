@@ -1,4 +1,4 @@
-//! `RBXScriptSignal`, `RBXScriptConnection`, and the firing discipline.
+﻿//! `RBXScriptSignal`, `RBXScriptConnection`, and the firing discipline.
 //!
 //! WHAT A SIGNAL IS HERE
 //! An instance id, a [`Kind`], and the arena it lives in. Nothing else -- a
@@ -81,6 +81,9 @@ pub enum Kind {
     InputBegan,
     InputChanged,
     InputEnded,
+    // ── Focus, milestone 4 sprint 3 ──────────────────────────────────────────
+    Focused,
+    FocusLost,
 }
 
 impl Kind {
@@ -110,6 +113,8 @@ impl Kind {
             Kind::InputBegan => "InputBegan".into(),
             Kind::InputChanged => "InputChanged".into(),
             Kind::InputEnded => "InputEnded".into(),
+            Kind::Focused => "Focused".into(),
+            Kind::FocusLost => "FocusLost".into(),
         }
     }
 }
@@ -387,6 +392,7 @@ pub fn destroy(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
     for node in subtree(dom, id) {
         if alive(dom, node) {
             fire(dom, node, &Kind::Destroying, &[]);
+            super::input::on_destroy(lua, node);
         }
     }
     if !alive(dom, id) {

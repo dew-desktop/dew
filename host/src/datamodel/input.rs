@@ -1,4 +1,4 @@
-//! Hit testing and pointer input: what makes a DataModel mod clickable.
+﻿//! Hit testing and pointer input: what makes a DataModel mod clickable.
 //!
 //! WHAT WAS MISSING, IN ONE LINE
 //! `Renderer::pointer` had a `Renderer::DataModel { .. } => Ok(())` arm with a
@@ -52,6 +52,122 @@ use super::{signal, SharedDom};
 use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 use rbx_types::{Variant, Vector2};
+use std::sync::{Arc, Mutex};
+
+/// Where the focus owner is stored in the Lua VM registry.
+const FOCUS: &str = "dew.datamodel.focus";
+
+/// Exactly one focused instance at a time.
+///
+/// FOCUS IS STATE, and lives here beside `Pointer` rather than in the arena (`Dom`)
+/// and rather than in a global. Scoped to the Lua VM, so two mods or windows do
+/// not fight over a single focus owner.
+#[derive(Clone, Default)]
+pub struct Focus(Arc<Mutex<Option<usize>>>);
+
+impl UserData for Focus {}
+
+impl Focus {
+    pub fn get(&self) -> Option<usize> {
+        *self.0.lock().expect("focus")
+    }
+
+    pub fn set(&self, id: Option<usize>) {
+        *self.0.lock().expect("focus") = id;
+    }
+
+    pub fn clear(&self) {
+        self.set(None);
+    }
+}
+
+/// Retrieve the `Focus` owner for `lua`, creating it in the registry if not present.
+pub fn focus_of(lua: &Lua) -> LuaResult<Focus> {
+    if let LuaValue::UserData(ud) = lua.named_registry_value::<LuaValue>(FOCUS)? {
+        if let Ok(focus) = ud.borrow::<Focus>() {
+            return Ok(focus.clone());
+        }
+    }
+    let fresh = Focus::default();
+    lua.set_named_registry_value(FOCUS, fresh.clone())?;
+    Ok(fresh)
+}
+
+/// Checks if `id` is currently focused.
+pub fn is_focused(lua: &Lua, id: usize) -> LuaResult<bool> {
+    Ok(focus_of(lua)?.get() == Some(id))
+}
+
+/// Captures focus for `id` on `lua`.
+///
+/// RE-ENTRANCY SAFE & NO DOUBLE-FIRING:
+/// - If `id` is already focused, returns immediately without firing `Focused`.
+/// - If another instance was focused, releases it and fires `FocusLost(false)`.
+/// - Drops the arena lock before firing any signal.
+pub fn capture_focus(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
+    let focus = focus_of(lua)?;
+    let prev = focus.get();
+    if prev == Some(id) {
+        return Ok(());
+    }
+
+    if let Some(old_id) = prev {
+        focus.set(None);
+        signal::fire(
+            dom,
+            old_id,
+            &signal::Kind::FocusLost,
+            &[LuaValue::Boolean(false)],
+        );
+    }
+
+    if !dom.lock().expect("dom").exists(id) {
+        return Ok(());
+    }
+
+    if let Some(other_id) = focus.get() {
+        if other_id == id {
+            return Ok(());
+        }
+        focus.set(None);
+        signal::fire(
+            dom,
+            other_id,
+            &signal::Kind::FocusLost,
+            &[LuaValue::Boolean(false)],
+        );
+    }
+
+    focus.set(Some(id));
+    signal::fire(dom, id, &signal::Kind::Focused, &[]);
+    Ok(())
+}
+
+/// Releases focus for `id` (or current focus if `id` matches).
+pub fn release_focus(lua: &Lua, dom: &SharedDom, id: usize, enter_pressed: bool) -> LuaResult<()> {
+    let _ = lua;
+    let focus = focus_of(lua)?;
+    if focus.get() != Some(id) {
+        return Ok(());
+    }
+    focus.set(None);
+    signal::fire(
+        dom,
+        id,
+        &signal::Kind::FocusLost,
+        &[LuaValue::Boolean(enter_pressed)],
+    );
+    Ok(())
+}
+
+/// Called on instance destruction to clean up focus if the destroyed node was focused.
+pub fn on_destroy(lua: &Lua, destroyed_id: usize) {
+    if let Ok(focus) = focus_of(lua) {
+        if focus.get() == Some(destroyed_id) {
+            focus.clear();
+        }
+    }
+}
 
 /// Which physical button. `Middle` reaches `InputBegan` and has no `MouseButton`
 /// events of its own, because the engine gives it none either.
@@ -209,7 +325,7 @@ fn flag(dom: &super::Dom, id: usize, key: &str) -> bool {
 /// writes `Active = true` -- which is what a Roblox developer writes for one
 /// anyway. If this has to change, it changes here, in one function.
 fn sinks(dom: &super::Dom, id: usize) -> bool {
-    flag(dom, id, "Active")
+    flag(dom, id, "Active") || dom.class_of(id).as_deref() == Some("TextBox")
 }
 
 /// May this element's events fire at all?
@@ -282,15 +398,12 @@ pub struct Pointer {
     hover: Option<usize>,
     /// Where the press for each button landed, so a release can decide whether it
     /// completes a click. `None` means that button is not down.
-    ///
-    /// A CLICK IS PRESS AND RELEASE ON THE SAME ELEMENT. Pressing, dragging off
-    /// and releasing fires `MouseButton1Up` and NOT `MouseButton1Click`, which is
-    /// what every desktop toolkit does and what lets a person change their mind
-    /// mid-click.
     held: [Option<usize>; 3],
     /// The last position the cursor was seen at, so the tree changing under a
     /// STATIONARY cursor can still be reconciled. See [`Pointer::refresh`].
     at: Option<(f32, f32)>,
+    /// Exactly one focused instance at a time, synced with the VM registry.
+    focus: Focus,
 }
 
 /// Where one fire is aimed, and what it carries.
@@ -440,7 +553,12 @@ impl Pointer {
     /// A button went down.
     pub fn down(&mut self, surface: &Surface, button: Button, x: f32, y: f32) -> LuaResult<()> {
         self.at = Some((x, y));
+        let focus = focus_of(surface.lua)?;
+        self.focus = focus.clone();
+
         let mut batch = Vec::new();
+        let target_box;
+        let old_focus;
         {
             let guard = surface.dom.lock().expect("dom");
             // THE PRESS IS RECORDED AS THE RAW HIT, before `Interactable` is
@@ -453,6 +571,31 @@ impl Pointer {
             // event in a headless test arrives with no move before it, and so does
             // a real click on a window that was just shown under the cursor.
             self.hover_to(target, x, y, &mut batch);
+
+            if button == Button::Left {
+                let current = focus.get();
+                let is_textbox = target
+                    .and_then(|id| guard.class_of(id))
+                    .map(|c| c == "TextBox")
+                    .unwrap_or(false);
+                if is_textbox {
+                    let tid = target.unwrap();
+                    if current == Some(tid) {
+                        target_box = None;
+                        old_focus = None;
+                    } else {
+                        target_box = Some(tid);
+                        old_focus = current;
+                    }
+                } else {
+                    target_box = None;
+                    old_focus = current;
+                }
+            } else {
+                target_box = None;
+                old_focus = None;
+            }
+
             if let Some(id) = target {
                 if let Some((down, _, _)) = button.gui_button_events() {
                     batch.push(Aimed {
@@ -468,7 +611,39 @@ impl Pointer {
                 });
             }
         }
+
+        // Release old focus if any
+        if let Some(old_id) = old_focus {
+            focus.set(None);
+            signal::fire(
+                surface.dom,
+                old_id,
+                &signal::Kind::FocusLost,
+                &[LuaValue::Boolean(false)],
+            );
+        }
+
+        // Capture new focus if any
+        if let Some(new_id) = target_box {
+            if surface.dom.lock().expect("dom").exists(new_id) {
+                focus.set(Some(new_id));
+                signal::fire(surface.dom, new_id, &signal::Kind::Focused, &[]);
+            }
+        }
+
         Self::fire_all(surface, batch)
+    }
+
+    /// A named key event arrived.
+    pub fn key(&mut self, surface: &Surface, name: &str) -> LuaResult<()> {
+        let focus = focus_of(surface.lua)?;
+        self.focus = focus.clone();
+        if name == "Return" {
+            if let Some(id) = focus.get() {
+                release_focus(surface.lua, surface.dom, id, true)?;
+            }
+        }
+        Ok(())
     }
 
     /// A button came up.
@@ -719,6 +894,10 @@ mod tests {
 
         fn up(&mut self, x: f32, y: f32) {
             self.release(Button::Left, x, y);
+        }
+
+        fn key(&mut self, name: &str) {
+            self.drive(|p, s| p.key(s, name));
         }
 
         fn right_down(&mut self, x: f32, y: f32) {
@@ -1547,5 +1726,163 @@ mod tests {
         // A DRAG NEEDS THIS READING. An element told input began on it has to be
         // told it ended, or it holds a pressed state nothing can ever clear.
         assert_eq!(h.log(), "a ended");
+    }
+
+    #[test]
+    fn textbox_focus_full_lifecycle() {
+        let mut h = Harness::new(
+            r#"
+            local tb = Instance.new("TextBox")
+            tb.Size = UDim2.new(0, 100, 0, 50)
+            tb.Position = UDim2.new(0, 0, 0, 0)
+            tb.Parent = root
+
+            tb.Focused:Connect(function()
+                table.insert(log, `focused:{tb:IsFocused()}`)
+            end)
+            tb.FocusLost:Connect(function(enterPressed)
+                table.insert(log, `lost:{enterPressed}:{tb:IsFocused()}`)
+            end)
+        "#,
+        );
+        // 1. Click in -> IsFocused true, Focused fired once
+        h.down(50.0, 25.0);
+        h.up(50.0, 25.0);
+        assert_eq!(h.log(), "focused:true");
+
+        // 2. Press Return -> FocusLost fired once with enterPressed == true
+        h.key("Return");
+        assert_eq!(h.log(), "focused:true,lost:true:false");
+
+        // 3. Click in again -> IsFocused true, Focused fired once
+        h.down(50.0, 25.0);
+        h.up(50.0, 25.0);
+        assert_eq!(h.log(), "focused:true,lost:true:false,focused:true");
+
+        // 4. Click outside -> FocusLost fired with enterPressed == false
+        h.down(150.0, 75.0);
+        h.up(150.0, 75.0);
+        assert_eq!(
+            h.log(),
+            "focused:true,lost:true:false,focused:true,lost:false:false"
+        );
+    }
+
+    #[test]
+    fn textbox_capture_and_release_focus_programmatically() {
+        let h = Harness::new(
+            r#"
+            local a = Instance.new("TextBox")
+            a.Parent = root
+            local b = Instance.new("TextBox")
+            b.Parent = root
+
+            a.Focused:Connect(function() table.insert(log, "a focused") end)
+            a.FocusLost:Connect(function(ep) table.insert(log, `a lost:{ep}`) end)
+            b.Focused:Connect(function() table.insert(log, "b focused") end)
+            b.FocusLost:Connect(function(ep) table.insert(log, `b lost:{ep}`) end)
+
+            a:CaptureFocus()
+            -- Capturing already-focused box does not fire Focused twice
+            a:CaptureFocus()
+            -- Switching focus to b releases a and focuses b
+            b:CaptureFocus()
+            b:ReleaseFocus()
+            -- Releasing when not focused is a no-op
+            b:ReleaseFocus()
+        "#,
+        );
+        assert_eq!(h.log(), "a focused,a lost:false,b focused,b lost:false");
+    }
+
+    #[test]
+    fn click_outside_when_not_focused_does_not_fire_focus_lost() {
+        let mut h = Harness::new(
+            r#"
+            local tb = Instance.new("TextBox")
+            tb.Size = UDim2.new(0, 100, 0, 50)
+            tb.Parent = root
+
+            tb.FocusLost:Connect(function() table.insert(log, "lost") end)
+        "#,
+        );
+        // Click outside
+        h.down(150.0, 75.0);
+        h.up(150.0, 75.0);
+        assert_eq!(h.log(), "");
+    }
+
+    #[test]
+    fn click_inside_already_focused_box_does_not_fire_focused_twice() {
+        let mut h = Harness::new(
+            r#"
+            local tb = Instance.new("TextBox")
+            tb.Size = UDim2.new(0, 100, 0, 50)
+            tb.Parent = root
+
+            tb.Focused:Connect(function() table.insert(log, "focused") end)
+        "#,
+        );
+        h.down(50.0, 25.0);
+        h.up(50.0, 25.0);
+        assert_eq!(h.log(), "focused");
+
+        // Click again inside the same box
+        h.down(60.0, 30.0);
+        h.up(60.0, 30.0);
+        assert_eq!(h.log(), "focused");
+    }
+
+    #[test]
+    fn destroying_focused_textbox_clears_focus_owner() {
+        let mut h = Harness::new(
+            r#"
+            local tb = Instance.new("TextBox")
+            tb.Size = UDim2.new(0, 100, 0, 50)
+            tb.Parent = root
+
+            tb:CaptureFocus()
+            table.insert(log, `before:{tb:IsFocused()}`)
+            tb.FocusLost:Connect(function() table.insert(log, "lost") end)
+            tb:Destroy()
+        "#,
+        );
+        assert_eq!(h.log(), "before:true");
+
+        // Click outside on empty space: must NOT attempt to release focus on the destroyed id
+        h.down(150.0, 75.0);
+        h.up(150.0, 75.0);
+        assert_eq!(h.log(), "before:true");
+    }
+
+    #[test]
+    fn deadlock_witness_handler_touches_the_tree() {
+        // THE DEADLOCK TRAP: if the arena lock is held while firing a focus signal,
+        // any handler that reads or mutates the tree (e.g. tb.Text) deadlocks on dom.lock().
+        // Here the Focused and FocusLost handlers mutate and read properties,
+        // running to completion without deadlocking.
+        let mut h = Harness::new(
+            r#"
+            local tb = Instance.new("TextBox")
+            tb.Size = UDim2.new(0, 100, 0, 50)
+            tb.Text = "initial"
+            tb.Parent = root
+
+            tb.Focused:Connect(function()
+                -- Read and mutate the tree under the signal dispatch:
+                local old = tb.Text
+                tb.Text = old .. "+focused"
+                table.insert(log, tb.Text)
+            end)
+            tb.FocusLost:Connect(function(enterPressed)
+                tb.Text = tb.Text .. "+lost"
+                table.insert(log, tb.Text)
+            end)
+        "#,
+        );
+        h.down(50.0, 25.0);
+        h.up(50.0, 25.0);
+        h.key("Return");
+        assert_eq!(h.log(), "initial+focused,initial+focused+lost");
     }
 }
