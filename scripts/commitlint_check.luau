@@ -37,8 +37,8 @@ local checked = 0
 
 for line in string.gmatch(result.stdout, "[^\r\n]+") do
 	--- Merge commits are exempt. Their subject is written by the forge and is
-	--- "Title (#1)", which no conventional-commit rule describes.
-	if string.match(line, "%(#%d+%)$") then
+	--- "Title (#1)" or "Merge pull request #...", which no conventional-commit rule describes.
+	if string.match(line, "^Merge ") or string.match(line, "%(#%d+%)$") then
 		continue
 	end
 	checked += 1
