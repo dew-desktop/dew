@@ -7,41 +7,12 @@
 //!
 //! Run with `cargo run --bin datamodel-surface`.
 
+use dew_host::scope::{
+    ApiClass, ApiSurface, API_SURFACE, INPUT_DEVICE, MODIFIERS, NOT_UI, OUT_OF_SCOPE,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 // ── The method and event surface ─────────────────────────────────────────────
-
-/// The scriptable API surface, pinned.
-///
-/// Both the property half and the method/event half of the DataModel standard
-/// are pinned from Roblox's API dump at `0.736.0.7361346`.
-///
-/// `scripts/fetch_api_surface.luau` writes this from Roblox's own API dump.
-/// Embedded rather than read at runtime so the data is part of the build: a
-/// missing or malformed file is a compile error rather than a tool that runs and
-/// reports a smaller surface than exists.
-const API_SURFACE: &str = include_str!("../../datamodel/api_surface.json");
-
-#[derive(serde::Deserialize)]
-struct ApiSurface {
-    version: String,
-    classes: BTreeMap<String, ApiClass>,
-}
-
-#[derive(serde::Deserialize)]
-struct ApiClass {
-    superclass: Option<String>,
-    #[serde(default)]
-    properties: BTreeMap<String, String>,
-    /// Member name to "Function" or "Event".
-    ///
-    /// A MAP RATHER THAN A LIST because Lune, which writes this file, encodes an
-    /// empty array and an empty map identically as `{}` -- and most classes in
-    /// the chain introduce no members of their own. A list shape failed to
-    /// deserialise on precisely the classes that carry nothing, which is the
-    /// least useful place for a format to be ambiguous.
-    members: BTreeMap<String, String>,
-}
 
 // What DEW'S HOST implements is asked of the HOST, not listed here either.
 //
@@ -223,107 +194,6 @@ const AETHER_PIPELINE: &[&str] = &[
     "Parent",
     "Name",
     "ClassName",
-];
-
-/// Properties a UI host is not expected to implement, and why.
-///
-/// EXCLUSION IS A DECISION, so it is a list rather than a heuristic. Each name
-/// here is a claim that a conformant implementation may ignore it, and a claim
-/// that can be argued with in a diff. The alternative -- pattern-matching on
-/// prefixes -- silently absolves whatever happens to match.
-///
-/// Engine bookkeeping: replication, localisation, studio and asset plumbing.
-/// None of it affects what is drawn or where.
-///
-/// REDRAWN FOR THE CURRENT SUBJECT. "Does not affect what is drawn" was the right
-/// test while this document measured a layout pipeline. The subject is now what a
-/// GUEST CAN REACH, and by that test `Parent` and `Name` were never bookkeeping:
-/// `Parent` is how a tree is built and an application cannot construct anything
-/// without it, and `Name` is what `FindFirstChild` searches on. Both moved out of
-/// this list and into the backlog, where they are the first two things a
-/// DataModel needs rather than things a conformant host may ignore.
-///
-/// `ClassName` never reached this list either way -- it is read-only, and the
-/// walk above keeps only writable properties, because a standard describes what
-/// an implementation must ACCEPT.
-///
-/// What remains is bookkeeping under both tests: replication, localisation,
-/// studio and asset plumbing, and the attribute system.
-const NOT_UI: &[&str] = &[
-    "Archivable",
-    "RobloxLocked",
-    "AutoLocalize",
-    "RootLocalizationTable",
-    "Attributes",
-    "AttributesReplicate",
-    "AttributesSerialize",
-    "SourceAssetId",
-    "Sandboxed",
-    "Capabilities",
-    "UniqueId",
-    "HistoryId",
-    "ActiveQueryNames",
-];
-
-/// Input devices this host does not have. A desktop widget is driven by a
-/// pointer and a keyboard; gamepad focus traversal, selection groups and haptics
-/// describe a console.
-///
-/// This is the one group most likely to move. If Dew ever grows gamepad support
-/// these stop being out of scope and become backlog, which is exactly why they
-/// are listed separately rather than lumped in above.
-const INPUT_DEVICE: &[&str] = &[
-    "NextSelectionUp",
-    "NextSelectionDown",
-    "NextSelectionLeft",
-    "NextSelectionRight",
-    "Selectable",
-    "SelectionImageObject",
-    "SelectionOrder",
-    "SelectionGroup",
-    "SelectionBehaviorUp",
-    "SelectionBehaviorDown",
-    "SelectionBehaviorLeft",
-    "SelectionBehaviorRight",
-    "GamepadInputEnabled",
-    "HoverHapticEffect",
-    "PressHapticEffect",
-    // Touch and the on-screen keyboard: devices, not decisions.
-    "TouchInputEnabled",
-    "ShowNativeInput",
-];
-
-/// Classes that exist under GuiObject and are not UI a host has to draw.
-///
-/// Video, viewports and chat windows are engine features rather than layout, and
-/// a standard that demanded them would be describing Roblox rather than
-/// describing a UI. Named explicitly so the exclusion is a decision in a diff
-/// rather than a silent filter.
-const OUT_OF_SCOPE: &[&str] = &[
-    "VideoFrame",
-    "VideoDisplay",
-    "ViewportFrame",
-    "TextChannelWindow",
-    "RelativeGui",
-];
-
-/// The classes a UI actually uses. `GuiObject` descendants come from the
-/// hierarchy; these are the modifiers, which are `UIComponent` rather than
-/// `GuiObject` and so are not found by walking superclasses.
-const MODIFIERS: &[&str] = &[
-    "UICorner",
-    "UIPadding",
-    "UIListLayout",
-    "UIGridLayout",
-    "UIPageLayout",
-    "UITableLayout",
-    "UIGradient",
-    "UIStroke",
-    "UIScale",
-    "UIAspectRatioConstraint",
-    "UISizeConstraint",
-    "UITextSizeConstraint",
-    "UIFlexItem",
 ];
 
 fn main() {

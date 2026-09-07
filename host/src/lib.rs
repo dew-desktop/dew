@@ -22,5 +22,7 @@
 pub mod assets;
 pub mod conformance;
 pub mod datamodel;
+pub mod gallery;
 pub mod manifest;
+pub mod scope;
 pub mod services;
