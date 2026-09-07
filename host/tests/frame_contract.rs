@@ -23,6 +23,12 @@ use dew_runtime::{Application, Capabilities, Frame};
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+mod common;
+
+// THE FIXTURES STAYED IN `crates/runtime/tests`, with `render.rs`, which has not
+// moved. See this suite's header: `render.rs` asserts on PIXELS and installing a
+// DataModel changes which Aether host `detect()` selects, so moving it is not a
+// relocation but a behaviour change. It is filed rather than forced.
 fn aether_root() -> PathBuf {
     dew_runtime::installed_package("aether")
         .expect("no installed aether -- run `pesde install` at the repository root")
@@ -48,8 +54,10 @@ fn caps() -> Capabilities {
 /// the whole vocabulary and asserting against the first one would check a handful
 /// of fields and call it a contract.
 fn keys_of_a_real_snapshot() -> BTreeSet<String> {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/app.luau");
-    let app = Application::load(caps(), &fixture).expect("fixture loads");
+    let fixture =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/runtime/tests/fixtures/app.luau");
+    let app =
+        Application::load_with(caps(), &fixture, common::install_host).expect("fixture loads");
     let session = app.session().expect("session");
     session.step(1.0 / 120.0).expect("step");
     let snapshot = session.snapshot_table().expect("snapshot");

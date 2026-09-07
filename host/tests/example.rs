@@ -1,5 +1,18 @@
 //! The shared example, driven and drawn.
 //!
+//! IT LIVES IN `host/` BECAUSE IT NEEDS A DATAMODEL. It sat in
+//! `crates/runtime/tests` while a runtime alone could host Aether, and stopped
+//! being able to in milestone 2's sprint 8, when `Host.detect()` became a
+//! capability probe: it builds an `Instance`, round-trips a `UDim2` and reads a
+//! class back. `dew_runtime` installs none of that on purpose -- the guest
+//! reaches the outside world only through capability tables THE HOST installs by
+//! name -- so the test was asserting an arrangement the project had removed, and
+//! passing only because the pesde pin predated the change.
+//!
+//! Moving it here is not a boundary being bent. It is a test being put where its
+//! dependencies live: `dew_host` is what grants the DataModel, exactly as
+//! `mods.rs` grants it to every mod.
+//!
 //! `examples/counter/src/Counter.luau` is loaded here through its DESKTOP entry
 //! point. The same component file is mounted by `entry/roblox.client.luau` inside
 //! a place. Nothing in the component differs between the two, and this suite is
@@ -11,12 +24,19 @@
 //! therefore under test at once, deliberately: the example, and the code path a
 //! real shell will take to run it.
 
-#![cfg(feature = "raster")]
+// NO `#![cfg(feature = "raster")]`. That gate belonged to `dew_runtime`, where
+// the rasteriser is optional so a consumer wanting only the display list does not
+// compile one. `dew_host` depends on `dew_runtime` WITH that feature and defines
+// no feature of its own, so the attribute would be false here and this file would
+// compile to nothing -- reporting `0 passed`, which is the sentence a passing
+// suite prints.
 
 use dew_raster::{Backend, Font};
 use dew_runtime::{Application, Capabilities, Driver, Rgb};
 use mlua::Function;
 use std::path::PathBuf;
+
+mod common;
 
 /// Aether's checkout, and it is no longer a directory above this crate.
 ///
@@ -24,6 +44,10 @@ use std::path::PathBuf;
 /// repository, where that WAS the framework. ADR-004 moved the crate to Dew and
 /// `../..` is now Dew's own root, so the framework is found where every other
 /// guest package is found: the pesde install, pinned by commit in `pesde.toml`.
+// THE FIXTURES STAYED IN `crates/runtime/tests`, with `render.rs`, which has not
+// moved. See this suite's header: `render.rs` asserts on PIXELS and installing a
+// DataModel changes which Aether host `detect()` selects, so moving it is not a
+// relocation but a behaviour change. It is filed rather than forced.
 fn aether_root() -> PathBuf {
     dew_runtime::installed_package("aether")
         .expect("no installed aether — run `pesde install` at the repository root")
@@ -55,7 +79,7 @@ fn entry() -> PathBuf {
 }
 
 fn app() -> Application {
-    Application::load(caps(), &entry())
+    Application::load_with(caps(), &entry(), common::install_host)
         .expect("the shared example should load through its desktop entry")
 }
 

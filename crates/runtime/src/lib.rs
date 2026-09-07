@@ -161,7 +161,33 @@ impl Application {
     /// router, which dimensions) in Luau, where the Roblox entry point makes the
     /// same decision with the same code.
     pub fn load(caps: Capabilities, entry: &Path) -> LuaResult<Self> {
+        Self::load_with(caps, entry, |_| Ok(()))
+    }
+
+    /// Load an entry module, letting the shell put its own globals in first.
+    ///
+    /// THE GUEST REACHES THE OUTSIDE WORLD THROUGH CAPABILITY TABLES THE HOST
+    /// INSTALLS BY NAME, which is this crate's whole arrangement -- and a host's
+    /// globals have to be in the VM BEFORE the entry runs, because the entry
+    /// requires the framework and the framework looks for them on the way up.
+    ///
+    /// Aether's `Host.detect()` is a capability probe as of milestone 2's sprint
+    /// 8: it builds an `Instance`, round-trips a `UDim2` and reads a class back.
+    /// A shell that installs nothing gets "no DataModel host is available in this
+    /// environment", correctly, because there is not one. `load` is that shell,
+    /// and it is the right default for a caller with nothing to install.
+    ///
+    /// `prepare` runs after the VM exists and before `modules::install`, which
+    /// is the order `dew_host::mods` uses for the same reason: the vocabulary is
+    /// a PRECONDITION of the host probe rather than a convenience, so it has to
+    /// be there before anything requires the framework.
+    pub fn load_with(
+        caps: Capabilities,
+        entry: &Path,
+        prepare: impl FnOnce(&Vm) -> LuaResult<()>,
+    ) -> LuaResult<Self> {
         let vm = Vm::new(caps.clone())?;
+        prepare(&vm)?;
         modules::install(&vm, &caps)?;
         let chunk = modules::load_entry(&vm, entry)?;
         let entry: LuaTable = chunk.call(())?;
