@@ -121,7 +121,7 @@ fn padding_of(dom: &Dom, id: usize) -> (f32, f32, f32, f32) {
 }
 
 /// The content box a container offers its children: its own rect, inset by any UIPadding.
-fn content_box(dom: &Dom, id: usize, own: Box2) -> Box2 {
+pub(crate) fn content_box(dom: &Dom, id: usize, own: Box2) -> Box2 {
     let (l, t, r, b) = padding_of(dom, id);
     Box2 {
         x: own.x + l,
@@ -498,6 +498,54 @@ fn automatic_axes(dom: &Dom, id: usize) -> (bool, bool) {
     }
 }
 
+/// The AutomaticCanvasSize axes requested by a ScrollingFrame: (grow_x, grow_y).
+pub(crate) fn automatic_canvas_axes(dom: &Dom, id: usize) -> (bool, bool) {
+    let Some(Variant::Enum(raw)) = dom.property(id, "AutomaticCanvasSize") else {
+        return (false, false);
+    };
+    let Some(item) = super::enums::item_by_value("AutomaticSize", raw.to_u32()) else {
+        return (false, false);
+    };
+    match item.name {
+        "X" => (true, false),
+        "Y" => (false, true),
+        "XY" => (true, true),
+        _ => (false, false),
+    }
+}
+
+/// The resolved canvas size and content box of a ScrollingFrame: (canvas_w, canvas_h, frame_w, frame_h).
+pub(crate) fn scrolling_frame_bounds(dom: &Dom, id: usize, own_box: Box2) -> (f32, f32, f32, f32) {
+    let (_, _, pad_r, pad_b) = padding_of(dom, id);
+    let (cs_sx, cs_ox, cs_sy, cs_oy) = udim2(dom, id, "CanvasSize");
+    let mut canvas_w = (cs_sx * own_box.w + cs_ox).max(0.0);
+    let mut canvas_h = (cs_sy * own_box.h + cs_oy).max(0.0);
+    let (auto_canvas_x, auto_canvas_y) = automatic_canvas_axes(dom, id);
+    if auto_canvas_x || auto_canvas_y {
+        for child in dom.children(id) {
+            let Some(class) = dom.class_of(child) else {
+                continue;
+            };
+            if is_modifier(&class) {
+                continue;
+            }
+            let (pxs, pxo, pys, pyo) = udim2(dom, child, "Position");
+            let (sxs, sxo, sys, syo) = udim2(dom, child, "Size");
+            let cw = sxs * canvas_w + sxo;
+            let ch = sys * canvas_h + syo;
+            let cx = pxs * canvas_w + pxo;
+            let cy = pys * canvas_h + pyo;
+            if auto_canvas_x {
+                canvas_w = canvas_w.max(cx + cw + pad_r);
+            }
+            if auto_canvas_y {
+                canvas_h = canvas_h.max(cy + ch + pad_b);
+            }
+        }
+    }
+    (canvas_w, canvas_h, own_box.w, own_box.h)
+}
+
 /// Intersect an inherited clip rectangle with an element's own rectangle.
 fn intersect_clip(clip: Option<Box2>, rect: Box2) -> Box2 {
     match clip {
@@ -751,6 +799,8 @@ fn visit(
         z_index: z,
     });
 
+    let is_scrolling_frame = dom.class_of(id).as_deref() == Some("ScrollingFrame");
+
     let box_rect = content_box(dom, id, rect);
     // A ROUNDED PARENT MASKS ITS DESCENDANTS TO THE ROUNDING. Roblox does; Dew
     // clipped to a rectangle and leaked the corner pixels, which milestone 3
@@ -758,20 +808,104 @@ fn visit(
     //
     // THE ROUNDER OF THE TWO WINS on nesting, matching `ar_clip_push_rounded`: a
     // square clip inside a rounded one is still inside the rounded one.
-    let (child_clip, child_clip_radius) = if boolean(dom, id, "ClipsDescendants") == Some(true) {
-        (
-            Some(intersect_clip(clip, rect)),
-            corner_radius(dom, id).max(clip_radius),
-        )
-    } else {
-        (clip, clip_radius)
-    };
+    //
+    // A SCROLLINGFRAME ALWAYS CLIPS ITS CONTENT TO ITS OWN BOX, matching Roblox.
+    let (child_clip, child_clip_radius) =
+        if is_scrolling_frame || boolean(dom, id, "ClipsDescendants") == Some(true) {
+            (
+                Some(intersect_clip(clip, rect)),
+                corner_radius(dom, id).max(clip_radius),
+            )
+        } else {
+            (clip, clip_radius)
+        };
 
     let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
     let (grow_x, grow_y) = automatic_axes(dom, id);
     let children_from = out.len();
 
-    place_children(dom, id, box_rect, child_clip, child_clip_radius, depth, out);
+    let (canvas_w, canvas_h) = if is_scrolling_frame {
+        let (auto_canvas_x, auto_canvas_y) = automatic_canvas_axes(dom, id);
+        let (cs_sx, cs_ox, cs_sy, cs_oy) = udim2(dom, id, "CanvasSize");
+        let mut cw = (cs_sx * box_rect.w + cs_ox).max(0.0);
+        let mut ch = (cs_sy * box_rect.h + cs_oy).max(0.0);
+
+        let canvas_box = Box2 {
+            x: box_rect.x,
+            y: box_rect.y,
+            w: cw,
+            h: ch,
+        };
+        place_children(
+            dom,
+            id,
+            canvas_box,
+            child_clip,
+            child_clip_radius,
+            depth,
+            out,
+        );
+
+        if auto_canvas_x || auto_canvas_y {
+            let mut right = -f32::INFINITY;
+            let mut bottom = -f32::INFINITY;
+            for item in &out[children_from..] {
+                if item.depth == depth + 1 {
+                    right = right.max(item.rect.x + item.rect.w);
+                    bottom = bottom.max(item.rect.y + item.rect.h);
+                }
+            }
+            let mut grew_cw = false;
+            let mut grew_ch = false;
+            if auto_canvas_x && right != -f32::INFINITY {
+                let needed_w = (right - box_rect.x) + pad_r;
+                if needed_w > cw {
+                    cw = needed_w;
+                    grew_cw = true;
+                }
+            }
+            if auto_canvas_y && bottom != -f32::INFINITY {
+                let needed_h = (bottom - box_rect.y) + pad_b;
+                if needed_h > ch {
+                    ch = needed_h;
+                    grew_ch = true;
+                }
+            }
+
+            if grew_cw || grew_ch {
+                let mut dependent = false;
+                for item in &out[children_from..] {
+                    let (sxs, _, sys, _) = udim2(dom, item.id, "Size");
+                    if (grew_cw && sxs != 0.0) || (grew_ch && sys != 0.0) {
+                        dependent = true;
+                        break;
+                    }
+                }
+                if dependent {
+                    out.truncate(children_from);
+                    let grown_canvas_box = Box2 {
+                        x: box_rect.x,
+                        y: box_rect.y,
+                        w: cw,
+                        h: ch,
+                    };
+                    place_children(
+                        dom,
+                        id,
+                        grown_canvas_box,
+                        child_clip,
+                        child_clip_radius,
+                        depth,
+                        out,
+                    );
+                }
+            }
+        }
+        (cw, ch)
+    } else {
+        place_children(dom, id, box_rect, child_clip, child_clip_radius, depth, out);
+        (0.0, 0.0)
+    };
 
     let before_w = out[entry_idx].rect.w;
     let before_h = out[entry_idx].rect.h;
@@ -841,6 +975,24 @@ fn visit(
                 depth,
                 out,
             );
+        }
+    }
+
+    // ScrollingFrame scroll shift: applied AFTER children have resolved their sizes
+    // and layout/growth. Shifts all descendants by -CanvasPosition (clamped to scrollable range).
+    if is_scrolling_frame {
+        let final_box = content_box(dom, id, out[entry_idx].rect);
+        let canvas_pos = vector2(dom, id, "CanvasPosition");
+        let max_scroll_x = (canvas_w - final_box.w).max(0.0);
+        let max_scroll_y = (canvas_h - final_box.h).max(0.0);
+        let scroll_x = canvas_pos.x.clamp(0.0, max_scroll_x);
+        let scroll_y = canvas_pos.y.clamp(0.0, max_scroll_y);
+
+        if scroll_x != 0.0 || scroll_y != 0.0 {
+            for item in &mut out[children_from..] {
+                item.rect.x -= scroll_x;
+                item.rect.y -= scroll_y;
+            }
         }
     }
 
@@ -2059,5 +2211,83 @@ mod tests {
         let prompt = f.nodes.iter().find(|n| n.name == "Prompt").expect("prompt");
         assert_eq!(prompt.text.as_deref(), Some("Jump"));
         assert_eq!(prompt.text_size, 16.0);
+    }
+
+    #[test]
+    fn scrolling_frame_clips_and_scrolls_descendants() {
+        let f = render(
+            r#"
+            local scroll = Instance.new("ScrollingFrame")
+            scroll.Name = "Scroll"
+            scroll.Position = UDim2.new(0, 10, 0, 10)
+            scroll.Size = UDim2.new(0, 100, 0, 50)
+            scroll.CanvasSize = UDim2.new(1, 0, 0, 200)
+            scroll.CanvasPosition = Vector2.new(0, 30)
+            scroll.Parent = root
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = scroll
+
+            local item = Instance.new("Frame")
+            item.Name = "Item"
+            item.Size = UDim2.new(1, 0, 0, 40)
+            item.Position = UDim2.new(0, 0, 0, 10)
+            item.Parent = scroll
+        "#,
+            200.0,
+            200.0,
+        );
+        let scroll = f.nodes.iter().find(|n| n.name == "Scroll").expect("scroll");
+        assert_eq!(scroll.rect.x, 10.0);
+        assert_eq!(scroll.rect.y, 10.0);
+        assert_eq!(scroll.rect.w, 100.0);
+        assert_eq!(scroll.rect.h, 50.0);
+
+        let item = f.nodes.iter().find(|n| n.name == "Item").expect("item");
+        // Item is positioned at parent_box.y (10) + 10 = 20, then shifted by -CanvasPosition.y (30) -> 20 - 30 = -10.
+        assert_eq!(item.rect.y, -10.0);
+        // Descendants are clipped to the ScrollingFrame's rect with its corner radius
+        assert_eq!(
+            item.clip,
+            Some(dew_runtime::Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 100.0,
+                h: 50.0,
+            })
+        );
+        assert_eq!(item.clip_radius, 8.0);
+    }
+
+    #[test]
+    fn scrolling_frame_automatic_canvas_size_expands() {
+        let f = render(
+            r#"
+            local scroll = Instance.new("ScrollingFrame")
+            scroll.Name = "Scroll"
+            scroll.Position = UDim2.new(0, 0, 0, 0)
+            scroll.Size = UDim2.new(0, 100, 0, 50)
+            scroll.CanvasSize = UDim2.new(1, 0, 0, 60)
+            scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+            scroll.CanvasPosition = Vector2.new(0, 50)
+            scroll.Parent = root
+
+            local item = Instance.new("Frame")
+            item.Name = "Item"
+            item.Size = UDim2.new(1, 0, 0, 40)
+            item.Position = UDim2.new(0, 0, 0, 80)
+            item.Parent = scroll
+        "#,
+            200.0,
+            200.0,
+        );
+        // Without AutomaticCanvasSize, CanvasSize height is 60 -> max scroll is 60 - 50 = 10,
+        // so CanvasPosition.Y = 50 would clamp to 10.
+        // With AutomaticCanvasSize.Y, canvas expands to item bottom (80 + 40 = 120),
+        // so max scroll is 120 - 50 = 70. CanvasPosition.Y = 50 is unclamped.
+        let item = f.nodes.iter().find(|n| n.name == "Item").expect("item");
+        // item y is 80 - 50 = 30.
+        assert_eq!(item.rect.y, 30.0);
     }
 }

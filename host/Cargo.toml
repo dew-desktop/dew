@@ -32,10 +32,12 @@ path = "src/lib.rs"
 [[bin]]
 name = "dew"
 path = "src/main.rs"
+test = false
 
 [[bin]]
 name = "dew-host"
 path = "src/bin/dew_host.rs"
+test = false
 
 # Hyphenated to match, rather than inheriting datamodel_surface from the file
 # name. It is a developer tool: it prints what the DataModel Standard has to
@@ -43,14 +45,17 @@ path = "src/bin/dew_host.rs"
 [[bin]]
 name = "datamodel-surface"
 path = "src/bin/datamodel_surface.rs"
+test = false
 
 [[bin]]
 name = "conformance"
 path = "src/bin/conformance.rs"
+test = false
 
 [[bin]]
 name = "gallery-coverage"
 path = "src/bin/gallery_coverage.rs"
+test = false
 
 [dependencies]
 # THE NAMES ARE STILL AETHER'S, AND THAT IS THIS SPRINT REFUSING TO DO TWO
