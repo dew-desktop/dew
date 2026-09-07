@@ -197,6 +197,21 @@ jobs:
         with:
           workspaces: .
 
+      # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
+      #
+      # `find_cases_dir` looks in the working tree, then at a SIBLING checkout,
+      # then at the pesde package. A developer has the sibling and CI had only
+      # the package, so the two ran the suite against DIFFERENT Aether revisions
+      # and disagreed about the tally -- which is why four assertions were once
+      # widened to accept either answer, an assertion that tests neither.
+      #
+      # Cloning the sibling makes local and CI read one source. The pesde pin
+      # stays where it is and keeps doing its own job, which is supplying the
+      # framework to mods.
+      - name: Fetch sibling aether for the conformance cases
+        shell: bash
+        run: git clone --depth 1 https://github.com/project-aether-ui/aether.git ../aether
+
       # PESDE IS NOT IN A ROKIT MANIFEST, and cannot be: its releases carry build
       # metadata in the tag (`v0.7.3+registry.0.2.3`) and rokit will not resolve
       # them. Pinned here to the version this repository is developed against.
@@ -223,7 +238,32 @@ jobs:
       # printed `ok. 0 passed` while doing it -- the same sentence a passing suite
       # prints. It runs here so that the moment a test exists, something fails
       # when it breaks.
-      - run: cargo test --manifest-path host/Cargo.toml
+      #
+      # `--workspace`, NOT `--manifest-path host/Cargo.toml`. The narrower form
+      # ran the host package alone, so every test in `crates/runtime` and
+      # `crates/raster` was absent from CI -- including the pixel test that proves
+      # a rounded clip masks its corner, which is the only test that can see it.
+      #
+      # AND A FLOOR, because the suite shrank by 29 without failing. Adding
+      # `test = false` to the bin targets left `main.rs`'s tests in the source and
+      # stopped cargo building them; the total fell from 346 to 311 and every run
+      # stayed green, because a smaller green number reads exactly like a pass.
+      # Raise the floor when the suite grows; lowering it has to be a deliberate
+      # line in a diff.
+      - name: Test the workspace, and refuse a suite that shrank
+        shell: bash
+        run: |
+          FLOOR=352
+          out=$(cargo test --workspace 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          total=$(echo "$out" | awk '/^test result:/ {p += $4} END {print p+0}')
+          echo "ran $total test(s), floor is $FLOOR"
+          test "$total" -ge "$FLOOR" || {
+            echo "THE SUITE SHRANK: $total ran, at least $FLOOR expected."
+            echo "If tests were deliberately removed, lower the floor in this file"
+            echo "in the same commit, so the reduction is visible in the diff."
+            exit 1
+          }
 
       # EVERY MOD, not the first one. A mod that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
@@ -312,6 +352,21 @@ jobs:
         with:
           workspaces: .
 
+      # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
+      #
+      # `find_cases_dir` looks in the working tree, then at a SIBLING checkout,
+      # then at the pesde package. A developer has the sibling and CI had only
+      # the package, so the two ran the suite against DIFFERENT Aether revisions
+      # and disagreed about the tally -- which is why four assertions were once
+      # widened to accept either answer, an assertion that tests neither.
+      #
+      # Cloning the sibling makes local and CI read one source. The pesde pin
+      # stays where it is and keeps doing its own job, which is supplying the
+      # framework to mods.
+      - name: Fetch sibling aether for the conformance cases
+        shell: bash
+        run: git clone --depth 1 https://github.com/project-aether-ui/aether.git ../aether
+
       # Install Linux pesde binary
       - name: Install pesde
         shell: bash
@@ -326,7 +381,7 @@ jobs:
 
       - run: cargo build --manifest-path host/Cargo.toml
 
-      - run: cargo test --manifest-path host/Cargo.toml
+      - run: cargo test --workspace
 
       # WINDOW-ONLY COMMANDS AND FLAGS MUST BE REJECTED OFF WINDOWS.
       # `run`, `--stats` and `--bench` drive the window loop and have nothing to run on.

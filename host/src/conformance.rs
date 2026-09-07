@@ -1584,13 +1584,14 @@ mod tests {
         // TWO SINCE MILESTONE 4 CLOSED THE CLIP RADIUS. The clipping case was a
         // documented gap; it now asserts Roblox's behaviour and Dew matches it,
         // but the PIXEL half has never been rendered in Studio and compared, so
-        // it counts as a belief rather than as evidence. In CI before aether#2 is
-        // merged, the pesde package still reports 1.
-        assert!(
-            summary.open_questions == 2 || summary.open_questions == 1,
-            "expected 1 or 2 open questions, got {}",
-            summary.open_questions
-        );
+        // it counts as a belief rather than as evidence.
+        //
+        // EXACT, AND IT WAS BRIEFLY NOT. While aether#2 was unmerged, CI read the
+        // case from the pinned pesde package and still saw 1, so this was widened
+        // to accept either. An assertion that passes whether the divergence is
+        // closed or open tests neither; the pin is bumped and the number is one
+        // number again.
+        assert_eq!(summary.open_questions, 2, "expected 2 open questions");
 
         // Verify the 21 passing cases
         let passing_names: Vec<&str> = results
@@ -1605,12 +1606,7 @@ mod tests {
         );
         assert!(passing_names.contains(&"a node with zero area is absent from the display list"));
         assert!(passing_names.contains(&"ZIndex orders the paint, then depth, then declaration"));
-        assert!(
-            passing_names.contains(&"a clipped child is masked to its parent's rounded corner")
-                || passing_names.contains(
-                    &"a clipped child keeps its rectangle (the radius gap is invisible here)"
-                )
-        );
+        assert!(passing_names.contains(&"a clipped child is masked to its parent's rounded corner"));
         assert!(passing_names.contains(&"a radial UIGradient reaches the display list as radial"));
 
         // 11 native geometry cases
@@ -1685,13 +1681,10 @@ mod tests {
             run_suite_with_options(&dir, Some("clips_descendants_has_no_radius"), &options);
         assert_eq!(results.len(), 1);
         assert_eq!(summary.passed, 1);
-        assert!(
-            summary.divergent == 0 || summary.divergent == 1,
-            "the clip radius divergence is closed (or matches pesde fixture)"
-        );
+        assert_eq!(summary.divergent, 0, "the clip radius divergence is closed");
         // `asserted` rather than `roblox`: the pixel half is a belief nobody has
         // checked in Studio, so it is an open question and not evidence.
-        assert!(summary.open_questions == 1 || summary.open_questions == 0);
+        assert_eq!(summary.open_questions, 1);
     }
 
     #[test]
@@ -1713,12 +1706,9 @@ mod tests {
         assert_eq!(summary.unsupported, 0);
         assert_eq!(summary.passed, 24);
         assert_eq!(summary.failed, 0);
-        assert!(
-            summary.divergent == 0 || summary.divergent == 1,
-            "no documented gaps remain (or matches pesde fixture)"
-        );
+        assert_eq!(summary.divergent, 0, "no documented gaps remain");
         assert_eq!(summary.verified_against_roblox, 21);
-        assert!(summary.open_questions == 2 || summary.open_questions == 1);
+        assert_eq!(summary.open_questions, 2);
     }
 
     const TALLY_LUAU_ORACLE: &str = r#"--!strict
