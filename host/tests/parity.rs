@@ -48,7 +48,7 @@ fn caps() -> Capabilities {
 }
 
 fn fixture() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../crates/runtime/tests/fixtures/app.luau")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/app.luau")
 }
 
 fn load() -> Application {

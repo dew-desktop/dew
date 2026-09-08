@@ -52,7 +52,7 @@ fn caps() -> Capabilities {
 
 fn app() -> Application {
     let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/runtime/tests/fixtures/pressable.luau");
+        .join("tests/fixtures/pressable.luau");
     Application::load_with(caps(), &entry, common::install_host).expect("fixture loads")
 }
 

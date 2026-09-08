@@ -48,7 +48,7 @@ lib = "scripts/init.luau"
 # pin above moves with it. The chain is written up in
 # `.artifacts/project/upstream/vide-gates-on-game.md`.
 vide = { repo = "es9-dev/vide", rev = "058c5d5bf3b5098029bf6109c564e13f7598a10b" }
-aether = { repo = "project-aether-ui/aether", rev = "3ebb707f016edb698ad3ea3c5f9ca1247a1d760e" }
+aether = { repo = "project-aether-ui/aether", rev = "5a5038c9b3e10709ed6f22b9615958a19dea20ec" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"

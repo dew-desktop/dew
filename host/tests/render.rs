@@ -14,11 +14,12 @@
 //! cargo test --features raster -- --nocapture
 //! ```
 
-#![cfg(feature = "raster")]
 
 use dew_raster::{Backend, Canvas, Font};
 use dew_runtime::{Application, Capabilities, Painter, RasterPainter, Rgb};
 use std::path::PathBuf;
+
+mod common;
 
 const WIDTH: u32 = 200;
 const HEIGHT: u32 = 80;
@@ -57,7 +58,7 @@ fn caps() -> Capabilities {
 
 fn load() -> Application {
     let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/app.luau");
-    Application::load(caps(), &fixture).expect("fixture loads")
+    Application::load_with(caps(), &fixture, common::install_host).expect("fixture loads")
 }
 
 /// A face to draw with, or `None` where there is not one.
@@ -182,19 +183,37 @@ fn text_is_actually_drawn() {
     let img = image::open(&path).expect("read back").to_rgb8();
     let _ = std::fs::remove_file(&path);
 
-    let mut light = 0u32;
+    // PIXELS THAT ARE NOT THE LABEL'S OWN FILL, rather than near-white ones.
+    //
+    // This counted near-white and that was an accident of a broken vide. The
+    // fixture never sets `TextColor3`; vide's `defaults.luau` does, to pure
+    // black, on Roblox and here alike. But `defaults` is one of the modules
+    // behind vide's `game` gate, so when the gate could not open it failed to
+    // require, no default was applied, and the painter's own
+    // `unwrap_or(Rgb(255, 255, 255))` filled in. The white text this asserted
+    // was the SYMPTOM of vide not loading, not evidence that glyphs were drawn.
+    //
+    // What the test is for is unchanged and is what the comment above always
+    // said: a shape-only backend draws the rectangle and silently omits every
+    // label. Counting pixels that differ from the fill catches that whatever
+    // colour the text ends up.
+    let fill = img.get_pixel(22, 30);
+    let mut glyph = 0u32;
     for y in 28..52u32 {
         for x in 20..140u32 {
             let p = img.get_pixel(x, y);
-            if p[0] > 200 && p[1] > 200 && p[2] > 200 {
-                light += 1;
+            let d = (p[0] as i32 - fill[0] as i32).abs()
+                + (p[1] as i32 - fill[1] as i32).abs()
+                + (p[2] as i32 - fill[2] as i32).abs();
+            if d > 60 {
+                glyph += 1;
             }
         }
     }
 
     assert!(
-        light > 20,
-        "found {light} near-white pixels in the label — no glyphs were drawn"
+        glyph > 20,
+        "found {glyph} pixels differing from the label fill {fill:?} -- no glyphs were drawn"
     );
 }
 
