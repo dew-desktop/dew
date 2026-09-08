@@ -12,7 +12,7 @@
 	`aether snapshot` without a line changing.
 ]]
 
-local Aether = require("@aether/api")
+local Aether = require("./roblox_packages/aether")
 
 local create = Aether.create
 local source = Aether.source

@@ -16,6 +16,22 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# WHY THESE THREE, MEASURED 2026-09-08 on a run that took 6m20s of `cargo build`
+# on Linux against 51s on Windows. The difference was a cold cache, and what a
+# cold cache has to build here is expensive for reasons CI does not need.
+#
+#   CARGO_INCREMENTAL   Incremental artifacts are never reused across CI runs and
+#                       are large, so they cost cache upload time and buy nothing.
+#   CARGO_PROFILE_DEV_DEBUG
+#                       Debug info is the single biggest contributor to link time
+#                       on Windows and to the size of `target/`. Nothing in CI
+#                       attaches a debugger. Backtraces still name functions.
+#   CARGO_NET_RETRY     A registry blip should cost a retry, not a red build.
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+  CARGO_NET_RETRY: 3
+
 jobs:
   # WHAT CHANGED, so a documentation commit does not pay for a GPU build.
   #
@@ -193,9 +209,24 @@ jobs:
       # 4.9 GB of `target/` locally.
       #
       # If the workspace root ever moves again, this moves with it.
+      # `shared-key`, SO A NEW BRANCH DOES NOT BUILD FROM COLD. Without it the
+      # cache key includes the JOB NAME and the ref, every branch starts empty,
+      # and the first run pays a full build -- 6m20s on Linux, measured.
+      #
+      # ONE KEY PER JOB, NOT ONE PER PLATFORM. The first attempt gave `build` and
+      # `fmt and clippy` the same key because both run on Windows. They do not
+      # produce the same artifacts -- clippy's differ from a plain build -- so
+      # they would overwrite each other's cache every run and both stay cold
+      # forever. Shared ACROSS BRANCHES is the point; shared across jobs is a
+      # thrash.
+      #
+      # Caches saved on a branch are only restorable by that branch until `main`
+      # has run under the same key, so the win lands on the first push after
+      # this merges rather than on this one.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
+          shared-key: ${{ runner.os }}-build
 
       # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
       #
@@ -231,6 +262,21 @@ jobs:
       # supplies it. Without this every mod fails to mount with "no installed
       # vide reachable".
       - run: pesde install
+
+      # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
+      # a fresh checkout has manifests and no packages; without this every Aether
+      # mod fails to mount with "could not read entry module .../roblox_packages/
+      # aether.luau". The host injects nothing any more, so there is no fallback
+      # that would quietly cover a missed install.
+      - name: Install each mod's own dependencies
+        shell: bash
+        run: |
+          for m in mods/*/pesde.toml; do
+            d=$(dirname "$m")
+            (cd "$d" && pesde install)
+            test -f "$d/roblox_packages/aether.luau" || {
+              echo "$d installed no aether redirect"; exit 1; }
+          done
 
       - run: cargo build --manifest-path host/Cargo.toml
 
@@ -311,9 +357,14 @@ jobs:
           components: rustfmt, clippy
 
       # `.`, NOT `host`. See the note in the build job.
+      # `shared-key`, SO A NEW BRANCH DOES NOT BUILD FROM COLD. Without it the
+      # cache key includes the ref, every branch starts empty, and the first run
+      # pays a full build -- 6m20s on Linux, measured. A shared key per platform
+      # lets every branch restore what `main` already built.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
+          shared-key: ${{ runner.os }}-clippy
 
       - run: cargo fmt --manifest-path host/Cargo.toml --all --check
 
@@ -348,9 +399,14 @@ jobs:
           toolchain: ${{ steps.rust.outputs.channel }}
 
       # `.`, NOT `host`. See the note in the build job.
+      # `shared-key`, SO A NEW BRANCH DOES NOT BUILD FROM COLD. Without it the
+      # cache key includes the ref, every branch starts empty, and the first run
+      # pays a full build -- 6m20s on Linux, measured. A shared key per platform
+      # lets every branch restore what `main` already built.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
+          shared-key: ${{ runner.os }}-render
 
       # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
       #
@@ -379,7 +435,28 @@ jobs:
 
       - run: pesde install
 
-      - run: cargo build --manifest-path host/Cargo.toml
+      # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
+      # a fresh checkout has manifests and no packages; without this every Aether
+      # mod fails to mount with "could not read entry module .../roblox_packages/
+      # aether.luau". The host injects nothing any more, so there is no fallback
+      # that would quietly cover a missed install.
+      - name: Install each mod's own dependencies
+        shell: bash
+        run: |
+          for m in mods/*/pesde.toml; do
+            d=$(dirname "$m")
+            (cd "$d" && pesde install)
+            test -f "$d/roblox_packages/aether.luau" || {
+              echo "$d installed no aether redirect"; exit 1; }
+          done
+
+      # TWO BINARIES, NOT SIX. This job renders and scaffolds; it never runs the
+      # conformance runner, the surface report or the upstream probe, and
+      # building them was pure cost on the longest job in the workflow.
+      #
+      # The Windows job keeps the full build, because `cargo test --workspace`
+      # immediately after compiles every target regardless.
+      - run: cargo build --manifest-path host/Cargo.toml --bin dew --bin gallery-coverage
 
       - run: cargo test --workspace
 

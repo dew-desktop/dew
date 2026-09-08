@@ -18,11 +18,11 @@
 	the other 900 lines and none of them would test anything this does not.
 ]]
 
-local Aether = require("@aether/api")
-local PointerRouter = require("@aether/PointerRouter")
+local Aether = require("./roblox_packages/aether")
+local PointerRouter = Aether.PointerRouter
 --- The pointer's current position. `PointerRouter` routes presses; `InputScope`
 --- is where "where is the pointer right now" actually lives.
-local InputScope = require("@aether/InputScope")
+local InputScope = Aether.InputScope
 
 local create = Aether.create
 local source = Aether.source

@@ -118,7 +118,7 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
 
 pub fn load(
     dir: &Path,
-    aether_root: &Path,
+    _aether_root: &Path,
     aliases: &std::collections::HashMap<String, PathBuf>,
     state: &Shared,
 ) -> Result<Mod, String> {
@@ -142,7 +142,7 @@ pub fn load(
     //      is not a thing this platform supports, and the resolver is where that
     //      is enforced rather than checked for later.
     let caps = dew_runtime::Capabilities {
-        require_roots: vec![dir.to_path_buf(), aether_root.to_path_buf()],
+        require_roots: vec![dir.to_path_buf()],
         // A mod's `print` is the author's own debugging and goes to the console
         // the host was launched from.
         print: true,
@@ -235,10 +235,27 @@ pub fn load(
         //       off-engine host, so they live in Aether where the CLI gets them
         //       too.
         Runtime::Aether => {
-            let desktop: LuaTable =
-                modules::load_entry(&vm, &aether_root.join("src/host/Desktop.luau"))
+            //       THROUGH THE MOD'S OWN INSTALL, not through one of ours. The
+            //       redirect pesde writes beside a mod is an unversioned path
+            //       into the exact Aether that mod declared, so the ceremony and
+            //       the widget are the same copy of the framework. Reaching into
+            //       a host-side checkout instead is what let a mod and its host
+            //       disagree about which Aether they meant.
+            let aether: LuaTable =
+                modules::load_entry(&vm, &dir.join("roblox_packages/aether.luau"))
                     .and_then(|f| f.call(()))
-                    .map_err(|e| format!("{}: loading Aether's desktop host: {e}", manifest.id))?;
+                    .map_err(|e| {
+                        format!(
+                            "{}: loading Aether from the mod's own packages: {e}",
+                            manifest.id
+                        )
+                    })?;
+            let desktop: LuaTable = aether.get("Desktop").map_err(|e| {
+                format!(
+                    "{}: this Aether exposes no desktop ceremony: {e}",
+                    manifest.id
+                )
+            })?;
             Ceremony::Aether(desktop)
         }
         // 3b ── no framework: just a root to parent into.
@@ -461,15 +478,32 @@ mod tests {
         /// the framework's own behaviour on this host, so there is nothing to
         /// stand in for the framework. `crates/runtime`'s parity tests take the
         /// same dependency for the same reason.
+        /// A FIXTURE THAT OWNS ITS FRAMEWORK, because that is now the only way a
+        /// mod gets one. The host injects nothing, so the fixture writes the
+        /// redirect pesde would have written: an unversioned file beside the mod
+        /// naming the Aether this mod declared. Copying the package in would be
+        /// truer still and costs seconds per test; the redirect is the same
+        /// shape a real mod loads through.
         fn load_aether(&self) -> Result<Mod, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
             let root = dew_runtime::installed_package("aether")
                 .expect("no installed aether -- run `pesde install` at the repository root");
-            let vide = dew_runtime::installed_package("vide")
-                .expect("no installed vide -- run `pesde install` at the repository root");
+
+            let packages = self.0.join("roblox_packages");
+            std::fs::create_dir_all(&packages).expect("fixture roblox_packages");
+            let api = root.join("src/api.luau");
+            std::fs::write(
+                packages.join("aether.luau"),
+                format!(
+                    "return require(\"@fixture_aether/api\")
+-- {}",
+                    api.display()
+                ),
+            )
+            .expect("fixture aether redirect");
+
             let mut aliases = std::collections::HashMap::new();
-            aliases.insert("aether".to_string(), root.join("src"));
-            aliases.insert("vide".to_string(), vide.join("src"));
+            aliases.insert("fixture_aether".to_string(), root.join("src"));
             load(&self.0, &root, &aliases, &state)
         }
     }
@@ -715,7 +749,7 @@ mod tests {
     /// production code shaped by a test. `Desktop.Mount` does return it, and
     /// `mods.rs` reads it for the mount line; what it does not do is keep it.
     const AETHER_MOD: &str = r##"
-        local Aether = require("@aether/api")
+        local Aether = require("./roblox_packages/aether")
         local create = Aether.create
 
         return {
@@ -765,7 +799,7 @@ mod tests {
             .lua()
             .load(
                 r#"
-                local host = require("@aether/api").Host.detect()
+                local host = require("@fixture_aether/api").Host.detect()
                 return host.Name, host.Environment
             "#,
             )
@@ -873,7 +907,7 @@ mod tests {
             .load(
                 r##"
                 local node = _G.__dew_test_tree
-                local host = require("@aether/api").Host.detect()
+                local host = require("@fixture_aether/api").Host.detect()
                 local _, _, w, h = host.Scene.Bounds(node)
                 local size = node.Size
                 return w, h, size.X.Scale == 0.5 and size.X.Offset == 4
