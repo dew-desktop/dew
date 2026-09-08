@@ -54,8 +54,7 @@ fn caps() -> Capabilities {
 /// the whole vocabulary and asserting against the first one would check a handful
 /// of fields and call it a contract.
 fn keys_of_a_real_snapshot() -> BTreeSet<String> {
-    let fixture =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/app.luau");
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/app.luau");
     let app =
         Application::load_with(caps(), &fixture, common::install_host).expect("fixture loads");
     let session = app.session().expect("session");

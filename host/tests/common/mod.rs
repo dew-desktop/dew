@@ -41,20 +41,6 @@ pub fn install_host(vm: &Vm) -> LuaResult<()> {
 
     datamodel::install_vocabulary(vm.lua())?;
 
-    // VIDE'S GATE, WHICH IS WHAT `game` IS AND ALL IT IS.
-    //
-    // vide reaches `typeof`, `Instance`, `Enum` and `Color3` through
-    // `game and typeof or require "../test/mock"`, so with `game` nil the
-    // expression takes a fallback requiring a module the shipped package does
-    // not carry, and seven of vide's modules fail to load however real those
-    // four globals are.
-    //
-    // Installed for the AETHER runtime, which is what these suites load, and for
-    // nothing else -- the same scoping `mods.rs::install_gate` documents. If
-    // anything other than vide's gate starts reading it, that is a regression of
-    // ADR-001's amendment rather than a convenience.
-    vm.lua().globals().set("game", true)?;
-
     // The DOM and clock outlive this call because the VM holds handles into
     // them; dropping them here pulls the arena out from under the application
     // before its first frame.

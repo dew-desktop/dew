@@ -14,7 +14,6 @@
 //! cargo test --features raster -- --nocapture
 //! ```
 
-
 use dew_raster::{Backend, Canvas, Font};
 use dew_runtime::{Application, Capabilities, Painter, RasterPainter, Rgb};
 use std::path::PathBuf;
