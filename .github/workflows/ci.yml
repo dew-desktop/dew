@@ -210,13 +210,23 @@ jobs:
       #
       # If the workspace root ever moves again, this moves with it.
       # `shared-key`, SO A NEW BRANCH DOES NOT BUILD FROM COLD. Without it the
-      # cache key includes the ref, every branch starts empty, and the first run
-      # pays a full build -- 6m20s on Linux, measured. A shared key per platform
-      # lets every branch restore what `main` already built.
+      # cache key includes the JOB NAME and the ref, every branch starts empty,
+      # and the first run pays a full build -- 6m20s on Linux, measured.
+      #
+      # ONE KEY PER JOB, NOT ONE PER PLATFORM. The first attempt gave `build` and
+      # `fmt and clippy` the same key because both run on Windows. They do not
+      # produce the same artifacts -- clippy's differ from a plain build -- so
+      # they would overwrite each other's cache every run and both stay cold
+      # forever. Shared ACROSS BRANCHES is the point; shared across jobs is a
+      # thrash.
+      #
+      # Caches saved on a branch are only restorable by that branch until `main`
+      # has run under the same key, so the win lands on the first push after
+      # this merges rather than on this one.
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          shared-key: ${{ runner.os }}-dew
+          shared-key: ${{ runner.os }}-build
 
       # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
       #
@@ -354,7 +364,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          shared-key: ${{ runner.os }}-dew
+          shared-key: ${{ runner.os }}-clippy
 
       - run: cargo fmt --manifest-path host/Cargo.toml --all --check
 
@@ -396,7 +406,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: .
-          shared-key: ${{ runner.os }}-dew
+          shared-key: ${{ runner.os }}-render
 
       # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
       #
