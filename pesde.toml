@@ -47,8 +47,8 @@ lib = "scripts/init.luau"
 # `if not game` guard, so the global cannot go until that changes and the aether
 # pin above moves with it. The chain is written up in
 # `.artifacts/project/upstream/vide-gates-on-game.md`.
-vide = { repo = "es9-dev/vide", rev = "058c5d5bf3b5098029bf6109c564e13f7598a10b" }
-aether = { repo = "project-aether-ui/aether", rev = "3eb4cbbb0975225b000ae89643178e3332ebe967" }
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+aether = { repo = "project-aether-ui/aether", rev = "da4e5a8a2bd2929c943790fb48148b3e4bc61dd0" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"

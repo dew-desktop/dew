@@ -1952,26 +1952,16 @@ fn icon_path() -> Option<PathBuf> {
 /// commit in `pesde.toml` and installed beside vide, and both are found the same
 /// way.
 fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
-    let root = dew_runtime::installed_package("aether").ok_or(
-        "no installed aether — run `pesde install`; `pesde.toml` pins the revision          Dew's mods are written against",
-    )?;
-
-    let mut aliases = HashMap::new();
-    aliases.insert("aether".to_string(), root.join("src"));
-
-    // AETHER'S OWN DEPENDENCY, SUPPLIED BY US. pesde installs each package's own
-    // tree without its generated `roblox_packages`, so the framework arrives
-    // without the vide it declares — which is handed over through the `@vide`
-    // seam VideCore exposes. Without it the framework loads and then reports "no
-    // installed vide reachable" from a checkout that is otherwise perfect.
-    match dew_runtime::installed_package("vide") {
-        Some(vide) => {
-            aliases.insert("vide".to_string(), vide.join("src"));
-        }
-        None => eprintln!("[dew] no vide installed — run `pesde install`; widgets will not mount"),
-    }
-
-    Ok((root, aliases))
+    // NOTHING IS INJECTED ANY MORE. A mod declares Aether and vide in its own
+    // `pesde.toml` and requires them through the redirect pesde writes beside
+    // it, exactly as a Roblox place does. The host used to hand every mod an
+    // `@aether` and a `@vide` pointing into its OWN installed packages, which
+    // meant a mod could not say what it depended on and could not be built
+    // without a Dew checkout.
+    //
+    // The path is still returned because callers thread it through; it names
+    // nothing a guest can reach.
+    Ok((PathBuf::from("."), HashMap::new()))
 }
 
 fn main() -> ExitCode {

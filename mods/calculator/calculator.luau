@@ -19,7 +19,7 @@
 	having one mod in the tree that demonstrates it.
 ]]
 
-local Aether = require("@aether/api")
+local Aether = require("./roblox_packages/aether")
 
 local create = Aether.create
 local source = Aether.source

@@ -1,0 +1,18 @@
+name = "dew_mods/nameplate"
+version = "0.0.1"
+
+# A MOD DECLARES ITS OWN FRAMEWORK. The host used to hand every mod Aether and
+# vide through injected aliases, so a mod could not say what it depended on. A
+# Roblox place installs its packages and requires them by name; so does this.
+[target]
+environment = "roblox"
+lib = "nameplate.luau"
+
+[dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "da4e5a8a2bd2929c943790fb48148b3e4bc61dd0" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"

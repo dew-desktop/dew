@@ -232,6 +232,21 @@ jobs:
       # vide reachable".
       - run: pesde install
 
+      # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
+      # a fresh checkout has manifests and no packages; without this every Aether
+      # mod fails to mount with "could not read entry module .../roblox_packages/
+      # aether.luau". The host injects nothing any more, so there is no fallback
+      # that would quietly cover a missed install.
+      - name: Install each mod's own dependencies
+        shell: bash
+        run: |
+          for m in mods/*/pesde.toml; do
+            d=$(dirname "$m")
+            (cd "$d" && pesde install)
+            test -f "$d/roblox_packages/aether.luau" || {
+              echo "$d installed no aether redirect"; exit 1; }
+          done
+
       - run: cargo build --manifest-path host/Cargo.toml
 
       # `cargo test` compiled ZERO tests until the manifest gained some, and
@@ -378,6 +393,21 @@ jobs:
           echo "$RUNNER_TEMP/pesde" >> "$GITHUB_PATH"
 
       - run: pesde install
+
+      # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
+      # a fresh checkout has manifests and no packages; without this every Aether
+      # mod fails to mount with "could not read entry module .../roblox_packages/
+      # aether.luau". The host injects nothing any more, so there is no fallback
+      # that would quietly cover a missed install.
+      - name: Install each mod's own dependencies
+        shell: bash
+        run: |
+          for m in mods/*/pesde.toml; do
+            d=$(dirname "$m")
+            (cd "$d" && pesde install)
+            test -f "$d/roblox_packages/aether.luau" || {
+              echo "$d installed no aether redirect"; exit 1; }
+          done
 
       - run: cargo build --manifest-path host/Cargo.toml
 

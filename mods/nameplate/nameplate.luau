@@ -5,7 +5,7 @@
 	    cargo run --manifest-path host/Cargo.toml -- --mod nameplate --snapshot out.png
 
 	THE THIRD MOD, AND THE FIRST THAT IMPORTS NOTHING. `calculator`, `timetracker`
-	and `workspace` are Aether components: they `require("@aether/api")`, return a
+	and `workspace` are Aether components: they `require("./roblox_packages/aether")`, return a
 	tree the framework owns, and the host drives them through a `Session`. This
 	file has no `require` line. It builds instances, sets properties, parents them
 	into the root it was handed, and returns — which is exactly what the same code
