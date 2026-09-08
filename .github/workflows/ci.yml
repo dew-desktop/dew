@@ -20,6 +20,21 @@ concurrency:
 # on Linux against 51s on Windows. The difference was a cold cache, and what a
 # cold cache has to build here is expensive for reasons CI does not need.
 #
+# THE RESULT, same day, critical path across the whole workflow:
+#
+#     before                        380s   (Linux cold every branch)
+#     cold, under the new keys      798s   (one-off: a new key builds from cold)
+#     warm                          105s
+#
+# Per job, warm against before: render 380s -> 50s, build 163s -> 105s,
+# clippy 61s -> 63s. The saved cache also shrank 43% (322 MiB -> 184 MiB on
+# Linux), which is the debug info and the incremental artifacts below.
+#
+# READ A COLD NUMBER AS A COLD NUMBER. Changing a cache key -- or racing the
+# first save on `main` -- costs one full rebuild, and three of the runs measured
+# that day were cold for exactly those reasons rather than for anything the
+# workflow does.
+#
 #   CARGO_INCREMENTAL   Incremental artifacts are never reused across CI runs and
 #                       are large, so they cost cache upload time and buy nothing.
 #   CARGO_PROFILE_DEV_DEBUG
