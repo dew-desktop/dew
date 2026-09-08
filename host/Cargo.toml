@@ -110,3 +110,7 @@ windows = { version = "0.59", features = [
 # Cargo reads profiles only from a root and ignores them in a member, so leaving
 # it here would have silently restored the 18fps debug build the note there
 # describes.
+
+[[bin]]
+name = "upstream-probe"
+path = "src/bin/upstream_probe.rs"
