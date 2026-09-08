@@ -12,6 +12,7 @@
 ]]
 return {
 	name = "Frame: backgrounds, borders and corners",
+	shows = "Three frames: a solid rounded block, a translucent one overlapping it above in ZIndex, and an anchored square whose scale corner radius does NOT round -- a stated gap in corner_radius.",
 	surface = { width = 260, height = 140 },
 
 	tree = {
