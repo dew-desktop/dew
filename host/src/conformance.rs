@@ -1581,7 +1581,17 @@ mod tests {
             "expected all 24 executable conformance cases to pass"
         );
         assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
-        assert_eq!(summary.open_questions, 1, "expected 1 open question");
+        // TWO SINCE MILESTONE 4 CLOSED THE CLIP RADIUS. The clipping case was a
+        // documented gap; it now asserts Roblox's behaviour and Dew matches it,
+        // but the PIXEL half has never been rendered in Studio and compared, so
+        // it counts as a belief rather than as evidence.
+        //
+        // EXACT, AND IT WAS BRIEFLY NOT. While aether#2 was unmerged, CI read the
+        // case from the pinned pesde package and still saw 1, so this was widened
+        // to accept either. An assertion that passes whether the divergence is
+        // closed or open tests neither; the pin is bumped and the number is one
+        // number again.
+        assert_eq!(summary.open_questions, 2, "expected 2 open questions");
 
         // Verify the 21 passing cases
         let passing_names: Vec<&str> = results
@@ -1596,8 +1606,7 @@ mod tests {
         );
         assert!(passing_names.contains(&"a node with zero area is absent from the display list"));
         assert!(passing_names.contains(&"ZIndex orders the paint, then depth, then declaration"));
-        assert!(passing_names
-            .contains(&"a clipped child keeps its rectangle (the radius gap is invisible here)"));
+        assert!(passing_names.contains(&"a clipped child is masked to its parent's rounded corner"));
         assert!(passing_names.contains(&"a radial UIGradient reaches the display list as radial"));
 
         // 11 native geometry cases
@@ -1652,8 +1661,15 @@ mod tests {
         assert_eq!(results[0].status, CaseStatus::Pass);
     }
 
+    /// REPOINTED, NOT DELETED, and that is this test working rather than
+    /// failing. It was written to observe a divergence: Roblox masks a clipped
+    /// child to the parent's rounded corner and Dew leaked the corner pixels.
+    /// Milestone 4 closed that, so what it now observes is agreement.
+    ///
+    /// The case keeps its file name because milestone 4's completion test names
+    /// it and renaming a case renames its golden.
     #[test]
-    fn pixel_runner_observes_clip_radius_divergence() {
+    fn pixel_runner_observes_the_clip_radius_is_masked() {
         let dir = find_cases_dir(None).expect("cases dir");
         let options = PixelOptions {
             enabled: true,
@@ -1665,8 +1681,10 @@ mod tests {
             run_suite_with_options(&dir, Some("clips_descendants_has_no_radius"), &options);
         assert_eq!(results.len(), 1);
         assert_eq!(summary.passed, 1);
-        assert_eq!(summary.divergent, 1);
-        assert_eq!(results[0].status, CaseStatus::Divergent);
+        assert_eq!(summary.divergent, 0, "the clip radius divergence is closed");
+        // `asserted` rather than `roblox`: the pixel half is a belief nobody has
+        // checked in Studio, so it is an open question and not evidence.
+        assert_eq!(summary.open_questions, 1);
     }
 
     #[test]
@@ -1688,9 +1706,9 @@ mod tests {
         assert_eq!(summary.unsupported, 0);
         assert_eq!(summary.passed, 24);
         assert_eq!(summary.failed, 0);
-        assert_eq!(summary.divergent, 1);
+        assert_eq!(summary.divergent, 0, "no documented gaps remain");
         assert_eq!(summary.verified_against_roblox, 21);
-        assert_eq!(summary.open_questions, 1);
+        assert_eq!(summary.open_questions, 2);
     }
 
     const TALLY_LUAU_ORACLE: &str = r#"--!strict

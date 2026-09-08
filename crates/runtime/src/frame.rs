@@ -300,6 +300,13 @@ pub struct Node {
     pub alpha: f32,
     pub radius: f32,
     pub clip: Option<Rect>,
+    /// The corner radius of that clip, 0.0 for a square one.
+    ///
+    /// BESIDE `clip` RATHER THAN INSIDE IT. An enum would be tidier in Rust and
+    /// would change the shape `Live.luau` emits, which lives in the other
+    /// repository; an added optional key is a change Aether does not have to
+    /// make on the same day. The observable outcome is identical.
+    pub clip_radius: f32,
     pub stroke: Option<Stroke>,
     pub gradient: Option<Gradient>,
     pub text: Option<String>,
@@ -307,6 +314,17 @@ pub struct Node {
     pub text_align_x: Option<Align>,
     pub text_align_y: Option<Align>,
     pub text_colour: Option<Rgb>,
+    /// How opaque the text is, 1.0 for solid.
+    ///
+    /// SEPARATE FROM `alpha`, which is the node's BACKGROUND. Roblox has
+    /// `BackgroundTransparency` and `TextTransparency` as independent
+    /// properties, and a label with an invisible background and solid text is
+    /// the ordinary case rather than an exotic one.
+    ///
+    /// The host accepted `TextTransparency` and had nowhere to put it, so the
+    /// painter filled every run at 1.0 and the property reached no pixels. Found
+    /// by the gallery's differential pass, not by a test.
+    pub text_alpha: f32,
     /// What this node draws as an image, if anything.
     ///
     /// NOT DECODED FROM LUA, and it is the first field of which that is true —
@@ -355,6 +373,7 @@ impl Frame {
         "alpha",
         "radius",
         "clip",
+        "clipRadius",
         "stroke",
         "gradient",
         "text",
@@ -362,6 +381,7 @@ impl Frame {
         "textAlignX",
         "textAlignY",
         "textColour",
+        "textAlpha",
     ];
 
     /// Node fields a host fills in directly, which no display-list table carries.
@@ -471,6 +491,7 @@ impl Node {
             alpha: t.get::<Option<f32>>("alpha")?.unwrap_or(1.0),
             radius: t.get::<Option<f32>>("radius")?.unwrap_or(0.0),
             clip: rect_from_array(t.get("clip")?),
+            clip_radius: t.get::<Option<f32>>("clipRadius")?.unwrap_or(0.0),
             stroke,
             gradient,
             text: t.get("text")?,
@@ -478,6 +499,7 @@ impl Node {
             text_align_x: Align::parse(t.get("textAlignX")?),
             text_align_y: Align::parse(t.get("textAlignY")?),
             text_colour: Rgb::from_table(t.get("textColour")?),
+            text_alpha: t.get::<Option<f32>>("textAlpha")?.unwrap_or(1.0),
             // NOT READ FROM THE TABLE, and `Frame::HOST_FIELDS` says why. A
             // display list built in Luau names an asset; it cannot carry one.
             image: None,
@@ -575,6 +597,7 @@ mod tests {
             alpha: 1.0,
             radius: 0.0,
             clip: None,
+            clip_radius: 0.0,
             stroke: None,
             gradient: None,
             text: None,
@@ -582,6 +605,7 @@ mod tests {
             text_align_x: None,
             text_align_y: None,
             text_colour: None,
+            text_alpha: 1.0,
             image: None,
         };
         let Node {
@@ -592,6 +616,7 @@ mod tests {
             alpha: _,
             radius: _,
             clip: _,
+            clip_radius: _,
             stroke: _,
             gradient: _,
             text: _,
@@ -599,6 +624,7 @@ mod tests {
             text_align_x: _,
             text_align_y: _,
             text_colour: _,
+            text_alpha: _,
             image: _,
         } = node;
 
@@ -615,6 +641,7 @@ mod tests {
             "alpha",
             "radius",
             "clip",
+            "clipRadius",
             "stroke",
             "gradient",
             "text",
@@ -622,6 +649,7 @@ mod tests {
             "textAlignX",
             "textAlignY",
             "textColour",
+            "textAlpha",
             "image",
         ];
         for key in named {

@@ -15,6 +15,15 @@ return {
 	shows = "A red-to-blue ColorSequence gradient rotated 35 degrees, beside a frame outlined by a green UIStroke. Not white-to-black, so a fallback ramp could not fake it.",
 	surface = { width = 280, height = 130 },
 
+	variants = {
+		{ node = "Ramp", prop = "Color", value = { "ColorSequence", { "Color3", 0, 1, 0 }, { "Color3", 1, 1, 0 } } },
+		{ node = "Ramp", prop = "Rotation", value = 90 },
+		{ node = "Ramp", prop = "Enabled", value = false },
+		{ node = "Edge", prop = "Color", value = { "Color3", 1, 0, 1 } },
+		{ node = "Edge", prop = "Thickness", value = 8 },
+		{ node = "Edge", prop = "Transparency", value = 1 },
+	},
+
 	tree = {
 		class = "Frame",
 		name = "Backdrop",

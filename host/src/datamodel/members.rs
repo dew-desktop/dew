@@ -1,4 +1,4 @@
-﻿//! Methods a guest can call on an instance, and the predicate that says which.
+//! Methods a guest can call on an instance, and the predicate that says which.
 //!
 //! WHY A PREDICATE AND NOT A LIST
 //! The property half of `datamodel-surface` used to keep a hand-written array of
@@ -29,10 +29,13 @@
 //! from a property one, and it should not have to.
 //!
 //! STILL NOT HERE, AND EACH FOR A STATED REASON. `PageEnter`, `PageLeave`,
-//! `Stopped`, `Next`, `Previous`, `JumpTo`, `JumpToIndex`,
-//! `GetScrollVelocity` and `ResetScrollVelocity` are `UIPageLayout` and
-//! `ScrollingFrame` behaviour, and neither class is rendered yet -- offering
-//! those members would be offering a scroll that cannot scroll.
+//! `Stopped`, `Next`, `Previous`, `JumpTo`, `JumpToIndex` are `UIPageLayout`
+//! behaviour, and that class is not rendered yet -- offering those members
+//! would be offering a scroll that cannot scroll.
+//!
+//! SCROLLING REACHED THE HOST IN MILESTONE 4 SPRINT 7: `GetScrollVelocity` and
+//! `ResetScrollVelocity` are implemented on `ScrollingFrame`, with velocity
+//! tracking in [`super::input`].
 //!
 //! FOCUS REACHED THE HOST IN MILESTONE 4 SPRINT 3: `Focused`, `FocusLost`,
 //! `CaptureFocus`, `ReleaseFocus` and `IsFocused` are implemented on `TextBox`,
@@ -51,6 +54,7 @@
 
 use super::{handle, signal, InstanceRef};
 use mlua::prelude::*;
+use rbx_types::Variant;
 
 /// One method this host answers, and the class a receiver must be to call it.
 struct Member {
@@ -174,6 +178,15 @@ const MEMBERS: &[Member] = &[
     Member {
         name: "FocusLost",
         introduced_on: "TextBox",
+    },
+    // -- ScrollingFrame velocity, milestone 4 sprint 7 ───────────────────────
+    Member {
+        name: "GetScrollVelocity",
+        introduced_on: "ScrollingFrame",
+    },
+    Member {
+        name: "ResetScrollVelocity",
+        introduced_on: "ScrollingFrame",
     },
     // -- Everything an instance says about itself -----------------------------
     Member {
@@ -741,6 +754,24 @@ pub fn lookup(
             drop(dom);
             super::input::is_focused(lua, this.id)
         })?,
+        "GetScrollVelocity" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            drop(dom);
+            let vel = super::input::get_scroll_velocity(lua, this.id)?;
+            super::to_lua(lua, &Variant::Vector2(vel), None)
+        })?,
+        "ResetScrollVelocity" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            drop(dom);
+            super::input::reset_scroll_velocity(lua, this.id)?;
+            Ok(())
+        })?,
         other => unreachable!("implements() admitted {other} and lookup has no arm for it"),
     };
     Ok(Some(LuaValue::Function(f)))
@@ -803,9 +834,10 @@ mod tests {
             assert!(implements("TextBox", member), "{member}");
             assert!(!implements("Frame", member), "{member}");
         }
-        // `UIPageLayout` AND `ScrollingFrame`, neither of which is rendered.
+        // SCROLLING VELOCITY IS IMPLEMENTED on ScrollingFrame, and refused on Frame:
         for member in ["GetScrollVelocity", "ResetScrollVelocity"] {
-            assert!(!implements("ScrollingFrame", member), "{member}");
+            assert!(implements("ScrollingFrame", member), "{member}");
+            assert!(!implements("Frame", member), "{member}");
         }
         for member in [
             "PageEnter",

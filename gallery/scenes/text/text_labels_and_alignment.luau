@@ -23,6 +23,18 @@ return {
 	shows = "The same font at four alignments and transparencies -- and a TextWrapped label that does NOT wrap, painting one clipped line while its box grows.",
 	surface = { width = 300, height = 160 },
 
+	variants = {
+		{ node = "Heading", prop = "Text", value = "a different string entirely" },
+		{ node = "Heading", prop = "TextColor3", value = { "Color3", 1, 0, 0 } },
+		{ node = "Heading", prop = "TextSize", value = 32 },
+		{ node = "Centred", prop = "TextXAlignment", value = { "Enum", "TextXAlignment", "Left" } },
+		{ node = "Centred", prop = "TextYAlignment", value = { "Enum", "TextYAlignment", "Top" } },
+		{ node = "Faded", prop = "TextTransparency", value = 0 },
+		--- EXPECTED TO CHANGE NOTHING. The box grows in layout but the painted
+		--- string is one clipped line either way; see this file's header.
+		{ node = "Wrapped", prop = "TextWrapped", value = false },
+	},
+
 	tree = {
 		class = "Frame",
 		name = "Backdrop",

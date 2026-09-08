@@ -183,7 +183,7 @@ impl Painter for RasterPainter {
         };
 
         self.canvas
-            .fill_text(font, size, x, y, rgba(colour, 1.0), text);
+            .fill_text(font, size, x, y, rgba(colour, node.text_alpha), text);
     }
 
     /// Both ramps, resolved into the flat `(at, r, g, b, a)` stops the ABI reads.
@@ -295,6 +295,16 @@ impl Painter for RasterPainter {
             (src.x, src.y, src.w, src.h),
             (dst.x, dst.y, dst.w, dst.h),
             rgba(tint, image.alpha),
+        );
+    }
+
+    fn clip_push_rounded(&mut self, rect: Rect, radius: f32) {
+        self.canvas.clip_push_rounded(
+            rect.x as i32,
+            rect.y as i32,
+            rect.w as i32,
+            rect.h as i32,
+            radius.round() as i32,
         );
     }
 

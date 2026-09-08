@@ -1698,12 +1698,6 @@ return process
             eprintln!("  os global installation failed: {e}");
             continue;
         }
-        if let Err(e) = vm.lua().globals().set("game", true) {
-            failed += 1;
-            eprintln!("::error::{suite_name}");
-            eprintln!("  Game gate installation failed: {e}");
-            continue;
-        }
         if let Err(e) = dew_runtime::modules::install(&vm, &caps) {
             failed += 1;
             eprintln!("::error::{suite_name}");

@@ -20,10 +20,10 @@
 
 use crate::{
     ar_begin, ar_begin_alpha, ar_begin_rect_alpha, ar_bgra, ar_clip_pop, ar_clip_push,
-    ar_draw_image, ar_fill_gradient, ar_fill_radial_gradient, ar_fill_rect, ar_fill_text,
-    ar_font_load, ar_image_free, ar_image_size, ar_image_upload, ar_png, ar_stroke_rect,
-    ar_surface_free, ar_surface_new_backend, ar_text_ascent, ar_text_line_height, ar_text_width,
-    Surface,
+    ar_clip_push_rounded, ar_draw_image, ar_fill_gradient, ar_fill_radial_gradient, ar_fill_rect,
+    ar_fill_text, ar_font_load, ar_image_free, ar_image_size, ar_image_upload, ar_png,
+    ar_stroke_rect, ar_surface_free, ar_surface_new_backend, ar_text_ascent, ar_text_line_height,
+    ar_text_width, Surface,
 };
 
 /// Which rasteriser paints.
@@ -317,6 +317,11 @@ impl Canvas {
 
     pub fn clip_push(&mut self, x: i32, y: i32, w: i32, h: i32) {
         ar_clip_push(self.ptr, x, y, w, h);
+    }
+
+    /// A clip with rounded corners, matching a parent's `UICorner` radius.
+    pub fn clip_push_rounded(&mut self, x: i32, y: i32, w: i32, h: i32, radius: i32) {
+        ar_clip_push_rounded(self.ptr, x, y, w, h, radius);
     }
 
     pub fn clip_pop(&mut self) {

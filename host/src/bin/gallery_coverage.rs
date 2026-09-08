@@ -69,7 +69,23 @@ fn main() {
         }
     }
 
-    let cov = gallery::coverage(&scenes);
+    // THE DIFFERENTIAL PASS repaints every scene twice per variant, so it is
+    // opt-out rather than always-on -- but it is the number that matters, so it
+    // runs by default and `--no-diff` skips it for a quick coverage read.
+    let skip_diff = args.iter().any(|a| a == "--no-diff");
+    let (moved, inert) = if skip_diff {
+        (Default::default(), Vec::new())
+    } else {
+        match gallery::differential(&scenes) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("gallery: differential pass failed: {e}");
+                std::process::exit(1);
+            }
+        }
+    };
+
+    let cov = gallery::coverage_with_moved(&scenes, &moved);
 
     println!();
     println!(
@@ -92,6 +108,34 @@ fn main() {
         "  by class and property: {} of {} pairs",
         cov.pairs_demonstrated, cov.pairs_in_scope
     );
+
+    if !skip_diff {
+        // THE STRONG NUMBER. "Set" is satisfied by a property the renderer
+        // ignores; "differential" is not, because the image has to change.
+        let checked = cov.differential.len() + cov.excused.len();
+        println!(
+            "DIFFERENTIAL: {} of {} moved pixels when changed, {} excused with a reason",
+            cov.differential.len(),
+            cov.total(),
+            cov.excused.len()
+        );
+        println!(
+            "  {} of {} neither shown to matter nor excused",
+            cov.total() - checked,
+            cov.total()
+        );
+
+        // A VARIANT THAT MOVED NOTHING IS THE MOST INTERESTING LINE HERE. The
+        // property reached the host and did not reach the pixels, which is
+        // exactly the gap this milestone exists to surface.
+        if !inert.is_empty() {
+            println!();
+            println!("CHANGED NOTHING ({}):", inert.len());
+            for line in &inert {
+                println!("  {line}");
+            }
+        }
+    }
 
     // PER PILLAR, INCLUDING THE EMPTY ONES. A pillar with no scenes is the most
     // useful line in this report: it is where the next scene should go. Printing

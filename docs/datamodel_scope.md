@@ -87,7 +87,7 @@ DOM. It is a consumer of this surface and never an implementation of it, so it
 is not measured here and is not required to conform. What must match is what a
 Luau application sees, **with or without Aether**.
 
-**45 of 55 in-scope members implemented.**
+**47 of 55 in-scope members implemented.**
 29 more are excluded by decision, out of 84 reachable
 (44 methods, 40 events).
 
@@ -100,9 +100,9 @@ document makes on the host's behalf.
 - `Activated`, `CaptureFocus`, `Changed`, `ChildAdded`, `ChildRemoved`, `ClearAllChildren`, `DescendantAdded`, `DescendantRemoving`
 - `Destroy`, `Destroying`, `FindFirstAncestor`, `FindFirstAncestorOfClass`, `FindFirstAncestorWhichIsA`, `FindFirstChild`, `FindFirstChildOfClass`, `FindFirstChildWhichIsA`
 - `FindFirstDescendant`, `FocusLost`, `Focused`, `GetAttribute`, `GetAttributes`, `GetChildren`, `GetDescendants`, `GetPropertyChangedSignal`
-- `InputBegan`, `InputChanged`, `InputEnded`, `IsA`, `IsAncestorOf`, `IsDescendantOf`, `IsFocused`, `MouseButton1Click`
-- `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`, `MouseEnter`, `MouseLeave`, `MouseMoved`
-- `MouseWheelBackward`, `MouseWheelForward`, `ReleaseFocus`, `SecondaryActivated`, `SetAttribute`
+- `GetScrollVelocity`, `InputBegan`, `InputChanged`, `InputEnded`, `IsA`, `IsAncestorOf`, `IsDescendantOf`, `IsFocused`
+- `MouseButton1Click`, `MouseButton1Down`, `MouseButton1Up`, `MouseButton2Click`, `MouseButton2Down`, `MouseButton2Up`, `MouseEnter`, `MouseLeave`
+- `MouseMoved`, `MouseWheelBackward`, `MouseWheelForward`, `ReleaseFocus`, `ResetScrollVelocity`, `SecondaryActivated`, `SetAttribute`
 
 **24 of them are events**, reachable through `RBXScriptSignal` and
 `RBXScriptConnection`.
@@ -117,5 +117,4 @@ says about ITSELF -- its properties, its children, its own destruction.
 
 What parity actually requires. No Dew guest can reach any of these.
 
-- `GetScrollVelocity`, `JumpTo`, `JumpToIndex`, `Next`, `PageEnter`, `PageLeave`, `Previous`, `ResetScrollVelocity`
-- `Stopped`, `WaitForChild`
+- `JumpTo`, `JumpToIndex`, `Next`, `PageEnter`, `PageLeave`, `Previous`, `Stopped`, `WaitForChild`

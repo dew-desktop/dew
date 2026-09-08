@@ -121,7 +121,7 @@ fn padding_of(dom: &Dom, id: usize) -> (f32, f32, f32, f32) {
 }
 
 /// The content box a container offers its children: its own rect, inset by any UIPadding.
-fn content_box(dom: &Dom, id: usize, own: Box2) -> Box2 {
+pub(crate) fn content_box(dom: &Dom, id: usize, own: Box2) -> Box2 {
     let (l, t, r, b) = padding_of(dom, id);
     Box2 {
         x: own.x + l,
@@ -468,6 +468,12 @@ pub struct Placed {
     /// and it is the one thing a hit test needs and drawing does not.
     pub id: usize,
     pub rect: Box2,
+    /// The corner radius of that clipping box, 0.0 when it is square.
+    ///
+    /// Set from the `UICorner` on the ancestor that does the clipping, because
+    /// that is the shape Roblox masks against. Beside the box rather than inside
+    /// it: both are written at one site and the compiler checks every reader.
+    pub clip_radius: f32,
     /// The clipping box inherited from the nearest `ClipsDescendants` ancestor.
     ///
     /// APPLIES TO HIT TESTING AS WELL AS DRAWING. A child outside a clipping
@@ -490,6 +496,54 @@ fn automatic_axes(dom: &Dom, id: usize) -> (bool, bool) {
         "XY" => (true, true),
         _ => (false, false),
     }
+}
+
+/// The AutomaticCanvasSize axes requested by a ScrollingFrame: (grow_x, grow_y).
+pub(crate) fn automatic_canvas_axes(dom: &Dom, id: usize) -> (bool, bool) {
+    let Some(Variant::Enum(raw)) = dom.property(id, "AutomaticCanvasSize") else {
+        return (false, false);
+    };
+    let Some(item) = super::enums::item_by_value("AutomaticSize", raw.to_u32()) else {
+        return (false, false);
+    };
+    match item.name {
+        "X" => (true, false),
+        "Y" => (false, true),
+        "XY" => (true, true),
+        _ => (false, false),
+    }
+}
+
+/// The resolved canvas size and content box of a ScrollingFrame: (canvas_w, canvas_h, frame_w, frame_h).
+pub(crate) fn scrolling_frame_bounds(dom: &Dom, id: usize, own_box: Box2) -> (f32, f32, f32, f32) {
+    let (_, _, pad_r, pad_b) = padding_of(dom, id);
+    let (cs_sx, cs_ox, cs_sy, cs_oy) = udim2(dom, id, "CanvasSize");
+    let mut canvas_w = (cs_sx * own_box.w + cs_ox).max(0.0);
+    let mut canvas_h = (cs_sy * own_box.h + cs_oy).max(0.0);
+    let (auto_canvas_x, auto_canvas_y) = automatic_canvas_axes(dom, id);
+    if auto_canvas_x || auto_canvas_y {
+        for child in dom.children(id) {
+            let Some(class) = dom.class_of(child) else {
+                continue;
+            };
+            if is_modifier(&class) {
+                continue;
+            }
+            let (pxs, pxo, pys, pyo) = udim2(dom, child, "Position");
+            let (sxs, sxo, sys, syo) = udim2(dom, child, "Size");
+            let cw = sxs * canvas_w + sxo;
+            let ch = sys * canvas_h + syo;
+            let cx = pxs * canvas_w + pxo;
+            let cy = pys * canvas_h + pyo;
+            if auto_canvas_x {
+                canvas_w = canvas_w.max(cx + cw + pad_r);
+            }
+            if auto_canvas_y {
+                canvas_h = canvas_h.max(cy + ch + pad_b);
+            }
+        }
+    }
+    (canvas_w, canvas_h, own_box.w, own_box.h)
 }
 
 /// Intersect an inherited clip rectangle with an element's own rectangle.
@@ -562,6 +616,8 @@ fn report_auto(dom: &Dom, id: usize, want_x: bool, want_y: bool, did_x: bool, di
 
 #[derive(Clone, Copy, Debug)]
 pub struct SolvedItem {
+    /// The corner radius of `clip`, 0.0 when square.
+    pub clip_radius: f32,
     pub id: usize,
     pub rect: Box2,
     pub clip: Option<Box2>,
@@ -721,6 +777,7 @@ fn visit(
     id: usize,
     parent_box: Box2,
     clip: Option<Box2>,
+    clip_radius: f32,
     depth: usize,
     laid_out: bool,
     offered: Box2,
@@ -738,21 +795,117 @@ fn visit(
         rect,
         clip,
         depth,
+        clip_radius,
         z_index: z,
     });
 
+    let is_scrolling_frame = dom.class_of(id).as_deref() == Some("ScrollingFrame");
+
     let box_rect = content_box(dom, id, rect);
-    let child_clip = if boolean(dom, id, "ClipsDescendants") == Some(true) {
-        Some(intersect_clip(clip, rect))
-    } else {
-        clip
-    };
+    // A ROUNDED PARENT MASKS ITS DESCENDANTS TO THE ROUNDING. Roblox does; Dew
+    // clipped to a rectangle and leaked the corner pixels, which milestone 3
+    // recorded as an observable divergence rather than fixing.
+    //
+    // THE ROUNDER OF THE TWO WINS on nesting, matching `ar_clip_push_rounded`: a
+    // square clip inside a rounded one is still inside the rounded one.
+    //
+    // A SCROLLINGFRAME ALWAYS CLIPS ITS CONTENT TO ITS OWN BOX, matching Roblox.
+    let (child_clip, child_clip_radius) =
+        if is_scrolling_frame || boolean(dom, id, "ClipsDescendants") == Some(true) {
+            (
+                Some(intersect_clip(clip, rect)),
+                corner_radius(dom, id).max(clip_radius),
+            )
+        } else {
+            (clip, clip_radius)
+        };
 
     let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
     let (grow_x, grow_y) = automatic_axes(dom, id);
     let children_from = out.len();
 
-    place_children(dom, id, box_rect, child_clip, depth, out);
+    let (canvas_w, canvas_h) = if is_scrolling_frame {
+        let (auto_canvas_x, auto_canvas_y) = automatic_canvas_axes(dom, id);
+        let (cs_sx, cs_ox, cs_sy, cs_oy) = udim2(dom, id, "CanvasSize");
+        let mut cw = (cs_sx * box_rect.w + cs_ox).max(0.0);
+        let mut ch = (cs_sy * box_rect.h + cs_oy).max(0.0);
+
+        let canvas_box = Box2 {
+            x: box_rect.x,
+            y: box_rect.y,
+            w: cw,
+            h: ch,
+        };
+        place_children(
+            dom,
+            id,
+            canvas_box,
+            child_clip,
+            child_clip_radius,
+            depth,
+            out,
+        );
+
+        if auto_canvas_x || auto_canvas_y {
+            let mut right = -f32::INFINITY;
+            let mut bottom = -f32::INFINITY;
+            for item in &out[children_from..] {
+                if item.depth == depth + 1 {
+                    right = right.max(item.rect.x + item.rect.w);
+                    bottom = bottom.max(item.rect.y + item.rect.h);
+                }
+            }
+            let mut grew_cw = false;
+            let mut grew_ch = false;
+            if auto_canvas_x && right != -f32::INFINITY {
+                let needed_w = (right - box_rect.x) + pad_r;
+                if needed_w > cw {
+                    cw = needed_w;
+                    grew_cw = true;
+                }
+            }
+            if auto_canvas_y && bottom != -f32::INFINITY {
+                let needed_h = (bottom - box_rect.y) + pad_b;
+                if needed_h > ch {
+                    ch = needed_h;
+                    grew_ch = true;
+                }
+            }
+
+            if grew_cw || grew_ch {
+                let mut dependent = false;
+                for item in &out[children_from..] {
+                    let (sxs, _, sys, _) = udim2(dom, item.id, "Size");
+                    if (grew_cw && sxs != 0.0) || (grew_ch && sys != 0.0) {
+                        dependent = true;
+                        break;
+                    }
+                }
+                if dependent {
+                    out.truncate(children_from);
+                    let grown_canvas_box = Box2 {
+                        x: box_rect.x,
+                        y: box_rect.y,
+                        w: cw,
+                        h: ch,
+                    };
+                    place_children(
+                        dom,
+                        id,
+                        grown_canvas_box,
+                        child_clip,
+                        child_clip_radius,
+                        depth,
+                        out,
+                    );
+                }
+            }
+        }
+        (cw, ch)
+    } else {
+        place_children(dom, id, box_rect, child_clip, child_clip_radius, depth, out);
+        (0.0, 0.0)
+    };
 
     let before_w = out[entry_idx].rect.w;
     let before_h = out[entry_idx].rect.h;
@@ -813,11 +966,70 @@ fn visit(
         if dependent {
             out.truncate(children_from);
             let grown_box = content_box(dom, id, out[entry_idx].rect);
-            place_children(dom, id, grown_box, child_clip, depth, out);
+            place_children(
+                dom,
+                id,
+                grown_box,
+                child_clip,
+                child_clip_radius,
+                depth,
+                out,
+            );
+        }
+    }
+
+    // ScrollingFrame scroll shift: applied AFTER children have resolved their sizes
+    // and layout/growth. Shifts all descendants by -CanvasPosition (clamped to scrollable range).
+    if is_scrolling_frame {
+        let final_box = content_box(dom, id, out[entry_idx].rect);
+        let canvas_pos = vector2(dom, id, "CanvasPosition");
+        let max_scroll_x = (canvas_w - final_box.w).max(0.0);
+        let max_scroll_y = (canvas_h - final_box.h).max(0.0);
+        let scroll_x = canvas_pos.x.clamp(0.0, max_scroll_x);
+        let scroll_y = canvas_pos.y.clamp(0.0, max_scroll_y);
+
+        if scroll_x != 0.0 || scroll_y != 0.0 {
+            for item in &mut out[children_from..] {
+                item.rect.x -= scroll_x;
+                item.rect.y -= scroll_y;
+            }
         }
     }
 
     report_auto(dom, id, grow_x, grow_y, did_x, did_y);
+}
+
+/// Which end of the cross axis a `UIListLayout` gathers its children against.
+///
+/// `Left` and `Top` are the same answer on different axes, and Roblox spells
+/// them differently for the two enums, so both map onto one three-way.
+#[derive(Clone, Copy, PartialEq)]
+enum CrossAlign {
+    Start,
+    Center,
+    End,
+}
+
+fn alignment_of(dom: &Dom, layout_id: usize, property: &str) -> CrossAlign {
+    let Some(Variant::Enum(raw)) = dom.property(layout_id, property) else {
+        return CrossAlign::Start;
+    };
+    match super::enums::item_by_value(property, raw.to_u32()).map(|item| item.name) {
+        Some("Center") => CrossAlign::Center,
+        Some("Right") | Some("Bottom") => CrossAlign::End,
+        // `Left`, `Top`, and anything a newer build adds that this does not know.
+        _ => CrossAlign::Start,
+    }
+}
+
+/// How far to move a placed child along the cross axis to satisfy the alignment.
+fn cross_shift(align: CrossAlign, slot_start: f32, slot_len: f32, at: f32, len: f32) -> f32 {
+    let target = match align {
+        CrossAlign::Start => slot_start,
+        CrossAlign::Center => slot_start + (slot_len - len) / 2.0,
+        CrossAlign::End => slot_start + slot_len - len,
+    };
+    target - at
 }
 
 fn place_children(
@@ -825,6 +1037,7 @@ fn place_children(
     id: usize,
     box_rect: Box2,
     child_clip: Option<Box2>,
+    child_clip_radius: f32,
     depth: usize,
     out: &mut Vec<SolvedItem>,
 ) {
@@ -838,6 +1051,9 @@ fn place_children(
             } else {
                 false
             };
+
+        let align_x = alignment_of(dom, layout_id, "HorizontalAlignment");
+        let align_y = alignment_of(dom, layout_id, "VerticalAlignment");
 
         let mut kids: Vec<(usize, i32, usize)> = Vec::new();
         for (idx, child) in dom.children(id).iter().copied().enumerate() {
@@ -870,8 +1086,53 @@ fn place_children(
                 }
             };
             let before = out.len();
-            visit(dom, child, slot, child_clip, depth + 1, true, box_rect, out);
+            visit(
+                dom,
+                child,
+                slot,
+                child_clip,
+                child_clip_radius,
+                depth + 1,
+                true,
+                box_rect,
+                out,
+            );
             if out.len() > before {
+                // ALIGNMENT SHIFTS THE RUN ON THE CROSS AXIS, after the child has
+                // resolved its own size against the full slot. Doing it before
+                // would change what a `Scale` size resolves against, which is a
+                // different behaviour wearing the same name.
+                //
+                // The host accepted `HorizontalAlignment` and `VerticalAlignment`
+                // and the solver read neither, so a centred list drew flush to
+                // the corner. Found by the gallery's differential pass.
+                let placed_rect = out[before].rect;
+                let cross = if is_horizontal {
+                    cross_shift(
+                        align_y,
+                        box_rect.y,
+                        box_rect.h,
+                        placed_rect.y,
+                        placed_rect.h,
+                    )
+                } else {
+                    cross_shift(
+                        align_x,
+                        box_rect.x,
+                        box_rect.w,
+                        placed_rect.x,
+                        placed_rect.w,
+                    )
+                };
+                if cross != 0.0 {
+                    for item in out[before..].iter_mut() {
+                        if is_horizontal {
+                            item.rect.y += cross;
+                        } else {
+                            item.rect.x += cross;
+                        }
+                    }
+                }
                 let placed_rect = out[before].rect;
                 cursor += (if is_horizontal {
                     placed_rect.w
@@ -893,6 +1154,7 @@ fn place_children(
                 child,
                 box_rect,
                 child_clip,
+                child_clip_radius,
                 depth + 1,
                 false,
                 box_rect,
@@ -905,7 +1167,7 @@ fn place_children(
 pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
     let mut out: Vec<SolvedItem> = Vec::new();
     let root_box = content_box(dom, root, surface);
-    place_children(dom, root, root_box, None, 0, &mut out);
+    place_children(dom, root, root_box, None, 0.0, 0, &mut out);
     out
 }
 
@@ -936,6 +1198,7 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
                     id: item.id,
                     rect: item.rect,
                     clip: item.clip,
+                    clip_radius: item.clip_radius,
                 },
             )
         })
@@ -1024,6 +1287,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         fill: colour(dom, id, "BackgroundColor3"),
         alpha: alpha_from(dom, id, "BackgroundTransparency"),
         radius: corner_radius(dom, id),
+        clip_radius: placed.clip_radius,
         clip: placed.clip.map(|c| Rect {
             x: c.x,
             y: c.y,
@@ -1045,6 +1309,13 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
         text_colour: colour(dom, id, "TextColor3"),
+        // TRANSPARENCY IS THE INVERSE OF ALPHA, as it is everywhere in this
+        // vocabulary: Roblox counts how see-through a thing is and the painter
+        // counts how solid it is.
+        text_alpha: 1.0
+            - number(dom, id, "TextTransparency")
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0),
         image,
     }
 }
@@ -1193,6 +1464,139 @@ mod tests {
             .write_to(&mut buffer, image::ImageFormat::Png)
             .expect("encode");
         buffer.into_inner()
+    }
+
+    /// The host accepted `TextTransparency` and the display list had nowhere to
+    /// put it, so every run painted solid. Found by the gallery's differential
+    /// pass, which reported that changing the property moved no pixels.
+    /// Roblox masks descendants against the clipping parent's `UICorner`. The
+    /// display list carried a bare rectangle, so corner pixels leaked --
+    /// milestone 3 recorded it as an observable divergence rather than fixing it.
+    #[test]
+    fn a_clipping_parent_passes_its_corner_radius_to_its_children() {
+        let f = render(
+            r#"
+            local card = Instance.new("Frame")
+            card.Size = UDim2.new(0, 120, 0, 60)
+            card.ClipsDescendants = true
+            card.Parent = root
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 14)
+            corner.Parent = card
+            local bar = Instance.new("Frame")
+            bar.Size = UDim2.new(1, 0, 0, 20)
+            bar.Parent = card
+        "#,
+            200.0,
+            100.0,
+        );
+        let bar = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.h == 20.0)
+            .expect("the titlebar is in the display list");
+        assert_eq!(
+            bar.clip_radius, 14.0,
+            "the clip radius did not reach the child"
+        );
+        // The card itself is not clipped BY itself.
+        let card = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.h == 60.0)
+            .expect("the card is in the display list");
+        assert_eq!(card.clip_radius, 0.0);
+    }
+
+    #[test]
+    fn text_transparency_reaches_the_display_list() {
+        let f = render(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(0, 100, 0, 20)
+            t.Text = "hello"
+            t.TextTransparency = 0.25
+            t.Parent = root
+        "#,
+            200.0,
+            100.0,
+        );
+        assert_eq!(f.nodes.len(), 1);
+        assert!(
+            (f.nodes[0].text_alpha - 0.75).abs() < 0.001,
+            "text_alpha was {}",
+            f.nodes[0].text_alpha
+        );
+    }
+
+    #[test]
+    fn text_with_no_transparency_is_solid() {
+        let f = render(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.Size = UDim2.new(0, 100, 0, 20)
+            t.Text = "hello"
+            t.Parent = root
+        "#,
+            200.0,
+            100.0,
+        );
+        assert_eq!(f.nodes[0].text_alpha, 1.0);
+    }
+
+    /// The solver read neither alignment enum, so a centred list drew flush to
+    /// the corner. Also found by the differential pass.
+    #[test]
+    fn a_list_layout_centres_its_children_on_the_cross_axis() {
+        let f = render(
+            r#"
+            local panel = Instance.new("Frame")
+            panel.Size = UDim2.new(0, 200, 0, 100)
+            panel.Parent = root
+            local layout = Instance.new("UIListLayout")
+            layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+            layout.Parent = panel
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(0, 100, 0, 20)
+            row.Parent = panel
+        "#,
+            200.0,
+            100.0,
+        );
+        let row = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.w == 100.0 && n.rect.h == 20.0)
+            .expect("the row is in the display list");
+        // 200 wide panel, 100 wide row, centred -> x = 50.
+        assert_eq!(row.rect.x, 50.0, "row was not centred");
+    }
+
+    #[test]
+    fn a_list_layout_defaults_to_the_start_of_the_cross_axis() {
+        let f = render(
+            r#"
+            local panel = Instance.new("Frame")
+            panel.Size = UDim2.new(0, 200, 0, 100)
+            panel.Parent = root
+            local layout = Instance.new("UIListLayout")
+            layout.Parent = panel
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(0, 100, 0, 20)
+            row.Parent = panel
+        "#,
+            200.0,
+            100.0,
+        );
+        let row = f
+            .nodes
+            .iter()
+            .find(|n| n.rect.w == 100.0 && n.rect.h == 20.0)
+            .expect("the row is in the display list");
+        assert_eq!(
+            row.rect.x, 0.0,
+            "an unset alignment should not move a child"
+        );
     }
 
     #[test]
@@ -1807,5 +2211,83 @@ mod tests {
         let prompt = f.nodes.iter().find(|n| n.name == "Prompt").expect("prompt");
         assert_eq!(prompt.text.as_deref(), Some("Jump"));
         assert_eq!(prompt.text_size, 16.0);
+    }
+
+    #[test]
+    fn scrolling_frame_clips_and_scrolls_descendants() {
+        let f = render(
+            r#"
+            local scroll = Instance.new("ScrollingFrame")
+            scroll.Name = "Scroll"
+            scroll.Position = UDim2.new(0, 10, 0, 10)
+            scroll.Size = UDim2.new(0, 100, 0, 50)
+            scroll.CanvasSize = UDim2.new(1, 0, 0, 200)
+            scroll.CanvasPosition = Vector2.new(0, 30)
+            scroll.Parent = root
+
+            local corner = Instance.new("UICorner")
+            corner.CornerRadius = UDim.new(0, 8)
+            corner.Parent = scroll
+
+            local item = Instance.new("Frame")
+            item.Name = "Item"
+            item.Size = UDim2.new(1, 0, 0, 40)
+            item.Position = UDim2.new(0, 0, 0, 10)
+            item.Parent = scroll
+        "#,
+            200.0,
+            200.0,
+        );
+        let scroll = f.nodes.iter().find(|n| n.name == "Scroll").expect("scroll");
+        assert_eq!(scroll.rect.x, 10.0);
+        assert_eq!(scroll.rect.y, 10.0);
+        assert_eq!(scroll.rect.w, 100.0);
+        assert_eq!(scroll.rect.h, 50.0);
+
+        let item = f.nodes.iter().find(|n| n.name == "Item").expect("item");
+        // Item is positioned at parent_box.y (10) + 10 = 20, then shifted by -CanvasPosition.y (30) -> 20 - 30 = -10.
+        assert_eq!(item.rect.y, -10.0);
+        // Descendants are clipped to the ScrollingFrame's rect with its corner radius
+        assert_eq!(
+            item.clip,
+            Some(dew_runtime::Rect {
+                x: 10.0,
+                y: 10.0,
+                w: 100.0,
+                h: 50.0,
+            })
+        );
+        assert_eq!(item.clip_radius, 8.0);
+    }
+
+    #[test]
+    fn scrolling_frame_automatic_canvas_size_expands() {
+        let f = render(
+            r#"
+            local scroll = Instance.new("ScrollingFrame")
+            scroll.Name = "Scroll"
+            scroll.Position = UDim2.new(0, 0, 0, 0)
+            scroll.Size = UDim2.new(0, 100, 0, 50)
+            scroll.CanvasSize = UDim2.new(1, 0, 0, 60)
+            scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+            scroll.CanvasPosition = Vector2.new(0, 50)
+            scroll.Parent = root
+
+            local item = Instance.new("Frame")
+            item.Name = "Item"
+            item.Size = UDim2.new(1, 0, 0, 40)
+            item.Position = UDim2.new(0, 0, 0, 80)
+            item.Parent = scroll
+        "#,
+            200.0,
+            200.0,
+        );
+        // Without AutomaticCanvasSize, CanvasSize height is 60 -> max scroll is 60 - 50 = 10,
+        // so CanvasPosition.Y = 50 would clamp to 10.
+        // With AutomaticCanvasSize.Y, canvas expands to item bottom (80 + 40 = 120),
+        // so max scroll is 120 - 50 = 70. CanvasPosition.Y = 50 is unclamped.
+        let item = f.nodes.iter().find(|n| n.name == "Item").expect("item");
+        // item y is 80 - 50 = 30.
+        assert_eq!(item.rect.y, 30.0);
     }
 }

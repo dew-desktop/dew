@@ -100,72 +100,21 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
     }
 }
 
-/// Install `game`, for vide's truthiness gate and for nothing else.
-///
-/// # What this is
-///
-/// `game = true`. A boolean. Not a DataModel, not a service locator, not a tree,
-/// and not something any Aether code path reads.
-///
-/// # Why anything named `game` exists on this host at all
-///
-/// vide ships twenty-three modules and seven of them open with one line:
-///
-/// ```luau
-/// local typeof = game and typeof or require "../test/mock".typeof
-/// ```
-///
-/// `game` is NOT one of the four names vide declares its host boundary in --
-/// those are `typeof`, `Instance`, `Enum` and `Color3`, and Dew installed all
-/// four long before this. It is the CONDITION those names are reached through,
-/// and it is read for truthiness alone. With `game` nil the expression never
-/// evaluates the real `typeof` however real it is: it evaluates the fallback, and
-/// the fallback is a require of `test/mock`, which the wally and pesde artifacts
-/// do not ship. Measured on this host in milestone 2's sprint 8: `create`,
-/// `apply`, `defaults`, `mount`, `cleanup`, `changed` and `lib` all failed to
-/// require, with `Instance` present. Aether's DataModel host takes four of those
-/// straight from vide, so without this line it has nothing to take.
-///
-/// It is a gate in a dependency neither this repository nor Aether's can edit.
-///
-/// # Why `true` and not something that looks more like a DataModel
-///
-/// Because every property a bigger `game` could have is one somebody would come
-/// to depend on, and ADR-001's 2026-09-04 amendment draws the bound in as many
-/// words: not a DataModel, not a service locator, and not reachable by any Aether
-/// code path. A boolean satisfies the gate and satisfies nothing else.
-///
-/// It also FAILS LOUDLY in the one direction worth failing loudly in. `typeof`
-/// answers `"boolean"`, so the vendor test this project spent four days
-/// unpicking -- `typeof(game) == "Instance"` -- still answers false here, which
-/// is the truth: Dew is not Roblox. And anything reaching for `game:GetService`
-/// gets "attempt to index boolean", at the call site, naming the line. A table
-/// with a `GetService` returning nil would be a service locator that answers
-/// every question with silence, which is the shape of failure this project keeps
-/// finding rather than a new one.
-///
-/// vide's own `lib.luau` is the demonstration: it reads
-/// `game and game:GetService("RunService").Heartbeat`, so a truthy `game` makes
-/// it error at load rather than quietly wire a frame source to nothing. Aether's
-/// `VideCore` assembles vide from its modules and never requires `lib.luau`,
-/// which is why that error is a property of this design rather than a bug in it.
-///
-/// # Why here and not beside `Instance`
-///
-/// `Instance` and the vocabulary are installed for every guest because they are
-/// the language of the platform: a guest has them on Roblox and on Dew alike, and
-/// an application that had to be handed them would not be the application that
-/// runs on both. This is not that. It is a gate ONE DEPENDENCY OF ONE RUNTIME
-/// reads, so it is installed for that runtime, at the point where that runtime's
-/// ceremony begins, and a `runtime = "datamodel"` mod never sees it.
-///
-/// That scoping is the whole safeguard. `game` was load-bearing for four days
-/// because one line in ADR-001 made it the conformance test; if anything other
-/// than vide's gate starts reading it, that is a regression of the amendment and
-/// not a convenience.
-fn install_gate(lua: &Lua) -> LuaResult<()> {
-    lua.globals().set("game", true)
-}
+// `install_gate` LIVED HERE AND IS GONE, which is the end of a four-day
+// detour worth one comment.
+//
+// vide read `game` for truthiness alone to decide whether `typeof`, `Instance`,
+// `Enum` and `Color3` were real, and fell back to a `require "../test/mock"` the
+// published artifact does not ship. So Dew installed `game = true` -- a boolean,
+// not a DataModel and not a service locator -- purely to open that gate.
+//
+// centau/vide#89 has vide guard those names on themselves, and aether#3 has
+// `VideCore.full()` mirror it by asking about `Instance`. A host supplying a
+// DataModel supplies `Instance`, so there is nothing left for the global to do.
+//
+// That closes ADR-001's amendment. `game` was dropped from step F on
+// 2026-09-04, came back the same day for this one consumer, and is now gone for
+// the reason it should always have been gone: nothing reads it.
 
 pub fn load(
     dir: &Path,
@@ -285,14 +234,7 @@ pub fn load(
         //       reactive scope and opening a session are identical for every
         //       off-engine host, so they live in Aether where the CLI gets them
         //       too.
-        //
-        //       AND `game`, WHICH IS ONE LINE AND OWES AN EXPLANATION LONGER THAN
-        //       ITSELF. See `install_gate` below: it is here rather than beside
-        //       `Instance` because it is not part of the language of the platform,
-        //       it is a gate ONE DEPENDENCY OF THIS RUNTIME reads, and a DataModel
-        //       mod -- which has no vide -- must not be given it.
         Runtime::Aether => {
-            install_gate(vm.lua()).map_err(|e| format!("{}: {e}", manifest.id))?;
             let desktop: LuaTable =
                 modules::load_entry(&vm, &aether_root.join("src/host/Desktop.luau"))
                     .and_then(|f| f.call(()))
@@ -846,13 +788,19 @@ mod tests {
         assert!(built_here, "the framework built with something else");
 
         let globals = loaded.vm.lua().globals();
-        // The gate, and what it is allowed to be. A boolean satisfies vide and
-        // satisfies nothing else; `typeof(game) == "Instance"` -- the vendor test
-        // this replaced -- still correctly answers false.
-        let gate: LuaValue = globals.get("game").expect("game");
+        // REPOINTED, NOT DELETED. This asserted `game` was a boolean `true`,
+        // which was the whole of what the gate ever was. centau/vide#89 and
+        // aether#3 removed the need for it, so the assertion turns round: the
+        // global must NOT be there.
+        //
+        // Kept as a guard rather than dropped, because `game` came back once
+        // already -- dropped from step F on 2026-09-04 and reinstated the same
+        // day -- and the next thing to reach for it should fail here rather than
+        // quietly reintroduce a sentinel nothing reads.
+        let gate: LuaValue = globals.get("game").expect("reading `game`");
         assert!(
-            matches!(gate, LuaValue::Boolean(true)),
-            "`game` must be a truthy value that is not a DataModel, got {gate:?}"
+            matches!(gate, LuaValue::Nil),
+            "`game` is not installed any more and nothing should reintroduce it, got {gate:?}"
         );
     }
 

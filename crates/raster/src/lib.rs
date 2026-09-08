@@ -320,8 +320,12 @@ pub struct Surface {
     /// Clip rectangles, innermost last. Masks are CACHED by rectangle: a screen
     /// applies 233 clips but only a handful of distinct ones, and building a
     /// full-size mask per node would cost more than the drawing.
-    clips: Vec<(i32, i32, i32, i32)>,
-    masks: HashMap<(i32, i32, i32, i32), Mask>,
+    /// Each clip is `(x, y, w, h, radius)`. The radius is part of the key
+    /// because it is part of the MASK: two clips over the same rectangle with
+    /// different corner radii are different masks, and sharing one cached under
+    /// a four-field key would paint the second with the first's corners.
+    clips: Vec<(i32, i32, i32, i32, i32)>,
+    masks: HashMap<(i32, i32, i32, i32, i32), Mask>,
     /// The DAMAGE rect for this frame: nothing outside it is repainted, and the
     /// surface keeps last frame's pixels there. `None` means the whole surface.
     damage: Option<(i32, i32, i32, i32)>,
@@ -386,11 +390,24 @@ impl Surface {
     fn clip_cuts(&self, x: f32, y: f32, w: f32, h: f32, pad: f32) -> bool {
         match self.clips.last() {
             None => false,
-            Some(&(cx, cy, cw, ch)) => {
-                !(x - pad >= cx as f32
-                    && y - pad >= cy as f32
-                    && x + w + pad <= (cx + cw) as f32
-                    && y + h + pad <= (cy + ch) as f32)
+            Some(&(cx, cy, cw, ch, cr)) => {
+                // A ROUNDED CLIP CUTS SHAPES THAT SIT INSIDE ITS RECTANGLE.
+                //
+                // Containment in the BOX stopped implying containment in the
+                // SHAPE the moment clips gained a radius: a titlebar spanning
+                // the full width of a rounded card is inside the card's
+                // rectangle and still loses its corners. Skipping the mask on
+                // the old test left the corner pixels unclipped, which is the
+                // exact divergence this radius exists to close.
+                //
+                // Inset by the radius on every side: a shape inside THAT box
+                // cannot reach any corner arc, so the mask is still safely
+                // elided for the common case.
+                let inset = cr as f32;
+                !(x - pad >= cx as f32 + inset
+                    && y - pad >= cy as f32 + inset
+                    && x + w + pad <= (cx + cw) as f32 - inset
+                    && y + h + pad <= (cy + ch) as f32 - inset)
             }
         }
     }
@@ -425,7 +442,21 @@ impl Surface {
             if let Some(rect) =
                 Rect::from_xywh(key.0 as f32, key.1 as f32, key.2 as f32, key.3 as f32)
             {
-                if let Some(path) = PathBuilder::from_rect(rect).transform(Transform::identity()) {
+                // A ROUNDED CLIP IS A ROUNDED PATH, not a rectangle with a note
+                // attached. `rounded_path` is the same builder the fills use, so
+                // a clip and the shape it clips agree about where a corner is.
+                let built = if key.4 > 0 {
+                    rounded_path(
+                        key.0 as f32,
+                        key.1 as f32,
+                        key.2 as f32,
+                        key.3 as f32,
+                        key.4 as f32,
+                    )
+                } else {
+                    Some(PathBuilder::from_rect(rect))
+                };
+                if let Some(path) = built.and_then(|p| p.transform(Transform::identity())) {
                     mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
                 }
             }
@@ -655,20 +686,23 @@ pub extern "C" fn ar_begin_rect_alpha(
         // Nothing to do, but the damage must still be recorded as empty so the
         // node loop skips everything rather than painting unclipped.
         s.damage = Some((l, t, 0, 0));
-        s.clips.push((l, t, 0, 0));
+        s.clips.push((l, t, 0, 0, 0));
         return;
     }
     let rect = (l, t, rr - l, bb - t);
+    // DAMAGE IS A RECTANGLE and stays one: it is the region the frame repaints,
+    // not a shape anything is masked to. Only the clip stack carries a radius.
     s.damage = Some(rect);
+    let clip = (rect.0, rect.1, rect.2, rect.3, 0);
     if s.which == Which::VelloCpu {
-        s.clips.push(rect);
+        s.clips.push(clip);
         vello_begin(s, r, g, b, a, Some(rect));
         return;
     }
     // The damage rect is the BASE CLIP, so every nested clip intersects with it
     // and no draw can escape the region — the same mechanism the display list
     // already uses, rather than a second one to keep in sync.
-    s.clips.push(rect);
+    s.clips.push(clip);
     if let Some(re) = Rect::from_xywh(l as f32, t as f32, (rr - l) as f32, (bb - t) as f32) {
         let mut paint = Paint::default();
         paint.set_color_rgba8(r, g, b, a);
@@ -1399,6 +1433,28 @@ pub extern "C" fn ar_draw_image(
 /// nested `ClipsDescendants` means.
 #[no_mangle]
 pub extern "C" fn ar_clip_push(ptr: *mut Surface, x: i32, y: i32, w: i32, h: i32) {
+    ar_clip_push_rounded(ptr, x, y, w, h, 0)
+}
+
+/// A clip with rounded corners.
+///
+/// SEPARATE ENTRY POINT rather than a sixth parameter on `ar_clip_push`, which
+/// callers outside this crate already use. A square clip is the overwhelmingly
+/// common case and keeps its two-argument-cheaper call.
+///
+/// Roblox masks descendants against the parent's `UICorner` radius. Dew clipped
+/// to a rectangle, so corner pixels leaked outside the rounded boundary --
+/// recorded as an observable divergence by `clips_descendants_has_no_radius` in
+/// milestone 3, and closed here.
+#[no_mangle]
+pub extern "C" fn ar_clip_push_rounded(
+    ptr: *mut Surface,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    radius: i32,
+) {
     let s = match unsafe { ptr.as_mut() } {
         Some(s) => s,
         None => return,
@@ -1410,28 +1466,33 @@ pub extern "C" fn ar_clip_push(ptr: *mut Surface, x: i32, y: i32, w: i32, h: i32
         return;
     }
     let next = match s.clips.last() {
-        Some(&(px, py, pw, ph)) => {
+        Some(&(px, py, pw, ph, pr)) => {
             let l = x.max(px);
             let t = y.max(py);
             let r = (x + w).min(px + pw);
             let b = (y + h).min(py + ph);
-            (l, t, (r - l).max(0), (b - t).max(0))
+            // THE ROUNDER OF THE TWO WINS. A clip nested inside a rounded one
+            // cannot un-round it: whatever the child asks for, the parent is
+            // still masking those corners. Taking the max keeps the intersection
+            // an intersection.
+            (l, t, (r - l).max(0), (b - t).max(0), radius.max(pr))
         }
-        None => (x, y, w.max(0), h.max(0)),
+        None => (x, y, w.max(0), h.max(0), radius.max(0)),
     };
     s.clips.push(next);
     if s.which == Which::VelloCpu {
         // The INTERSECTED rect, matching what the tiny-skia mask would be. vello
         // would intersect a raw rect with its parent anyway, so this only makes
         // the two backends provably identical in what they clip to.
-        let rect = VRect::new(
-            next.0 as f64,
-            next.1 as f64,
-            (next.0 + next.2) as f64,
-            (next.1 + next.3) as f64,
+        let path = Surface::vello_path(
+            next.0 as f32,
+            next.1 as f32,
+            next.2 as f32,
+            next.3 as f32,
+            next.4 as f32,
         );
-        if let Some(v) = s.vello.as_mut() {
-            v.ctx.push_clip_path(&rect.to_path(0.1));
+        if let (Some(v), Some(path)) = (s.vello.as_mut(), path) {
+            v.ctx.push_clip_path(&path);
             v.depth += 1;
         }
     }

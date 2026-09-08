@@ -7,15 +7,38 @@ person looks at.
 properties. That says none of them is rejected. It does not say any of them
 draws anything. This is what says that.
 
-    cargo run --bin gallery-coverage              # the number
-    cargo run --bin gallery-coverage -- --render  # write the PNGs too
-    cargo run --bin gallery-coverage -- --scenes  # every scene, by pillar
-    cargo run --bin gallery-coverage -- --missing # what nothing shows yet
+    cargo run --bin gallery-coverage               # both numbers
+    cargo run --bin gallery-coverage -- --render   # write the PNGs too
+    cargo run --bin gallery-coverage -- --scenes   # every scene, by pillar
+    cargo run --bin gallery-coverage -- --missing  # what nothing shows yet
+    cargo run --bin gallery-coverage -- --no-diff  # skip the differential pass
 
 `--render` writes to `gallery/renders/<pillar>/`, which is gitignored. Pass a
 path after it to write somewhere else. It does NOT default into `target/`:
 that belongs to cargo, and `cargo clean` deleted the whole gallery twice on the
 day this was written.
+
+## Two numbers, and the second is the one that matters
+
+    DEMONSTRATED: 32 of 139   a scene SETS the property
+    DIFFERENTIAL: 22 of 139   changing it MOVED PIXELS
+
+`DEMONSTRATED` is satisfied by a property the renderer ignores entirely: setting
+it changes nothing and nobody looks. `DIFFERENTIAL` renders the scene twice --
+once with one property changed -- and asks whether the image moved. That cannot
+be satisfied by a property that does nothing.
+
+The difference is not academic. Switching `BackgroundColor3` off in the renderer
+leaves `DEMONSTRATED` at 32 and drops `DIFFERENTIAL` from 22 to 10.
+
+**A variant that changes nothing is reported, not swallowed.** It is the most
+useful line in the report: the property reached the host and did not reach the
+pixels. Three currently do, and each is a real gap rather than a scene defect --
+`TextWrapped`, `TextTransparency` and `UIListLayout.HorizontalAlignment`.
+
+Some properties cannot move a pixel on their own -- `Name`, `Parent`, `Active`,
+`InputSink` -- and are excused in `CANNOT_DIFFER` with a stated reason. A reason,
+not a name: a bare entry is indistinguishable from something nobody got round to.
 
 ## Adding a scene
 
@@ -37,6 +60,20 @@ return {
     },
 }
 ```
+
+Add `variants` to have properties checked differentially:
+
+```luau
+    variants = {
+        { node = "Heading", prop = "TextColor3", value = { "Color3", 1, 0, 0 } },
+        { node = "Heading", prop = "TextSize", value = 32 },
+    },
+```
+
+Each one repaints the scene with that property changed on the node of that
+`name`, and compares. Choose a value that should visibly differ from the base --
+a variant that cannot show a difference reports the property as inert and is
+indistinguishable from a genuine gap.
 
 Values use the same typed encoding the conformance cases use:
 `{ "UDim2", 0, 100, 0, 48 }`, `{ "Color3", 0.3, 0.62, 0.94 }`,

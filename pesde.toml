@@ -23,8 +23,32 @@ lib = "scripts/init.luau"
 # finds whatever is on disk under `roblox_packages/.pesde/`, not what this file
 # says. A stale checkout is a mod mounting against a framework nobody edited.
 [dependencies]
-vide = { wally = "centau/vide", version = "^0.4.0" }
-aether = { repo = "project-aether-ui/aether", rev = "3ebb707f016edb698ad3ea3c5f9ca1247a1d760e" }
+# VIDE COMES FROM A FORK, one patch ahead of upstream.
+#
+# `centau/vide` guards `typeof`, `Instance`, `Enum`, `Color3` and
+# `debug.profilebegin` behind a truthiness check on `game`. None of those names
+# IS `game` -- it is the condition they are reached through, tested for
+# truthiness alone -- so an environment supplying the real globals and no `game`
+# takes a fallback that requires `test/`, which the published artifact does not
+# ship. Six of vide's modules then fail to require at all.
+#
+# centau/vide#89 guards each on what it actually uses. It is a no-op on Roblox,
+# where every one of those names is present and both forms take the same branch:
+# 122/122 before and after, measured with the Luau 0.679 binary their own
+# `unit-test.yml` downloads.
+#
+# PINNED AHEAD OF THE MERGE, DELIBERATELY. This is the shape the package is
+# expected to take, and tracking it now means Dew tests against what it is
+# ASKING FOR rather than against what it is working around. If the pull request
+# is declined the fork becomes permanent and this line does not change.
+#
+# WHAT THIS DOES NOT DO YET. `game` is still installed -- `mods.rs::install_gate`,
+# `main.rs`, and the test helper. Aether's `VideCore.full()` carries its own
+# `if not game` guard, so the global cannot go until that changes and the aether
+# pin above moves with it. The chain is written up in
+# `.artifacts/project/upstream/vide-gates-on-game.md`.
+vide = { repo = "es9-dev/vide", rev = "058c5d5bf3b5098029bf6109c564e13f7598a10b" }
+aether = { repo = "project-aether-ui/aether", rev = "3eb4cbbb0975225b000ae89643178e3332ebe967" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"

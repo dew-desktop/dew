@@ -1,4 +1,4 @@
-﻿//! Hit testing and pointer input: what makes a DataModel mod clickable.
+//! Hit testing and pointer input: what makes a DataModel mod clickable.
 //!
 //! WHAT WAS MISSING, IN ONE LINE
 //! `Renderer::pointer` had a `Renderer::DataModel { .. } => Ok(())` arm with a
@@ -52,10 +52,64 @@ use super::{signal, SharedDom};
 use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 use rbx_types::{Variant, Vector2};
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 /// Where the focus owner is stored in the Lua VM registry.
 const FOCUS: &str = "dew.datamodel.focus";
+
+/// Where the scroll velocities are stored in the Lua VM registry.
+const SCROLL_VELOCITY: &str = "dew.datamodel.scroll_velocity";
+
+/// Current scroll velocities for ScrollingFrames: (velocity, timestamp).
+#[derive(Clone, Default)]
+pub struct ScrollVelocity(Arc<Mutex<HashMap<usize, (Vector2, Instant)>>>);
+
+impl UserData for ScrollVelocity {}
+
+/// Retrieve the `ScrollVelocity` map for `lua`, creating it in the registry if not present.
+pub fn scroll_velocity_of(lua: &Lua) -> LuaResult<ScrollVelocity> {
+    if let LuaValue::UserData(ud) = lua.named_registry_value::<LuaValue>(SCROLL_VELOCITY)? {
+        if let Ok(sv) = ud.borrow::<ScrollVelocity>() {
+            return Ok(sv.clone());
+        }
+    }
+    let fresh = ScrollVelocity::default();
+    lua.set_named_registry_value(SCROLL_VELOCITY, fresh.clone())?;
+    Ok(fresh)
+}
+
+/// Retrieve the current scroll velocity of `id`, decaying towards zero over 0.25s.
+pub fn get_scroll_velocity(lua: &Lua, id: usize) -> LuaResult<Vector2> {
+    let state = scroll_velocity_of(lua)?;
+    let guard = state.0.lock().expect("scroll_velocity");
+    let Some(&(vel, time)) = guard.get(&id) else {
+        return Ok(Vector2::new(0.0, 0.0));
+    };
+    let elapsed = time.elapsed().as_secs_f32();
+    if elapsed >= 0.25 {
+        return Ok(Vector2::new(0.0, 0.0));
+    }
+    let factor = 1.0 - (elapsed / 0.25);
+    Ok(Vector2::new(vel.x * factor, vel.y * factor))
+}
+
+/// Reset the scroll velocity of `id` to zero immediately.
+pub fn reset_scroll_velocity(lua: &Lua, id: usize) -> LuaResult<()> {
+    let state = scroll_velocity_of(lua)?;
+    let mut guard = state.0.lock().expect("scroll_velocity");
+    guard.remove(&id);
+    Ok(())
+}
+
+/// Record a scroll velocity impulse on `id`.
+pub fn set_scroll_velocity(lua: &Lua, id: usize, vel: Vector2) -> LuaResult<()> {
+    let state = scroll_velocity_of(lua)?;
+    let mut guard = state.0.lock().expect("scroll_velocity");
+    guard.insert(id, (vel, Instant::now()));
+    Ok(())
+}
 
 /// Exactly one focused instance at a time.
 ///
@@ -160,12 +214,15 @@ pub fn release_focus(lua: &Lua, dom: &SharedDom, id: usize, enter_pressed: bool)
     Ok(())
 }
 
-/// Called on instance destruction to clean up focus if the destroyed node was focused.
+/// Called on instance destruction to clean up focus and scroll velocity if the destroyed node was tracked.
 pub fn on_destroy(lua: &Lua, destroyed_id: usize) {
     if let Ok(focus) = focus_of(lua) {
         if focus.get() == Some(destroyed_id) {
             focus.clear();
         }
+    }
+    if let Ok(sv) = scroll_velocity_of(lua) {
+        sv.0.lock().expect("scroll_velocity").remove(&destroyed_id);
     }
 }
 
@@ -324,8 +381,19 @@ fn flag(dom: &super::Dom, id: usize, key: &str) -> bool {
 /// rules that differ by event family, and a mod that wants a hoverable panel
 /// writes `Active = true` -- which is what a Roblox developer writes for one
 /// anyway. If this has to change, it changes here, in one function.
+fn vector2(dom: &super::Dom, id: usize, key: &str) -> Vector2 {
+    match dom.property(id, key) {
+        Some(Variant::Vector2(v)) => v,
+        _ => Vector2::new(0.0, 0.0),
+    }
+}
+
 fn sinks(dom: &super::Dom, id: usize) -> bool {
-    flag(dom, id, "Active") || dom.class_of(id).as_deref() == Some("TextBox")
+    flag(dom, id, "Active")
+        || matches!(
+            dom.class_of(id).as_deref(),
+            Some("TextBox" | "ScrollingFrame")
+        )
 }
 
 /// May this element's events fire at all?
@@ -713,8 +781,9 @@ impl Pointer {
         }
         self.at = Some((x, y));
         let mut batch = Vec::new();
+        let mut scroll_update: Option<(usize, Vector2)> = None;
         {
-            let guard = surface.dom.lock().expect("dom");
+            let mut guard = surface.dom.lock().expect("dom");
             let Some(id) = Self::aim(&guard, surface, x, y) else {
                 return Ok(());
             };
@@ -740,7 +809,79 @@ impl Pointer {
                     delta: Vector2::new(0.0, delta),
                 }),
             });
+
+            // Find nearest ScrollingFrame ancestor (or id itself)
+            let mut curr = Some(id);
+            while let Some(c) = curr {
+                if guard.class_of(c).as_deref() == Some("ScrollingFrame") {
+                    let scrolling_enabled = !matches!(
+                        guard.property(c, "ScrollingEnabled"),
+                        Some(Variant::Bool(false))
+                    );
+                    let wheel_enabled = !matches!(
+                        guard.property(c, "ScrollWheelInputEnabled"),
+                        Some(Variant::Bool(false))
+                    );
+                    if scrolling_enabled && wheel_enabled {
+                        let scroll_dir = match guard.property(c, "ScrollingDirection") {
+                            Some(Variant::Enum(raw)) => {
+                                super::enums::item_by_value("ScrollingDirection", raw.to_u32())
+                                    .map(|item| item.name)
+                                    .unwrap_or("XY")
+                            }
+                            _ => "XY",
+                        };
+                        let scroll_step = 40.0;
+                        let (dx, dy) = if scroll_dir == "X" {
+                            (-delta * scroll_step, 0.0)
+                        } else {
+                            (0.0, -delta * scroll_step)
+                        };
+
+                        let current_pos = vector2(&guard, c, "CanvasPosition");
+                        let target_pos = Vector2::new(current_pos.x + dx, current_pos.y + dy);
+
+                        let list = render::display_list(
+                            &guard,
+                            surface.root,
+                            surface.size.0,
+                            surface.size.1,
+                        );
+                        if let Some(placed) = list.iter().find(|p| p.id == c) {
+                            let own_box = render::content_box(&guard, c, placed.rect);
+                            let (canvas_w, canvas_h, frame_w, frame_h) =
+                                render::scrolling_frame_bounds(&guard, c, own_box);
+                            let max_scroll_x = (canvas_w - frame_w).max(0.0);
+                            let max_scroll_y = (canvas_h - frame_h).max(0.0);
+                            let clamped_x = target_pos.x.clamp(0.0, max_scroll_x);
+                            let clamped_y = target_pos.y.clamp(0.0, max_scroll_y);
+                            let new_pos = Vector2::new(clamped_x, clamped_y);
+
+                            if new_pos != current_pos {
+                                if let Some(node) = guard.node_mut(c) {
+                                    node.props.insert(
+                                        "CanvasPosition".to_string(),
+                                        Variant::Vector2(new_pos),
+                                    );
+                                }
+                                guard.touch();
+                                // Velocity impulse: pixels per second (assuming 0.1s wheel step)
+                                let vel = Vector2::new(dx * 10.0, dy * 10.0);
+                                scroll_update = Some((c, vel));
+                            }
+                        }
+                        break;
+                    }
+                }
+                curr = guard.parent_of(c);
+            }
         }
+
+        if let Some((sf_id, vel)) = scroll_update {
+            set_scroll_velocity(surface.lua, sf_id, vel)?;
+            signal::property_changed(surface.lua, surface.dom, sf_id, "CanvasPosition")?;
+        }
+
         Self::fire_all(surface, batch)
     }
 
@@ -1884,5 +2025,128 @@ mod tests {
         h.up(50.0, 25.0);
         h.key("Return");
         assert_eq!(h.log(), "initial+focused,initial+focused+lost");
+    }
+
+    // ── ScrollingFrame wheel input and velocity ──────────────────────────────
+
+    #[test]
+    fn wheel_scrolls_scrolling_frame_and_clamps() {
+        let mut h = Harness::new(
+            r#"
+            local sf = Instance.new("ScrollingFrame")
+            sf.Name = "Scroll"
+            sf.Size = UDim2.new(0, 100, 0, 50)
+            sf.CanvasSize = UDim2.new(0, 0, 0, 150)
+            sf.Parent = root
+        "#,
+        );
+        // ScrollingFrame 100x50, canvas 150 tall -> max_scroll_y is 100.
+        // Delta -1.0 is scrolling down, which moves CanvasPosition.Y by +40.0.
+        h.wheel(50.0, 25.0, -1.0);
+        let pos1: (f32, f32) =
+            h.eval("return root.Scroll.CanvasPosition.X, root.Scroll.CanvasPosition.Y");
+        assert_eq!(pos1, (0.0, 40.0));
+
+        // Scroll down again: 40 + 40 = 80.
+        h.wheel(50.0, 25.0, -1.0);
+        let pos2: (f32, f32) =
+            h.eval("return root.Scroll.CanvasPosition.X, root.Scroll.CanvasPosition.Y");
+        assert_eq!(pos2, (0.0, 80.0));
+
+        // Scroll down again: 80 + 40 = 120, clamped to max_scroll_y = 100.
+        h.wheel(50.0, 25.0, -1.0);
+        let pos3: (f32, f32) =
+            h.eval("return root.Scroll.CanvasPosition.X, root.Scroll.CanvasPosition.Y");
+        assert_eq!(pos3, (0.0, 100.0));
+
+        // Scroll up (+1.0): 100 - 40 = 60.
+        h.wheel(50.0, 25.0, 1.0);
+        let pos4: (f32, f32) =
+            h.eval("return root.Scroll.CanvasPosition.X, root.Scroll.CanvasPosition.Y");
+        assert_eq!(pos4, (0.0, 60.0));
+
+        // Scroll up twice more: 60 - 40 - 40 = -20, clamped to 0.
+        h.wheel(50.0, 25.0, 1.0);
+        h.wheel(50.0, 25.0, 1.0);
+        let pos5: (f32, f32) =
+            h.eval("return root.Scroll.CanvasPosition.X, root.Scroll.CanvasPosition.Y");
+        assert_eq!(pos5, (0.0, 0.0));
+    }
+
+    #[test]
+    fn scrolling_enabled_false_suppresses_wheel_scrolling() {
+        let mut h = Harness::new(
+            r#"
+            local sf = Instance.new("ScrollingFrame")
+            sf.Name = "Scroll"
+            sf.Size = UDim2.new(0, 100, 0, 50)
+            sf.CanvasSize = UDim2.new(0, 0, 0, 150)
+            sf.ScrollingEnabled = false
+            sf.Parent = root
+        "#,
+        );
+        h.wheel(50.0, 25.0, -1.0);
+        let pos: (f32, f32) =
+            h.eval("return root.Scroll.CanvasPosition.X, root.Scroll.CanvasPosition.Y");
+        assert_eq!(pos, (0.0, 0.0));
+    }
+
+    #[test]
+    fn scroll_velocity_observes_impulse_and_resets() {
+        let mut h = Harness::new(
+            r#"
+            local sf = Instance.new("ScrollingFrame")
+            sf.Name = "Scroll"
+            sf.Size = UDim2.new(0, 100, 0, 50)
+            sf.CanvasSize = UDim2.new(0, 0, 0, 200)
+            sf.Parent = root
+        "#,
+        );
+        // Before wheel: velocity is 0
+        let vel0: (f32, f32) = h.eval("local v = root.Scroll:GetScrollVelocity() return v.X, v.Y");
+        assert_eq!(vel0, (0.0, 0.0));
+
+        // Wheel down: velocity becomes non-zero
+        h.wheel(50.0, 25.0, -1.0);
+        let vel1: (f32, f32) = h.eval("local v = root.Scroll:GetScrollVelocity() return v.X, v.Y");
+        assert!(
+            vel1.1 > 0.0,
+            "expected positive Y velocity after wheeling down, got {:?}",
+            vel1
+        );
+
+        // ResetScrollVelocity: clears back to (0, 0)
+        h.eval::<()>("root.Scroll:ResetScrollVelocity()");
+        let vel2: (f32, f32) = h.eval("local v = root.Scroll:GetScrollVelocity() return v.X, v.Y");
+        assert_eq!(vel2, (0.0, 0.0));
+    }
+
+    #[test]
+    fn wheel_deadlock_witness_property_changed_mutates_tree() {
+        // DEADLOCK WITNESS: CanvasPosition change listener mutates DOM under dispatch.
+        // If dom.lock() is held when property_changed or signals fire, this will hang/deadlock.
+        let mut h = Harness::new(
+            r#"
+            local sf = Instance.new("ScrollingFrame")
+            sf.Name = "Scroll"
+            sf.Size = UDim2.new(0, 100, 0, 50)
+            sf.CanvasSize = UDim2.new(0, 0, 0, 200)
+            sf.Parent = root
+
+            local label = Instance.new("TextLabel")
+            label.Name = "Status"
+            label.Text = "none"
+            label.Parent = root
+
+            sf:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
+                -- Mutate the tree inside the signal handler:
+                label.Text = `scrolled:{sf.CanvasPosition.Y}`
+                table.insert(log, label.Text)
+            end)
+        "#,
+        );
+        h.wheel(50.0, 25.0, -1.0);
+        assert_eq!(h.log(), "scrolled:40");
+        assert_eq!(h.eval::<String>("return root.Status.Text"), "scrolled:40");
     }
 }

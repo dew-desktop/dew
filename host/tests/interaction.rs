@@ -12,12 +12,18 @@ use dew_runtime::{Application, Capabilities, Pointer};
 use mlua::Function;
 use std::path::PathBuf;
 
+mod common;
+
 /// Aether's checkout, and it is no longer a directory above this crate.
 ///
 /// This read `CARGO_MANIFEST_DIR/../..` while the crate lived in Aether's
 /// repository, where that WAS the framework. ADR-004 moved the crate to Dew and
 /// `../..` is now Dew's own root, so the framework is found where every other
 /// guest package is found: the pesde install, pinned by commit in `pesde.toml`.
+// THE FIXTURES STAYED IN `crates/runtime/tests`, with `render.rs`, which has not
+// moved. See this suite's header: `render.rs` asserts on PIXELS and installing a
+// DataModel changes which Aether host `detect()` selects, so moving it is not a
+// relocation but a behaviour change. It is filed rather than forced.
 fn aether_root() -> PathBuf {
     dew_runtime::installed_package("aether")
         .expect("no installed aether — run `pesde install` at the repository root")
@@ -46,7 +52,7 @@ fn caps() -> Capabilities {
 
 fn app() -> Application {
     let entry = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pressable.luau");
-    Application::load(caps(), &entry).expect("fixture loads")
+    Application::load_with(caps(), &entry, common::install_host).expect("fixture loads")
 }
 
 /// The button occupies (20,20)-(120,60); this is its middle.
