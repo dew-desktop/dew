@@ -20,7 +20,24 @@
 use mlua::luau::{FsRequirer, NavigateError, Require};
 use mlua::prelude::*;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// The directory an `init` chunk stands for, if that is what this name is.
+///
+/// Returns the chunk name rewritten to name the directory instead, `@` and all.
+/// `None` for every other chunk, including a bare `@init` with no parent to
+/// stand in for it.
+fn init_module_dir(chunk_name: &str) -> Option<String> {
+    let path = Path::new(chunk_name.strip_prefix('@')?);
+    if path.file_stem()? != "init" {
+        return None;
+    }
+    let parent = path.parent()?;
+    if parent.as_os_str().is_empty() {
+        return None;
+    }
+    Some(format!("@{}", parent.display()))
+}
 
 pub struct HostRequirer {
     inner: FsRequirer,
@@ -42,8 +59,42 @@ impl Require for HostRequirer {
         self.inner.is_require_allowed(chunk_name)
     }
 
+    /// AN `init` CHUNK IS ITS DIRECTORY, and that is what `@self` needs.
+    ///
+    /// Luau resolves `@self/x` by resetting to the requiring module and then
+    /// descending -- with no step to the parent, unlike `./x`, which resets, goes
+    /// up, then descends. That is only coherent for an `init.luau`, because an
+    /// `init.luau` IS its directory: `@self/lib` inside `pkg/init.luau` is
+    /// `pkg/lib`. It is how a package reaches its own files without knowing what
+    /// its directory is called, and vide's entry point is the first thing Dew
+    /// loads that uses it.
+    ///
+    /// `FsRequirer` agrees with that model everywhere except here. Its `loader`
+    /// names a required `init.luau` after the DIRECTORY, so a package required by
+    /// alias or by path gets `@.../pkg` and resolves `@self` correctly today.
+    /// Only an entry point is named by us, in `modules::load_entry`, and that
+    /// name is `@.../pkg/init` -- which `FsRequirer::resolve_module` refuses,
+    /// because a path whose last component is `init` is never searched as a file
+    /// and `.../pkg/init` is not a directory. The refusal surfaces as "could not
+    /// reset to requiring context", naming the module that was asked for rather
+    /// than the chunk asking.
+    ///
+    /// WHY OURS AND NOT MLUA'S. The name `FsRequirer` cannot handle is one it
+    /// would never produce; we produce it, by loading a package's `init.luau`
+    /// directly as an entry point rather than reaching it through a require. The
+    /// mismatch is between two of Dew's own choices, so it is fixed here.
+    ///
+    /// The inner reset is tried FIRST and this is a fallback, so a directory
+    /// genuinely named `init` keeps resolving to itself. Nothing that works today
+    /// takes this path.
     fn reset(&mut self, chunk_name: &str) -> Result<(), NavigateError> {
-        self.inner.reset(chunk_name)
+        match self.inner.reset(chunk_name) {
+            Err(NavigateError::NotFound) => match init_module_dir(chunk_name) {
+                Some(dir) => self.inner.reset(&dir),
+                None => Err(NavigateError::NotFound),
+            },
+            other => other,
+        }
     }
 
     fn jump_to_alias(&mut self, path: &str) -> Result<(), NavigateError> {
