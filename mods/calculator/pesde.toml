@@ -9,7 +9,12 @@ environment = "roblox"
 lib = "calculator.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "da4e5a8a2bd2929c943790fb48148b3e4bc61dd0" }
+aether = { repo = "project-aether-ui/aether", rev = "e824dc104c44e70c2182f4b604a025885a80f52f" }
+
+# AETHER DECLARES VIDE AS A PEER, so the application chooses the copy. One vide
+# per process: two would mean a source made against one graph is invisible to an
+# effect on the other.
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"
