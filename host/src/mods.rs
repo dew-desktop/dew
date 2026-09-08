@@ -508,6 +508,38 @@ mod tests {
         }
     }
 
+    /// THE ISOLATION IS ASSERTED, NOT ASSUMED.
+    ///
+    /// Before milestone 6 the host granted every mod Aether's source directory
+    /// as a second require root and injected `@aether` and `@vide`. A mod that
+    /// forgot to declare a dependency worked anyway, which is why no mod had a
+    /// manifest for two years.
+    ///
+    /// The failure has to name the alias. "attempt to index nil" from three
+    /// requires deeper is the same bug with a worse error, and it is what a mod
+    /// author sees if this ever regresses.
+    #[test]
+    fn a_mod_cannot_reach_a_framework_it_did_not_declare() {
+        let fixture = Fixture::new(
+            "undeclared",
+            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            r#"
+                local Aether = require("@aether/api")
+                return { id = "plain", size = { width = 10, height = 10 } }
+            "#,
+        );
+
+        let err = match fixture.load() {
+            Err(e) => e,
+            Ok(_) => panic!("a mod reaching for an undeclared framework must not load"),
+        };
+
+        assert!(
+            err.contains("@aether"),
+            "the failure should name the alias the mod asked for, got: {err}"
+        );
+    }
+
     impl Drop for Fixture {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
