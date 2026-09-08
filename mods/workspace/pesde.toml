@@ -9,7 +9,7 @@ environment = "roblox"
 lib = "workspace.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "e824dc104c44e70c2182f4b604a025885a80f52f" }
+aether = { repo = "project-aether-ui/aether", rev = "5c44eb469601bda06e0b366e41c938f718b1cd32" }
 
 # AETHER DECLARES VIDE AS A PEER, so the application chooses the copy. One vide
 # per process: two would mean a source made against one graph is invisible to an
