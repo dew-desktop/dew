@@ -266,6 +266,35 @@ if #retiring > 0 then
 	)
 end
 
+--- THE HOST DECLARES NO FRAMEWORK, and this is what keeps that true.
+---
+--- Milestone 6 emptied `[dependencies]`: a mod declares Aether and vide in its
+--- own manifest and reaches them through the redirect pesde writes beside it, so
+--- nothing Dew ships needs a framework. Both stayed on as DEV dependencies,
+--- because Dew tests against them and `dew test` reads suites out of a checkout.
+---
+--- The pressure this resists is an application in the monorepo -- a demo, a
+--- sample, a scratch app -- finding it convenient to add its dependency at the
+--- root rather than carry its own manifest. That is one line, it works
+--- immediately, and it silently re-couples the host to a guest framework.
+--- ADR-008 puts the framework demo in this repository on exactly that condition.
+local manifest = fs.readFile("pesde.toml")
+local deps = string.match(manifest, "\n%[dependencies%]\n(.-)\n%[")
+if deps then
+	for line in string.gmatch(deps, "[^\n]+") do
+		local trimmed = string.gsub(line, "^%s+", "")
+		if trimmed ~= "" and string.sub(trimmed, 1, 1) ~= "#" then
+			local name = string.match(trimmed, "^([%w_%-]+)%s*=") or trimmed
+			fail(
+				`pesde.toml declares '{name}' under [dependencies]. The host ships no `
+					.. "framework: an application that needs one carries its own manifest, the "
+					.. "way mods/*/pesde.toml do. Move it to [dev_dependencies] if Dew's own "
+					.. "tests need it."
+			)
+		end
+	end
+end
+
 table.sort(outstanding)
 
 print(`boundaries: {#outstanding} known violation(s) still to migrate`)
