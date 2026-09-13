@@ -1,4 +1,4 @@
-﻿//! 💧 Dew — a desktop applet platform.
+//! 💧 Dew — a desktop applet platform.
 //!
 //! WHAT IS NOT IN THIS CRATE, and deliberately: text measurement,
 //! rasterisation, the Luau VM, and the frame loop. Those are in `crates/raster`,
@@ -1020,10 +1020,42 @@ fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
     }
 
     match wanted {
-        Some(id) => loaded
-            .into_iter()
-            .find(|m| m.manifest.id == id)
-            .ok_or_else(|| format!("no mod with id {id:?}")),
+        Some(id) => {
+            // `--mod` TAKES AN ID, AND A PATH IS WHAT PEOPLE TRY FIRST.
+            //
+            // Shell completion offers `mods/nameplate/` and the flag reads like it
+            // wants one, so `--mod ./mods/nameplate/` is the natural first guess.
+            // It failed with `no mod with id ".\mods\nameplate\\"`, which
+            // names the mistake without saying what to type instead -- and for a
+            // directory that IS a mod, the id is sitting right there in its
+            // manifest.
+            let looks_like_a_path = id.contains('/') || id.contains('\\') || id.starts_with('.');
+            let ids: Vec<&str> = loaded.iter().map(|m| m.manifest.id.as_str()).collect();
+
+            if let Some(found) = loaded.iter().position(|m| m.manifest.id == id) {
+                return Ok(loaded.into_iter().nth(found).expect("found"));
+            }
+
+            if looks_like_a_path {
+                let leaf = id
+                    .trim_end_matches(['/', '\\'])
+                    .rsplit(['/', '\\'])
+                    .next()
+                    .unwrap_or(&id);
+                if let Some(m) = loaded.iter().find(|m| m.manifest.id == leaf) {
+                    return Err(format!(
+                        "--mod takes an id, not a path. That directory's mod is {:?}, so: --mod {}",
+                        m.manifest.id, m.manifest.id
+                    ));
+                }
+                return Err(format!(
+                    "--mod takes an id, not a path, and nothing loaded from {id:?}. Loaded: {}",
+                    ids.join(", ")
+                ));
+            }
+
+            Err(format!("no mod with id {id:?}. Loaded: {}", ids.join(", ")))
+        }
         None => {
             let mut sorted = loaded;
             sorted.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
