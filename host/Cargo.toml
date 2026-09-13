@@ -4,7 +4,10 @@ version = "0.1.0"
 description = "Dew: the desktop applet platform — mods, capabilities, hotkeys and windows over its own DataModel"
 authors = ["Dew Team"]
 edition = "2021"
-license = "GPL-3.0-only"
+# PolyForm Shield 1.0.0 -- see ADR-011. `license-file` rather than `license`
+# because PolyForm is not an SPDX identifier, and a made-up one would fail
+# validation on any tool that checks.
+license-file = "../LICENSE"
 
 # `cargo run` with no --bin runs dew. Adding secondary binaries made that
 # ambiguous and cargo refused, which is correct of cargo and surprising for

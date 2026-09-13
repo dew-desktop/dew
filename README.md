@@ -106,7 +106,21 @@ is branched, written and landed.
 
 ## License
 
-[GPL-3.0](LICENSE).
+**[PolyForm Shield 1.0.0](LICENSE)** for the client and everything under
+`host/` and `crates/`. Source available: read it, build it, change it, use it for
+anything -- except providing a product that competes with Dew or with the services
+Dew provides. That covers the marketplace, accounts and the web companion.
+
+**[MIT](docs/LICENSE)** for the specification documents in `docs/`. The DataModel
+standard is worth nothing unless other implementations can adopt it, so the
+noncompete does not reach it. The conformance cases that verify it live in
+[Aether](https://github.com/project-aether-ui/aether) and are MIT there.
+
+Contributions require agreeing to the [CLA](CLA.md), which keeps future licensing
+decisions available rather than requiring every contributor's permission.
+
+The reasoning for all of the above, including what is expected to change as the
+platform is established, is in `adr-011`.
 
 Widgets are not covered by it. A widget is an interpreted Luau file loaded at
 runtime into its own sandboxed VM, given a table of host functions and nothing

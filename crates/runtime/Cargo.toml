@@ -3,7 +3,7 @@ name = "dew_runtime"
 version = "0.0.1"
 edition = "2021"
 description = "Rust-owned host runtime for Aether: an embedded Luau guest, driven frame by frame"
-license = "MIT"
+license-file = "../../LICENSE"
 
 # THE INVERSION, IN ONE DEPENDENCY LIST.
 #

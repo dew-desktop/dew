@@ -3,7 +3,7 @@ name = "dew_window"
 version = "0.0.1"
 edition = "2021"
 description = "A native window and message pump for Aether's off-engine hosts"
-license = "MIT"
+license-file = "../../LICENSE"
 
 # NO RASTERISER AND NO LUAU. This crate opens a window, reports input, and blits
 # a buffer of bytes. It does not know what produced them, which is what lets the
