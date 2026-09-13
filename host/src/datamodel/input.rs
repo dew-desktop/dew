@@ -278,7 +278,7 @@ impl Button {
 /// `Position` IS A `Vector2` HERE AND A `Vector3` ON THE ENGINE, and that is a
 /// stated departure rather than an oversight. `vocabulary` deliberately carries
 /// no `Vector3`: the comment there says this standard is 2D UI and a host
-/// implementing `CFrame` would be describing Roblox rather than describing a UI.
+/// implementing `CFrame` would be describing the engine rather than describing a UI.
 /// The engine's third component is the wheel delta, which arrives on this type as
 /// `Delta` in the one case it is not zero -- so nothing is lost except the shape,
 /// and inventing a `Vector3` for one field's third slot would be the larger
@@ -364,7 +364,7 @@ fn flag(dom: &super::Dom, id: usize, key: &str) -> bool {
 /// defaults are the argument for it. `Frame` and `TextLabel` ship
 /// `Active = false`; `TextButton` and `ImageButton` ship `Active = true`; all
 /// four ship `Interactable = true`. Under this rule a `TextLabel` laid over a
-/// `TextButton` does not steal the click, which is the behaviour every Roblox
+/// `TextButton` does not steal the click, which is the behaviour every the engine
 /// application is already written against and the thing a hit test that took the
 /// topmost drawn element unconditionally would break on its first label. Any
 /// other reading of `Active` makes those four defaults arbitrary.
@@ -379,7 +379,7 @@ fn flag(dom: &super::Dom, id: usize, key: &str) -> bool {
 /// because such a frame is not a hit candidate at all. One rule covering pointer
 /// and click alike is worth more to a host being written from scratch than two
 /// rules that differ by event family, and a mod that wants a hoverable panel
-/// writes `Active = true` -- which is what a Roblox developer writes for one
+/// writes `Active = true` -- which is what an engine developer writes for one
 /// anyway. If this has to change, it changes here, in one function.
 fn vector2(dom: &super::Dom, id: usize, key: &str) -> Vector2 {
     match dom.property(id, key) {
@@ -1345,7 +1345,7 @@ mod tests {
             b.Size = UDim2.new(0, 100, 0, 100)
             b.Parent = root
             -- Drawn over the button, and NOT setting Active: a TextLabel ships
-            -- Active = false, which is why every Roblox button survives having a
+            -- Active = false, which is why every the engine button survives having a
             -- caption laid on top of it.
             local caption = Instance.new("TextLabel")
             caption.Name = "Caption"
@@ -1382,7 +1382,7 @@ mod tests {
         );
         // A `Frame` SHIPS `Active = false`, so it is not a hit candidate, and a
         // mod that wants a hoverable or clickable panel writes `Active = true` --
-        // which is what a Roblox developer writes for one anyway. The departure
+        // which is what an engine developer writes for one anyway. The departure
         // this costs is recorded on `input::sinks`.
         assert_eq!(h.hit_at(50.0, 50.0), None);
         assert_eq!(h.hit_at(150.0, 50.0).as_deref(), Some("Panel"));

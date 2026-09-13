@@ -1,8 +1,12 @@
 # Dew
 
-A desktop applet platform. Widgets are written in Luau and run on
-[Aether](https://github.com/project-aether-ui/aether), the same UI framework they
-would run on inside Roblox.
+A desktop applet platform. Applets are small Luau programs -- a clock, a tracker,
+a dashboard, a utility -- that run in a sandboxed host and are drawn natively.
+
+Each applet declares what it may touch and gets nothing else. It brings its own UI
+framework rather than being handed one, installs its own dependencies, and is
+rendered by Dew's own rasteriser against a DataModel-shaped object model that the
+host implements to a written standard.
 
 ## Running it
 
@@ -68,16 +72,16 @@ return {
 }
 ```
 
-No `require`, nothing imported, and every line of it would build the same tree
-inside Roblox. [`applets/nameplate`](applets/nameplate/) is the whole example. The
-runtime is declared rather than detected, and everything else -- discovery, the
-manifest, capabilities, the surface -- is identical either way.
+No `require`, nothing imported, and every line of it builds the same tree on any
+host implementing the standard. [`applets/nameplate`](applets/nameplate/) is the
+whole example. Everything around it -- discovery, the manifest, capabilities, the
+surface -- is identical either way.
 
-What "the same tree inside Roblox" means precisely is the DataModel Standard, and
-it is written down in two halves.
+What "the same tree on any conforming host" means precisely is the DataModel
+Standard, and it is written down in two halves.
 [docs/datamodel_scope.md](docs/datamodel_scope.md) is what a host must ACCEPT --
-classes, properties, members -- and is generated from the engine's own reflection
-database. [docs/host_services.md](docs/host_services.md) is what a host must be
+classes, properties, members -- and is generated rather than
+hand-written. [docs/host_services.md](docs/host_services.md) is what a host must be
 able to DO: measure a string synchronously, and hand out a frame subscription.
 Neither of those two is a member of any class, which is why they have a document
 of their own rather than a hand-written appendix to a generated one.
@@ -124,9 +128,14 @@ platform is established, is in `adr-011`.
 
 Widgets are not covered by it. A widget is an interpreted Luau file loaded at
 runtime into its own sandboxed VM, given a table of host functions and nothing
-else; it never links against Dew and never touches Dew's own code. Roblox does
-the same thing at far greater scale, shipping CorePackages into every game's
-runtime beside the game's own scripts.
+else; it never links against Dew and never touches Dew's own code. That is the
+ordinary arrangement for an interpreted plugin in a sandbox, and it is why an
+applet's licence is entirely its author's own.
 
 Widgets build on [Aether](https://github.com/project-aether-ui/aether), which is
 MIT, and stay entirely their authors' own.
+
+## Notices
+
+Dew is an independent project, not affiliated with or endorsed by Roblox
+Corporation. See [NOTICE](NOTICE).

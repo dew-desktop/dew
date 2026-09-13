@@ -77,7 +77,7 @@ impl RasterPainter {
 
 /// The alpha ramp sampled at a colour stop's position, so the two ramps of one
 /// gradient combine instead of one overwriting the other. Linear between the
-/// bracketing stops, which is what both Roblox and the ABI do.
+/// bracketing stops, which is what both the engine and the ABI do.
 fn alpha_at(stops: &[crate::frame::AlphaStop], at: f32) -> Option<f32> {
     if stops.is_empty() {
         return None;
@@ -162,7 +162,7 @@ impl Painter for RasterPainter {
         let size = node.text_size;
 
         // ALIGNMENT IS APPLIED HERE AND NOWHERE ELSE. The display list carries
-        // the resolved alignment — including Roblox's centre default for an unset
+        // the resolved alignment — including the engine's centre default for an unset
         // one — so this positions the run and never re-decides what it should be.
         let width = font.width(size, text).unwrap_or(0.0);
         let x = match node.text_align_x.unwrap_or(Align::Center) {

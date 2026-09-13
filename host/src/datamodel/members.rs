@@ -1139,7 +1139,7 @@ mod tests {
 
     #[test]
     fn a_destroyed_handle_cannot_be_destroyed_again() {
-        // A DIVERGENCE FROM THE ENGINE, TAKEN KNOWINGLY. Roblox leaves the
+        // A DIVERGENCE FROM THE ENGINE, TAKEN KNOWINGLY. The engine leaves the
         // instance in existence -- parented to nil and locked -- so a second
         // `Destroy` is a no-op. Dew frees the slot, and the rule that follows from
         // that is one rule: every access through a handle whose slot is gone says

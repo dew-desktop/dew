@@ -78,7 +78,7 @@ global, because what an applet may draw into is granted to it in the same way as
 it may do. The root is a `ScreenGui` named `DewRoot` -- **not `game`**, which is
 what `Host.detect()` keys on (`typeof(game) == "Instance"`); installing one before
 the services and the member surface exist would flip every Aether mod in the same
-binary onto the Roblox branch. That name arrives when there is enough behind it to
+binary onto its engine branch. That name arrives when there is enough behind it to
 be true.
 
 **No vocabulary for an Aether mod, deliberately.** Aether carries its own `UDim2`
@@ -133,7 +133,7 @@ It returns a tree; it is not a per-frame `render`.
 The old `render` was called every frame and rebuilt the tree from scratch. Mods
 declared `source` and `derive` correctly and then discarded the result each
 frame, so the reactive graph was decorative and the rebuild did the work. That is
-slower, and it diverges from Roblox -- where a mounted tree persists and the graph
+slower, and it diverges from the reference implementation -- where a mounted tree persists and the graph
 drives property updates.
 
 Under `mount`, a `source` written from a hotkey or a timer reaches the screen the
@@ -143,11 +143,11 @@ which is the property the whole stack exists to preserve.
 
 ## An Aether applet authors in Aether's own idiom
 
-`create`, `source`, `derive`, and Roblox's property vocabulary -- `UDim2`,
+`create`, `source`, `derive`, and the reference implementation's property vocabulary -- `UDim2`,
 `Color3`, `BackgroundTransparency`. Not a Dew dialect.
 
 This is what keeps a widget's visual half **liftable**: the tree an applet builds is
-an ordinary Aether component, so it can be mounted in a Roblox place unchanged,
+an ordinary Aether component, so it can be mounted on a conforming engine host unchanged,
 or previewed with `aether snapshot`. A Dew-specific construction API would make
 every widget a dead end.
 
@@ -155,7 +155,7 @@ Dew's own additions are capabilities and lifecycle, not construction.
 
 The same argument is why a `"datamodel"` applet authors in the engine's idiom rather
 than a host one: `Instance.new`, property assignment and `Parent` are what a
-Roblox developer already knows, and `applets/nameplate` would build the identical
+an engine developer already knows, and `applets/nameplate` would build the identical
 tree inside a place. Neither flavour is a Dew dialect; they are the two idioms
 that already exist.
 
@@ -172,7 +172,7 @@ engine has one path to keep correct.
 
 ## A mod's images live beside it, under `mod://`
 
-An `ImageLabel` or an `ImageButton` names an asset the way a Roblox application
+An `ImageLabel` or an `ImageButton` names an asset the way an engine application
 does, with either generation of the property:
 
 ```luau
@@ -222,7 +222,7 @@ rather than as nothing at all.
 
 That last part is deliberate. A blank space is indistinguishable from an element
 that was never created, was positioned off-screen, or was made invisible, and an
-author would check all three before suspecting the asset. A Roblox application
+author would check all three before suspecting the asset. An engine application
 moved to Dew with an asset it cannot reach is a correct application missing an
 image, not a broken one.
 
@@ -336,9 +336,9 @@ appearing in it.
 
 **THE BOTTOM FOUR ROWS ARE ALL DEW.** They used to be one row and three crates
 borrowed from Aether's repository, and this section said "when something here
-needs a rendering change, it belongs upstream in Aether, where the Roblox host
+needs a rendering change, it belongs upstream in Aether, where the engine host
 gets it too". That was wrong, and it was the sentence that made adding an image
 node to the display list look like changing a public framework contract. It is a
 host editing its own renderer. ADR-004 measured it and moved the crates; a
-rendering change belongs in `crates/`, and a Roblox author never sees it because
+rendering change belongs in `crates/`, and an engine-side author never sees it because
 they never had it.

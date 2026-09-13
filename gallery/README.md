@@ -117,7 +117,7 @@ A scene carries no `provenance`, no `verifiedAgainst`, no `expect` and no
 `pixels`, and `decode_scene` REFUSES a file carrying any of them rather than
 ignoring it.
 
-A scene asserts nothing about Roblox. It shows what this host draws. If a file
+A scene asserts nothing about the engine. It shows what this host draws. If a file
 wants to state a belief about engine behaviour it is a conformance case and
 belongs in `aether/conformance/cases`.
 

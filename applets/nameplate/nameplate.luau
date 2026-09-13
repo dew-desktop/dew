@@ -9,7 +9,7 @@
 	tree the framework owns, and the host drives them through a `Session`. This
 	file has no `require` line. It builds instances, sets properties, parents them
 	into the root it was handed, and returns — which is exactly what the same code
-	would do inside Roblox.
+	would do inside the engine.
 
 	IT IS A MOD, NOT A SCRIPT, and that is the whole point of this sprint.
 	`examples/standalone/app.luau` already proved the DataModel reaches a pixel,
@@ -249,7 +249,7 @@ return {
 		--- `card.Active = true` is that line. A `Frame` ships `Active = false` and is
 		--- therefore not a hit candidate at all — the same default that stops a
 		--- `TextLabel` stealing a click from the button underneath it. An applet that
-		--- wants a hoverable panel says so, which is what a Roblox developer writes
+		--- wants a hoverable panel says so, which is what an engine developer writes
 		--- for one anyway.
 		card.Active = true
 		card.MouseEnter:Connect(function()

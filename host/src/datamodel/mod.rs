@@ -1,7 +1,7 @@
 //! The host-owned DataModel: instances, the tree, and property validation.
 //!
 //! WHY THIS EXISTS
-//! Dew is its own product. A developer arriving from Roblox writes Luau against
+//! Dew is its own product. A developer arriving from the engine writes Luau against
 //! a DataModel, and that experience is the whole promise -- so Dew has to provide
 //! one rather than require Aether. Aether is a headless framework that runs on
 //! top of a host, the way Ark UI runs on top of a DOM; it is a consumer of what
@@ -324,7 +324,7 @@ impl Dom {
     /// That costs one `Option` per destroyed node and buys the guarantee that
     /// makes handles safe to hold.
     ///
-    /// DESCENDANTS GO TOO. Roblox destroys the subtree, and leaving children in
+    /// DESCENDANTS GO TOO. The engine destroys the subtree, and leaving children in
     /// the arena would strand a set of nodes with a parent id pointing at an
     /// empty slot -- reachable from nothing, freed by nothing.
     ///
@@ -428,7 +428,7 @@ fn describe(class: &str, property: &str) -> Option<&'static PropertyDescriptor<'
             }
             cursor = current.superclass;
         } else if c == "InputActionLabel" {
-            // InputActionLabel is introduced in Roblox 0.736 and is not yet in
+            // InputActionLabel is introduced in the engine 0.736 and is not yet in
             // rbx_reflection_database 0.728. It inherits from GuiObject and declares
             // text and image properties matching TextLabel and ImageLabel.
             if property == "InputAction" {
@@ -574,7 +574,7 @@ pub(crate) fn whole_i32(value: f64, what: &str) -> LuaResult<i32> {
 /// in the face that will draw it -- travelling through Aether's layout solver
 /// into `Host.SetBounds`. Text metrics are fractional by nature, so a host that
 /// refuses a fractional offset cannot be told the result of laying out text; the
-/// mod that hit it renders in Roblox and could not mount here.
+/// mod that hit it renders in the engine and could not mount here.
 ///
 /// The original argument is not wrong about authors, and it is not what this
 /// function is for: it was written about a guest typing `10.7` into a literal,
@@ -926,7 +926,7 @@ pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> Lua
 impl UserData for InstanceRef {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         // `typeof(instance) == "Instance"` IS THE CONFORMANCE TEST, not a nicety.
-        // Aether picks its host with `RobloxHost.available()`, which is exactly
+        // Aether picks its host with `the engineHost.available()`, which is exactly
         // `typeof(game) == "Instance"` -- so a faithful DataModel here means
         // Aether's existing host runs on Dew unmodified, with no Dew branch and
         // no adapter.
@@ -1010,7 +1010,7 @@ impl UserData for InstanceRef {
             // whether the value was assigned or defaulted.
             //
             // NOT FOUND IS AN ERROR, NOT NIL. Reading a misspelled property on
-            // the engine is an error, and a host that answered nil would let a
+            // The engine is an error, and a host that answered nil would let a
             // typo travel silently into layout -- the exact failure the
             // reflection database was brought in to prevent.
             let Some(descriptor) = describe(&node.class, &key) else {
@@ -1121,7 +1121,7 @@ impl UserData for InstanceRef {
                             }
                         };
                         if let Some(parent) = new_parent {
-                            // A CYCLE IS REFUSED RATHER THAN BUILT. Roblox raises
+                            // A CYCLE IS REFUSED RATHER THAN BUILT. The engine raises
                             // here too, and an arena would happily store one and
                             // hang the first traversal that walked it.
                             if dom.is_ancestor_of(this.id, parent) {
@@ -1214,7 +1214,7 @@ impl UserData for InstanceRef {
                 // rather than an optimisation that fell out.
                 //
                 // A guest recomputing a whole tree on every tick -- which is what
-                // a Roblox developer writes, and what Aether's own reconciler
+                // an engine developer writes, and what Aether's own reconciler
                 // does -- assigns the value a property already has far more often
                 // than it assigns a new one. Firing on those turns `Changed` into
                 // a tick, and a `Changed` handler that writes another property is
@@ -1322,7 +1322,7 @@ pub fn handle(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<LuaAnyUserData
 /// what a mod may DO is per-mod and must be absent when not granted. The
 /// DataModel is not a capability: it is the language of the platform, present for
 /// every guest on both hosts, and an application that had to be handed it would
-/// not be the same application that runs on Roblox.
+/// not be the same application that runs on the engine.
 /// Install the value vocabulary: `UDim`, `UDim2`, `Vector2`, `Color3`, `Rect`,
 /// `Font`, the two sequence types and their keypoints, `Enum`, and `Content`.
 ///
@@ -1343,7 +1343,7 @@ pub fn handle(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<LuaAnyUserData
 ///
 /// And the second writer left. Under Aether's DataModel host `InstallVocabulary`
 /// is `function() end`, which is what a host says when the environment already
-/// supplies the vocabulary -- it is the same line on Roblox and for the same
+/// supplies the vocabulary -- it is the same line on the engine and for the same
 /// reason. Nothing publishes a second vocabulary, so nothing races.
 ///
 /// THIS IS NOT OPTIONAL FOR AN AETHER MOD, WHICH IS THE PART WORTH KNOWING. The
@@ -1763,7 +1763,7 @@ mod tests {
     #[test]
     fn any_well_formed_uri_is_accepted_whatever_its_scheme() {
         // ADR-003: an unresolvable Content is a rendering outcome, not a property
-        // error. A Roblox application moved here with a grant withheld is a
+        // error. An engine application moved here with a grant withheld is a
         // correct application missing an image, and refusing the assignment would
         // make it a broken one.
         for uri in [

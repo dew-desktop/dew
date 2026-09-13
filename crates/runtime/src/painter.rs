@@ -41,7 +41,7 @@ pub trait Painter {
         alpha: f32,
     );
 
-    /// Draw text. `align_x`/`align_y` are already resolved against Roblox's own
+    /// Draw text. `align_x`/`align_y` are already resolved against the engine's
     /// defaults by the time they arrive — a painter that re-decides alignment is
     /// the bug this signature exists to prevent.
     fn draw_text(&mut self, node: &Node);
@@ -167,7 +167,7 @@ pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
 
     // A NODE WITH NO FILL IS NOT A BLACK NODE. Live.luau emits nil when nothing
     // set a colour, and the engine draws nothing for it; inventing a default here
-    // would paint rectangles Roblox leaves empty.
+    // would paint rectangles the engine leaves empty.
     //
     // A GRADIENT REPLACES THE FLAT FILL, and is checked first for that reason. It
     // can also be an ALPHA ramp over the node's own colour with no colour ramp of
@@ -185,7 +185,7 @@ pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
         }
     }
 
-    // AFTER THE FILL AND BEFORE THE STROKE, which is where Roblox puts it: an
+    // AFTER THE FILL AND BEFORE THE STROKE, which is where the engine puts it: an
     // `ImageLabel` draws its background, then its image over it, and a `UIStroke`
     // outlines the whole element on top of both. Painting the image first would
     // hide it behind any background the element also has, and painting it after
@@ -193,7 +193,7 @@ pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
     //
     // AN IMAGE IS NOT GATED ON `node.alpha`, unlike the fill above.
     // `BackgroundTransparency = 1` is the ordinary way to write an image with no
-    // plate behind it, and it is what every icon in every Roblox UI does; folding
+    // plate behind it, and it is what every icon in every the engine UI does; folding
     // the image into that check would make the common case draw nothing.
     //
     // THE MISSING BOX IS FOR A MISSING ASSET AND NOTHING ELSE. `placement` also

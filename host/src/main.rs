@@ -486,7 +486,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     services::install(vm.lua(), &clock).map_err(|e| e.to_string())?;
 
     // The surface the guest parents into. A `ScreenGui` because that is what a
-    // Roblox application expects to find above its tree, so the same file has a
+    // The engine application expects to find above its tree, so the same file has a
     // chance of running in both places later.
     let root = dom
         .lock()
@@ -2010,7 +2010,7 @@ fn icon_path() -> Option<PathBuf> {
 fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
     // NOTHING IS INJECTED ANY MORE. A mod declares Aether and vide in its own
     // `pesde.toml` and requires them through the redirect pesde writes beside
-    // it, exactly as a Roblox place does. The host used to hand every mod an
+    // it, exactly as an engine place does. The host used to hand every mod an
     // `@aether` and a `@vide` pointing into its OWN installed packages, which
     // meant a mod could not say what it depended on and could not be built
     // without a Dew checkout.

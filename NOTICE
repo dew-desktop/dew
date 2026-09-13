@@ -1,0 +1,29 @@
+# Notices
+
+## No affiliation
+
+Dew is an independent project. It is not affiliated with, endorsed by, sponsored
+by, or connected to Roblox Corporation.
+
+"Roblox" and "Luau" are trademarks of Roblox Corporation. They are used here only
+where accuracy requires naming them -- to describe interoperability, or to record
+which implementation a measurement was taken against. Such use is nominative and
+implies no endorsement.
+
+## The interface surface
+
+`host/datamodel/api_surface.json` is a machine-readable list of class and property
+names, used to decide which members this host is expected to accept. It is
+GENERATED, NOT AUTHORED, and it is not distributed with this repository -- see
+`.gitignore`. `scripts/fetch_api_surface.luau` regenerates it locally from a
+published interface dump.
+
+Names of classes, properties and types are factual descriptions of an interface
+rather than creative expression, and are used solely for interoperability.
+
+## Third-party software
+
+This host builds on open source Rust and Luau packages, each under its own
+licence. `cargo tree` and the `pesde.toml` manifests list them. The rendering,
+runtime and window crates in `crates/` are this project's own work and are covered
+by `LICENSE`.

@@ -304,6 +304,19 @@ jobs:
       # vide reachable".
       - run: pesde install
 
+      # THE INTERFACE SURFACE IS GENERATED, NOT COMMITTED.
+      #
+      # It derives from a third party's published data, so the repository does not
+      # redistribute it (see NOTICE) -- which means CI has to make it, or the
+      # property-coverage measurements have no denominator and skip themselves.
+      #
+      # NOT FATAL. A third-party mirror being down is not a reason to fail a build:
+      # the tests that need it say SKIPPED and the rest of the run still means
+      # something. A silent zero would be the bad outcome, and nothing reports one.
+      - name: Generate the interface surface
+        continue-on-error: true
+        run: lune run scripts/fetch_api_surface.luau
+
       # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
       # a fresh checkout has manifests and no packages; without this every Aether
       # mod fails to mount with "could not read entry module .../roblox_packages/
@@ -449,6 +462,19 @@ jobs:
           echo "$RUNNER_TEMP/pesde" >> "$GITHUB_PATH"
 
       - run: pesde install
+
+      # THE INTERFACE SURFACE IS GENERATED, NOT COMMITTED.
+      #
+      # It derives from a third party's published data, so the repository does not
+      # redistribute it (see NOTICE) -- which means CI has to make it, or the
+      # property-coverage measurements have no denominator and skip themselves.
+      #
+      # NOT FATAL. A third-party mirror being down is not a reason to fail a build:
+      # the tests that need it say SKIPPED and the rest of the run still means
+      # something. A silent zero would be the bad outcome, and nothing reports one.
+      - name: Generate the interface surface
+        continue-on-error: true
+        run: lune run scripts/fetch_api_surface.luau
 
       # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
       # a fresh checkout has manifests and no packages; without this every Aether

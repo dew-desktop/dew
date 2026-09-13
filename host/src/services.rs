@@ -16,7 +16,7 @@
 //! a tree. These two are not. "How wide is this string in the face this host will
 //! actually draw with" and "call me when the host draws a frame" are questions
 //! ABOUT THE HOST, and no amount of tree makes them answerable from Luau. On
-//! Roblox they are `TextService:GetTextSize` and `RunService.Heartbeat`, reached
+//! The engine they are `TextService:GetTextSize` and `RunService.Heartbeat`, reached
 //! through `game`, and Dew has to spell them itself -- `game` would not help even
 //! if it were here, because these are services behind it rather than the tree it
 //! names. (`game` itself came back into scope on 2026-09-04, for vide's gate and
@@ -44,7 +44,7 @@
 //!
 //! WHY `DewHost` AND NOT `TextService` -- and this is the parity trap, declined.
 //! Installing globals called `TextService` and `RunService` would LOOK like
-//! Roblox and be a lie in the direction that costs most: on the engine those are
+//! The engine and be a lie in the direction that costs most: on the engine those are
 //! not globals, so code written against them would run HERE and nowhere else.
 //! That is parity theatre, which is what the rescope removed from this step. A
 //! name that is honestly Dew's cannot be mistaken for portable, and it sits
@@ -92,7 +92,7 @@ pub fn face() -> Option<Font> {
 ///
 /// SYNCHRONOUS, AND THAT IS THE CONTRACT RATHER THAN AN IMPLEMENTATION DETAIL.
 /// Layout runs inside a frame and cannot await -- which is why Aether's
-/// `Host.Text` is shaped this way, and why the Roblox host reaches for
+/// `Host.Text` is shaped this way, and why the engine host reaches for
 /// `GetTextSize` rather than for anything that yields. There is nothing to await
 /// here in any case: the face is in memory and this is arithmetic over glyph
 /// advances.
@@ -282,7 +282,7 @@ impl Clock {
 ///
 /// THE LIST IS SNAPSHOTTED. Dropping the lock is not enough by itself: a listener
 /// that disposes a sibling mid-frame would otherwise shorten the list being
-/// walked. Aether's Roblox host clones its listener table inside the Heartbeat
+/// walked. Aether's the engine host clones its listener table inside the Heartbeat
 /// handler for exactly this reason, and a host that made the property impossible
 /// to keep would be forcing a regression on the implementation above it.
 ///
@@ -388,7 +388,7 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
                 guard.listeners.push((id, f));
                 id
             };
-            // AN UNSUBSCRIBE, AND IT IS NOT DECORATION. Aether's Roblox host keeps
+            // AN UNSUBSCRIBE, AND IT IS NOT DECORATION. Aether's the engine host keeps
             // ONE Heartbeat connection for N listeners and takes it down by
             // dropping them; returning a disposer is what lets the implementation
             // above keep exactly that shape here -- one Dew subscription for N of
@@ -416,7 +416,7 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
         "Now",
         // MONOTONIC SECONDS SINCE THE FIRST FRAME, AND NOT `dew.time.now`. That
         // one is wall-clock seconds since the epoch, which is what a mod showing
-        // the time of day wants. This is what Aether's Roblox host answers with
+        // the time of day wants. This is what Aether's the engine host answers with
         // `os.clock()`: a process clock that never steps backwards and whose zero
         // is arbitrary. Animation subtracts two readings, and a wall clock that a
         // daylight-saving change moved would make a spring jump.
@@ -426,7 +426,7 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     // NO `Step`. Aether's `Clock` declares four members and this host offers
     // three, deliberately. `Step(dt)` advances frames BY HAND: it is what a
     // simulated clock under Lune needs, and what a DRIVEN one must never offer.
-    // On Roblox it is present and empty for that reason -- the Heartbeat already
+    // On the engine it is present and empty for that reason -- the Heartbeat already
     // drives frames and stepping would run each one twice. Dew's frame loop drives
     // this one, so a `Step` here would be a way for a guest to double every frame
     // it touched. Sprint 8 fills the member with the engine host's own no-op,

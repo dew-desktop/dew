@@ -111,7 +111,7 @@ impl Windowed {
         // A NON-SRGB FORMAT, deliberately. The display list carries plain sRGB
         // bytes and every other painter writes them unchanged; an `*Srgb` surface
         // would have the hardware convert them a second time, and the native host
-        // would quietly differ from the browser and from Roblox.
+        // would quietly differ from the browser and from the engine.
         let format = caps
             .formats
             .iter()

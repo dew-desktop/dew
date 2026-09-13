@@ -21,7 +21,7 @@
 //! WHAT THE STANDARD ALREADY DECIDES, and this file obeys
 //! Assignment ACCEPTS any well-formed URI. ADR-003: "an unresolvable `Content` is
 //! a rendering outcome, not a property error -- the assignment succeeds and the
-//! host reports why nothing was drawn." A Roblox application moved to Dew with a
+//! host reports why nothing was drawn." An engine application moved to Dew with a
 //! grant withheld is a correct application missing an image, not a broken one, and
 //! a host that refused the assignment would make it a broken one.
 //!
@@ -49,7 +49,7 @@ impl LuaContent {
         // A PLAIN STRING IS A `Content`, because the engine coerces one and a
         // guest written against it writes `ImageContent = "rbxassetid://123"`
         // without thinking about the type. Refusing that would make correct
-        // Roblox code fail here for a reason no message could usefully explain.
+        // The engine code fail here for a reason no message could usefully explain.
         if let Some(text) = value.as_string() {
             let text = text.to_string_lossy();
             return Some(if text.is_empty() {
@@ -80,7 +80,7 @@ fn source_type(content: &Content) -> &'static str {
         ContentType::None => "None",
         ContentType::Uri(_) => "Uri",
         ContentType::Object(_) => "Object",
-        // `ContentType` is `#[non_exhaustive]`: Roblox adds source types, and a
+        // `ContentType` is `#[non_exhaustive]`: the engine adds source types, and a
         // host that matched exhaustively would stop compiling on a crate bump
         // rather than reporting an unknown one.
         _ => "Unknown",

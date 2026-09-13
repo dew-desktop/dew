@@ -197,7 +197,7 @@ end
 -- CHECKED, NOT TRUSTED, AND THIS IS THE ONE THING IN THIS SPRINT NO TEST COULD
 -- HAVE CAUGHT. `aether_raster` serves a CPU snapshot and a GPU swapchain from one
 -- crate because `vello_hybrid` and `wgpu` are optional and OFF by default -- a
--- Roblox author running visual diffs in CI never compiles wgpu, and the
+-- The engine author running visual diffs in CI never compiles wgpu, and the
 -- measurement that decided it is recorded in the manifest. Flattening the gate
 -- while relocating the file would leave every pixel identical and every test
 -- green, and would cost everyone a wgpu build. ADR-004 names it as consequence

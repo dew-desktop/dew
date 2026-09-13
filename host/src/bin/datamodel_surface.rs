@@ -1,14 +1,14 @@
 //! What the DataModel Standard has to cover, measured rather than guessed.
 //!
-//! Walks Roblox's pinned API dump for everything under `GuiObject` plus the UI
+//! Walks the engine's pinned API dump for everything under `GuiObject` plus the UI
 //! modifiers, and reports it against what this stack actually implements. The
 //! answer is a number rather than an impression, and it is regenerated when
-//! the pinned dump tracks a new Roblox build.
+//! the pinned dump tracks a new upstream build.
 //!
 //! Run with `cargo run --bin datamodel-surface`.
 
 use dew_host::scope::{
-    ApiClass, ApiSurface, API_SURFACE, INPUT_DEVICE, MODIFIERS, NOT_UI, OUT_OF_SCOPE,
+    ApiClass, ApiSurface, API_SURFACE_MISSING, INPUT_DEVICE, MODIFIERS, NOT_UI, OUT_OF_SCOPE,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -200,10 +200,15 @@ fn main() {
     // `--markdown` emits the standard's scope section instead of a report. The
     // document is generated rather than written for the reason d4 gives: the
     // datamodel surface has a machine-readable source, and a hand-maintained
-    // list of 160 properties would be wrong within one Roblox release.
+    // list of 160 properties would be wrong within one upstream release.
     let markdown = std::env::args().any(|a| a == "--markdown");
-    let api: ApiSurface =
-        serde_json::from_str(API_SURFACE).expect("host/datamodel/api_surface.json is malformed");
+    // NOT GENERATED IS AN ORDINARY STATE, and this says so rather than panicking:
+    // the file is gitignored because it derives from a third party's published
+    // data (NOTICE), so a fresh clone has never had it.
+    let Some(api): Option<ApiSurface> = dew_host::scope::api() else {
+        eprintln!("{API_SURFACE_MISSING}");
+        std::process::exit(2);
+    };
     let pipeline: BTreeSet<&str> = AETHER_PIPELINE.iter().copied().collect();
 
     // ASKED OF THE HOST, one property at a time, for every class in scope.
@@ -386,7 +391,7 @@ fn main() {
             cursor = class.superclass.as_deref();
         }
         // A class the reflection database has and the pinned dump does not means
-        // the two describe different Roblox builds, or that MODIFIERS drifted
+        // the two describe different upstream builds, or that MODIFIERS drifted
         // from the fetch script's copy of it. The surface reported would be short
         // either way, so it is said out loud rather than shrugged off.
         if !found {
@@ -439,7 +444,7 @@ fn main() {
         .count();
     let member_in_scope = m_implemented + member_backlog.len();
 
-    // Both halves are pinned to the same Roblox build from api_surface.json.
+    // Both halves are pinned to the same upstream build from api_surface.json.
     let build_skew: Option<(&str, &str)> = None;
 
     // THE DENOMINATOR IS THE POINT. Against every writable property the figure
@@ -481,7 +486,7 @@ fn main() {
             .filter(|c| ui_classes.contains_key(*c))
             .count();
 
-    println!("DataModel surface, from Roblox {}\n", api.version);
+    println!("DataModel surface, from the engine {}\n", api.version);
     println!(
         "{in_scope} classes in scope of {} under GuiObject, {} writable properties
 ",
@@ -538,7 +543,7 @@ fn main() {
 
     println!(
         "
-METHODS AND EVENTS, from the pinned dump at Roblox {}
+METHODS AND EVENTS, from the pinned dump at the engine {}
 ",
         api.version
     );
@@ -568,7 +573,7 @@ API BACKLOG ({}) -- no Dew guest can reach any of these:",
     }
     if let Some((property_build, member_build)) = &build_skew {
         println!();
-        println!("WARNING  this standard is measured against TWO Roblox builds.");
+        println!("WARNING  this standard is measured against TWO upstream builds.");
         println!("         properties  {property_build}  (whatever rbx_reflection_database ships)");
         println!("         methods     {member_build}  (pinned by scripts/fetch_api_surface.luau)");
         println!("         Conformance against two builds at once is not a thing an");
@@ -603,7 +608,7 @@ fn emit_markdown(
 ) {
     println!("# DataModel Standard: scope\n");
     println!("<!-- GENERATED. Regenerate with:");
-    println!("       lune run scripts/fetch_api_surface.luau   # only to move the Roblox pin");
+    println!("       lune run scripts/fetch_api_surface.luau   # only to move the engine pin");
     print!("       cargo run --manifest-path host/Cargo.toml --bin datamodel-surface");
     println!(" -- --markdown > docs/datamodel_scope.md");
     println!("     Do not edit by hand; edit the classification lists in the tool.");
@@ -611,11 +616,11 @@ fn emit_markdown(
         "     The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
      the command it gave had never run. -->\n"
     );
-    println!("Measured against Roblox **{version}**, from Roblox's own API dump pinned");
+    println!("Measured against the engine **{version}**, from the engine's API dump pinned");
     println!("at that build by `scripts/fetch_api_surface.luau`. Both the property half");
     println!("and the method/event half come from that one source, which is also the build");
     println!("every verified conformance case cites.\n");
-    println!("**THE SUBJECT IS THE DEW HOST**, measured against the Roblox engine. Aether is a");
+    println!("**THE SUBJECT IS THE DEW HOST**, measured against the engine. Aether is a");
     println!("headless framework that runs on top of a host, the way Ark UI runs on top of a");
     println!("DOM; it is a consumer of this surface, never an implementation of it, and is not");
     println!("required to conform. What must match is what a Luau application sees, **with or");
@@ -835,7 +840,7 @@ fn emit_markdown(
 
     if let Some((property_build, member_build)) = build_skew {
         println!();
-        println!("### This document measures two Roblox builds at once");
+        println!("### This document measures two upstream builds at once");
         println!();
         println!("| half | build | pinned by |");
         println!("| :--- | :--- | :--- |");

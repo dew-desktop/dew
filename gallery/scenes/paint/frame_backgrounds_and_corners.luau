@@ -6,7 +6,7 @@
 	whether its corners are cut.
 
 	NO EXPECTATION BLOCK, ON PURPOSE. This is a gallery scene, not a conformance
-	case: it asserts nothing about what Roblox would do with the same tree. It
+	case: it asserts nothing about what the engine would do with the same tree. It
 	exists so that these properties are seen going through the host and out to
 	pixels. See ADR-005.
 ]]

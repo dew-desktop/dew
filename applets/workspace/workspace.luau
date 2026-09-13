@@ -4,7 +4,7 @@
 
 	THE POINT OF THIS MOD IS THAT DEW DID NOT CHANGE FOR IT. Dew hands out one
 	OS window; everything below is ordinary Aether, so the same tree runs in a
-	Roblox place with no host at all. Two window managers at different scales, the
+	the engine place with no host at all. Two window managers at different scales, the
 	way a terminal multiplexer runs inside a real one.
 
 	It is a scale model of `spektr/window_manager` rather than a port of it. That
@@ -127,7 +127,7 @@ local function VirtualWindow(props: WindowProps)
 		Size = UDim2.fromOffset(props.width, props.height),
 		BackgroundColor3 = Color3.fromHex("#1a2130"),
 		ZIndex = z,
-		--- CORRECT AUTHORING, AND CURRENTLY A NO-OP HERE. On Roblox this plus the
+		--- CORRECT AUTHORING, AND CURRENTLY A NO-OP HERE. On the engine this plus the
 		--- `UICorner` below rounds the titlebar's top corners with the frame's.
 		--- Off-engine it does not: `Layout` honours `ClipsDescendants` and
 		--- intersects the rects, but `Live.Frame` carries a clip as a bare
@@ -163,7 +163,7 @@ return {
 	---
 	--- The virtual windows below then appear to sit directly on the desktop with
 	--- nothing around them, and the surface is indistinguishable from a host that
-	--- owns three real windows — while the tree stays exactly the tree a Roblox
+	--- owns three real windows — while the tree stays exactly the tree an engine
 	--- place would mount.
 	---
 	--- CLICKS FALL THROUGH WHERE NOTHING IS PAINTED, which is why the ScreenSpace

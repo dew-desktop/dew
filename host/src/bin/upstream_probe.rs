@@ -1,7 +1,7 @@
-//! Does a dependency load under a real host that is not Roblox?
+//! Does a dependency load under a real host that is not the engine?
 //!
-//! WHY THIS EXISTS. A library written for Roblox has seams that are invisible on
-//! Roblox and load-bearing off it. Dew supplies the real globals -- `Instance`,
+//! WHY THIS EXISTS. A library written for the engine has seams that are invisible on
+//! The engine and load-bearing off it. Dew supplies the real globals -- `Instance`,
 //! `Enum`, `Color3`, a DataModel -- and no `game`, which is an environment the
 //! library's own CI cannot produce and its authors cannot easily test. That is
 //! the position from which vide's leaf modules were found unable to require at
@@ -13,7 +13,7 @@
 //!
 //! THE NUMBER IS WORTHLESS WITHOUT THE CONTROL. "every module loads" is also
 //! what a probe that loads nothing prints. `--control` re-runs the probe with
-//! `game` installed as a truthy value, which is what the Roblox-shaped guard
+//! `game` installed as a truthy value, which is what the engine-shaped guard
 //! expects; a defect of this class disappears under it. A probe whose result
 //! does not move between the two runs is not measuring what it claims.
 
@@ -180,7 +180,7 @@ fn main() {
         // Loads without `game`, fails with it. NOT a finding about the library:
         // the control installs `game` as a bare truthy value, so anything that
         // calls a method on it -- `game:GetService` -- fails against the stand-in
-        // rather than against Roblox. Reported so the asymmetry is never read as
+        // rather than against the engine. Reported so the asymmetry is never read as
         // a result.
         let artifacts: Vec<&String> = failed_with
             .iter()

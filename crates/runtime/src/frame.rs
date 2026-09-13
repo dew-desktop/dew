@@ -17,7 +17,7 @@
 //! `Option` IS LOAD-BEARING AND NOT A CONVENIENCE. Live.luau emits nil rather
 //! than a default for `fill`, `stroke`, `gradient` and `text`, with the reason
 //! stated there: "nothing set a colour" is a finding, and a default would erase
-//! it. Decoding a missing fill as opaque black would invent geometry the Roblox
+//! it. Decoding a missing fill as opaque black would invent geometry the engine
 //! host does not draw — which is exactly the class of divergence this crate
 //! exists to prevent.
 
@@ -46,7 +46,7 @@ pub struct Rect {
 pub struct Stroke {
     pub colour: Option<Rgb>,
     pub thickness: f32,
-    /// Already inverted from Roblox `Transparency` by Live.luau: 1 is opaque.
+    /// Already inverted from the engine `Transparency` by Live.luau: 1 is opaque.
     pub alpha: f32,
 }
 
@@ -142,7 +142,7 @@ impl Bitmap {
 /// and `Tile` needs a repeat, and neither is that.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Scale {
-    /// Fill the node, ignoring the source's aspect ratio. Roblox's default.
+    /// Fill the node, ignoring the source's aspect ratio. The engine's default.
     #[default]
     Stretch,
     /// Fit inside the node, letterboxed, keeping the aspect ratio.
@@ -209,7 +209,7 @@ impl Image {
             h: bitmap.height as f32,
         };
         // THE SOURCE RECTANGLE IS CLAMPED TO THE IMAGE, not trusted. A guest sets
-        // `ImageRectSize` freely and Roblox samples nothing outside the asset; a
+        // `ImageRectSize` freely and the engine samples nothing outside the asset; a
         // painter handed a rectangle that runs off the edge would either read out
         // of bounds or stretch an edge pixel across the overflow, and both are
         // wrong in a way that looks like a bad asset.
@@ -267,7 +267,7 @@ impl Image {
 /// Text alignment on one axis.
 ///
 /// THE DEFAULT IS THE HALF THAT MATTERS. An unset `TextXAlignment` is CENTRE in
-/// Roblox, not left. Live.luau supplies that default once, at the source, because
+/// The engine, not left. Live.luau supplies that default once, at the source, because
 /// three separate painters had each invented their own left inset and every icon
 /// in the shop kit sat in the wrong place. Nothing downstream re-decides it, and
 /// nothing here should either.
@@ -316,7 +316,7 @@ pub struct Node {
     pub text_colour: Option<Rgb>,
     /// How opaque the text is, 1.0 for solid.
     ///
-    /// SEPARATE FROM `alpha`, which is the node's BACKGROUND. Roblox has
+    /// SEPARATE FROM `alpha`, which is the node's BACKGROUND. The engine has
     /// `BackgroundTransparency` and `TextTransparency` as independent
     /// properties, and a label with an invisible background and solid text is
     /// the ordinary case rather than an exotic one.

@@ -156,7 +156,7 @@ pub fn load(
     //      same isolation the require roots above enforce for files. It is
     //      installed as a GLOBAL rather than passed like `dew`, because it is not
     //      a capability: it is the language of the platform, present for every
-    //      guest on Roblox and on Dew alike, and an application that had to be
+    //      guest on the engine and on Dew alike, and an application that had to be
     //      handed it would not be the application that runs on both.
     let dom = datamodel::SharedDom::default();
     //      AND `mod://` POINTS AT THE MOD'S OWN DIRECTORY, which is the same
@@ -205,7 +205,7 @@ pub fn load(
     //      WHAT MADE IT SAFE IS NOT THAT THE CONFLICT WAS RESOLVED, IT IS THAT THE
     //      SECOND WRITER LEFT. Under Aether's DataModel host `InstallVocabulary`
     //      is `function() end` -- what a host says when the environment already
-    //      supplies the vocabulary, exactly as on Roblox -- so nothing publishes a
+    //      supplies the vocabulary, exactly as on the engine -- so nothing publishes a
     //      second one and there is nothing to win a race against. The other half
     //      is that the host's `available()` probe REQUIRES the vocabulary to be
     //      here: with these names missing the DataModel host is not selected at
@@ -266,7 +266,7 @@ pub fn load(
         //       for and it does not get one -- which is the whole of what keeps
         //       `game` from becoming a sentinel a second time.
         //
-        //       A `ScreenGui` because that is what a Roblox application expects
+        //       A `ScreenGui` because that is what an engine application expects
         //       to find above its tree, so the same mod has a chance of running
         //       in both places -- which is a property of the TREE rather than of
         //       anything named `game`.

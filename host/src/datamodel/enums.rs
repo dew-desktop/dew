@@ -9,15 +9,15 @@
 //!
 //! GENERATED, NOT LISTED. Every name and value comes from the same reflection
 //! database the property surface is measured with, so `Enum` here and `Enum` in
-//! the engine cannot disagree about what exists. A hand-written table of three
-//! hundred enums would be wrong within one Roblox release, which is the argument
+//! The engine cannot disagree about what exists. A hand-written table of three
+//! hundred enums would be wrong within one upstream release, which is the argument
 //! `datamodel_surface` already makes about properties.
 //!
 //! LAZY, because eagerly building every item of every enum would allocate
 //! thousands of userdata per VM to answer a handful of lookups. `Enum` resolves a
 //! category on indexing, and a category resolves an item on indexing.
 //!
-//! THREE TYPES, THREE `__type` ANSWERS. Roblox reports "Enums" for the root,
+//! THREE TYPES, THREE `__type` ANSWERS. The engine reports "Enums" for the root,
 //! "Enum" for a category and "EnumItem" for a member, and a guest that branches
 //! on `typeof` needs all three -- the same reason the vocabulary is five Rust
 //! types rather than one.

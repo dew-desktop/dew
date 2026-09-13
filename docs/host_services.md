@@ -43,7 +43,7 @@ host.
   that polls burns a core; a guest that guesses animates against a clock nothing
   else is using.
 
-Every implementation already has both. Roblox has `TextService:GetTextSize` and
+Every implementation already has both. The engine has `TextService:GetTextSize` and
 `RunService.Heartbeat`. Dew has them inside the host and, since sprint 7, reachable
 from Luau. A Luau test double has to simulate both to be useful at all. The
 standard is recording something all three already do, which is the right time to
@@ -62,7 +62,7 @@ width and height would be, and MUST answer SYNCHRONOUSLY.**
 frame and returns a tree of resolved rectangles; it cannot await. A host that
 answered asynchronously would not be slower, it would be unusable: every
 auto-sized element would resolve to zero on the frame that needed it. This is why
-Roblox's own `GetTextSize` is the shape it is, and why a host that has an
+the engine's `GetTextSize` is the shape it is, and why a host that has an
 asynchronous measurement available must still expose a synchronous answer, even
 an approximate one it later refines.
 
@@ -110,10 +110,10 @@ nothing, which is what the engine does, and MUST NOT present one that works.
 
 ## What is NOT required
 
-**A name.** Nothing above says where these live or what they are called. Roblox
+**A name.** Nothing above says where these live or what they are called. The engine
 reaches them through `game:GetService`, Dew installs a `DewHost` global, a Luau
 double returns them from a host table. All three conform. A standard that
-specified the spelling would be specifying that every host be Roblox, which is
+specified the spelling would be specifying that every host be the engine, which is
 what this whole standard exists not to do.
 
 **Font selection, font loading, or a font registry.** The `font` argument above is
@@ -127,10 +127,10 @@ is the requirement.
 
 A guest framework does not read this document; it declares two seams and lets each
 host fill them. Aether's `Host` interface names them `Text` and `Clock`, which is
-what made sprint 8's work small -- the seams already existed, and moving Roblox's
+what made sprint 8's work small -- the seams already existed, and moving the engine's
 two service lookups behind them changed nothing above Layer 2.5.
 
-    Roblox   game:GetService("TextService"):GetTextSize   RunService.Heartbeat
+    engine   game:GetService("TextService"):GetTextSize   RunService.Heartbeat
     Dew      DewHost.Text.Measure                         DewHost.Clock.OnFrame
     double   a per-glyph advance table                    a simulated clock
 
@@ -138,7 +138,7 @@ two service lookups behind them changed nothing above Layer 2.5.
 record says so in its own words: the name is expected to be revisited by whatever
 decision the standard makes, and it was chosen precisely because it could not be
 mistaken for portable -- installing globals called `TextService` and `RunService`
-would look like Roblox and run nowhere else.
+would look like the engine and run nowhere else.
 
 ## What this does not settle: where the standard lives
 

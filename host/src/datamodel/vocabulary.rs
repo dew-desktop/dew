@@ -16,7 +16,7 @@
 //!
 //! WHAT IS DELIBERATELY NOT HERE
 //! `Vector3` and `CFrame`. This standard is 2D UI: a host that implemented
-//! `CFrame` would be describing Roblox rather than describing a UI, which is the
+//! `CFrame` would be describing the engine rather than describing a UI, which is the
 //! same test `OUT_OF_SCOPE` applies to classes.
 //!
 //! THE SEQUENCE TYPES ARE HERE AND ARE NOT DRAWN. `ColorSequence` and
@@ -143,7 +143,7 @@ impl UserData for LuaUDim2 {
         fields.add_meta_field(MetaMethod::Type, "UDim2");
         fields.add_field_method_get("X", |_, this| Ok(LuaUDim(this.0.x)));
         fields.add_field_method_get("Y", |_, this| Ok(LuaUDim(this.0.y)));
-        // `Width` and `Height` are what a UI author reaches for, and Roblox has
+        // `Width` and `Height` are what a UI author reaches for, and the engine has
         // them on `UDim2` as aliases of X and Y.
         fields.add_field_method_get("Width", |_, this| Ok(LuaUDim(this.0.x)));
         fields.add_field_method_get("Height", |_, this| Ok(LuaUDim(this.0.y)));
@@ -221,7 +221,7 @@ impl UserData for LuaVector2 {
                 this.0.y - other.y,
             )))
         });
-        // SCALAR ONLY, either way round. Roblox also multiplies two Vector2s
+        // SCALAR ONLY, either way round. The engine also multiplies two Vector2s
         // component-wise; that is added when something needs it rather than
         // guessed at now.
         methods.add_meta_method(MetaMethod::Mul, |_, this, other: LuaValue| {
@@ -279,7 +279,7 @@ impl UserData for LuaFont {
         fields.add_field_method_get("Family", |_, this| Ok(this.0.family.clone()));
         fields.add_field_method_get("Weight", |_, this| Ok(weight_item(this.0.weight)));
         fields.add_field_method_get("Style", |_, this| Ok(style_item(this.0.style)));
-        // Roblox's own shorthand, and Aether reads it nowhere -- it is here
+        // The engine's shorthand, and Aether reads it nowhere -- it is here
         // because a guest written against the engine does.
         fields.add_field_method_get("Bold", |_, this| {
             Ok(matches!(
@@ -346,7 +346,7 @@ impl UserData for LuaColorSequenceKeypoint {
 impl UserData for LuaNumberSequence {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         fields.add_meta_field(MetaMethod::Type, "NumberSequence");
-        // A FRESH TABLE PER READ, and Roblox does the same: `Keypoints` is a
+        // A FRESH TABLE PER READ, and the engine does the same: `Keypoints` is a
         // copy, so a guest mutating what it got back has not edited the value.
         fields.add_field_method_get("Keypoints", |lua, this| {
             let out = lua.create_table()?;
@@ -388,7 +388,7 @@ impl UserData for LuaColorSequence {
 ///
 /// THROUGH `enums::item_by_name`, NOT A LOCAL TABLE, for the reason that module
 /// already argues about properties: a hand-written mapping is wrong within one
-/// Roblox release, and `Font.Weight` compared against `Enum.FontWeight.Bold`
+/// upstream release, and `Font.Weight` compared against `Enum.FontWeight.Bold`
 /// must answer true rather than plausibly.
 fn weight_item(weight: FontWeight) -> LuaEitherEnum {
     match super::enums::item_by_name("FontWeight", &format!("{weight:?}")) {
@@ -423,7 +423,7 @@ impl IntoLua for LuaEitherEnum {
 ///
 /// GLOBALS, like `Instance`, and for the same reason: this is the language of
 /// the platform rather than a capability. A guest that had to be handed `UDim2`
-/// would not be the guest that runs on Roblox.
+/// would not be the guest that runs on the engine.
 pub fn install(lua: &Lua) -> LuaResult<()> {
     let globals = lua.globals();
 
@@ -440,7 +440,7 @@ pub fn install(lua: &Lua) -> LuaResult<()> {
     globals.set("UDim", udim)?;
 
     let udim2 = lua.create_table()?;
-    // FOUR NUMBERS OR TWO UDims, because Roblox accepts both and a guest written
+    // FOUR NUMBERS OR TWO UDims, because the engine accepts both and a guest written
     // against the engine uses whichever it likes.
     udim2.set(
         "new",

@@ -2,8 +2,8 @@
 //!
 //! ## What this is for
 //!
-//! An Aether application is a Luau module. On Roblox, the engine hosts it: it
-//! lays out, it paints, and `UserInputService` reports input. Off Roblox, THIS
+//! An Aether application is a Luau module. On the engine, the engine hosts it: it
+//! lays out, it paints, and `UserInputService` reports input. Off the engine, THIS
 //! crate is the engine — it owns the process, embeds Luau as a guest, drives
 //! frames, and hands a display list to a painter.
 //!
@@ -158,7 +158,7 @@ impl Application {
     /// The entry module must return a table carrying a `Session` field — the
     /// result of `Live.Session(host, root, router, w, h)`. That indirection is
     /// deliberate: it keeps the decision of HOW to mount (which root, which
-    /// router, which dimensions) in Luau, where the Roblox entry point makes the
+    /// router, which dimensions) in Luau, where the engine entry point makes the
     /// same decision with the same code.
     pub fn load(caps: Capabilities, entry: &Path) -> LuaResult<Self> {
         Self::load_with(caps, entry, |_| Ok(()))

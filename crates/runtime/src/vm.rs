@@ -104,7 +104,7 @@ impl Vm {
             // it was compiled with optimisations. That failure surfaced eight
             // frames deep as "attempt to index nil with 'info'".
             //
-            // `collectgarbage` and `getfenv`/`setfenv` stay for parity: Roblox
+            // `collectgarbage` and `getfenv`/`setfenv` stay for parity: the engine
             // exposes all three, and a guest that behaves differently here is a
             // guest whose application no longer runs identically on both hosts.
             // `getfenv(0)` is also how the framework installs its value

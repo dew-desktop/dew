@@ -315,7 +315,7 @@ fn the_missing_marker_needs_only_the_primitives_every_painter_has() {
 
 #[test]
 fn an_image_is_painted_over_the_fill_and_under_the_stroke() {
-    // Roblox's order, and the reason it is decided in `paint_node` rather than in
+    // The engine's order, and the reason it is decided in `paint_node` rather than in
     // each backend. `Bare` turns both the plate and the image fallback into
     // `fill_rounded_rect` calls, so their sequence is readable here.
     let mut with_plate = node(Some(image_of(Some(solid(2, 2, [9, 9, 9, 255])))));
@@ -332,7 +332,7 @@ fn an_image_is_painted_over_the_fill_and_under_the_stroke() {
 
 #[test]
 fn an_image_is_drawn_even_when_the_background_is_fully_transparent() {
-    // `BackgroundTransparency = 1` is how every icon in every Roblox UI is
+    // `BackgroundTransparency = 1` is how every icon in every the engine UI is
     // written. Folding the image into the node's own alpha check would make the
     // common case draw nothing at all.
     let mut transparent = node(Some(image_of(Some(solid(4, 4, [200, 60, 40, 255])))));
@@ -347,7 +347,7 @@ fn an_image_is_drawn_even_when_the_background_is_fully_transparent() {
 
 /// A ROUNDED CLIP MUST MASK THE CORNER.
 ///
-/// Roblox clips descendants to the parent's `UICorner` shape; Dew clipped to a
+/// The engine clips descendants to the parent's `UICorner` shape; Dew clipped to a
 /// bare rectangle and the corner pixels leaked, which milestone 3 recorded as an
 /// observable divergence rather than fixing.
 ///

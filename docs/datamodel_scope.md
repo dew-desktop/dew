@@ -1,18 +1,18 @@
 # DataModel Standard: scope
 
 <!-- GENERATED. Regenerate with:
-       lune run scripts/fetch_api_surface.luau   # only to move the Roblox pin
+       lune run scripts/fetch_api_surface.luau   # only to move the pinned surface
        cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown > docs/datamodel_scope.md
      Do not edit by hand; edit the classification lists in the tool.
      The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
      the command it gave had never run. -->
 
-Measured against Roblox **0.736.0.7361346**, from Roblox's own API dump pinned
+Measured against the reference implementation at build **0.736.0.7361346**, from its published interface dump pinned
 at that build by `scripts/fetch_api_surface.luau`. Both the property half
 and the method/event half come from that one source, which is also the build
 every verified conformance case cites.
 
-**THE SUBJECT IS THE DEW HOST**, measured against the Roblox engine. Aether is a
+**THE SUBJECT IS THE DEW HOST**, measured against the reference implementation. Aether is a
 headless framework that runs on top of a host, the way Ark UI runs on top of a
 DOM; it is a consumer of this surface, never an implementation of it, and is not
 required to conform. What must match is what a Luau application sees, **with or

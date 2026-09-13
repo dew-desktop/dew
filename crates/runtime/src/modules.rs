@@ -1,6 +1,6 @@
 //! Require resolution for the guest.
 //!
-//! Aether's own source uses relative string requires — `require("./Roblox")`,
+//! Aether's own source uses relative string requires — `require("./the engine")`,
 //! `require("../TextInputManager")` — and resolves its packages through pesde's
 //! generated redirect trees. Both are the Luau require-by-string RFC, which mlua
 //! implements as [`FsRequirer`], including `.luaurc` alias tables. So the

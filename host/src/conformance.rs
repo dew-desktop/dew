@@ -5,7 +5,7 @@
 //!
 //! WHY THIS EXISTS (ADR-001, Milestone 3 Vision):
 //! There are at least three implementations of the DataModel standard:
-//! Roblox engine, Dew native DataModel, and Aether's Luau implementation.
+//! engine, Dew native DataModel, and Aether's Luau implementation.
 //! The cases are declared as pure data tables so that any runner can execute them.
 //! This runner exercises Dew's real DataModel path (Instance.new, property setters,
 //! arena storage, and render::frame_of) rather than a mock fixture.
@@ -1500,7 +1500,7 @@ pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
     let executable = summary.total - summary.unsupported;
     println!();
     println!(
-        "CONFORMANCE: {} of {} passing ({} verified against Roblox, {} documented gaps, {} open questions, {} unsupported{})",
+        "CONFORMANCE: {} of {} passing ({} verified against the engine, {} documented gaps, {} open questions, {} unsupported{})",
         summary.passed,
         executable,
         summary.verified_against_roblox,
@@ -1582,7 +1582,7 @@ mod tests {
         );
         assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
         // TWO SINCE MILESTONE 4 CLOSED THE CLIP RADIUS. The clipping case was a
-        // documented gap; it now asserts Roblox's behaviour and Dew matches it,
+        // documented gap; it now asserts the engine's behaviour and Dew matches it,
         // but the PIXEL half has never been rendered in Studio and compared, so
         // it counts as a belief rather than as evidence.
         //
@@ -1662,7 +1662,7 @@ mod tests {
     }
 
     /// REPOINTED, NOT DELETED, and that is this test working rather than
-    /// failing. It was written to observe a divergence: Roblox masks a clipped
+    /// failing. It was written to observe a divergence: the engine masks a clipped
     /// child to the parent's rounded corner and Dew leaked the corner pixels.
     /// Milestone 4 closed that, so what it now observes is agreement.
     ///
@@ -1788,7 +1788,7 @@ function tally.summarize(results: { CaseResult }): SuiteSummary
 	local executable = total - unsupported
 	local undec_str = if undecodable > 0 then `, {undecodable} undecodable` else ""
 	local formatted = string.format(
-		"CONFORMANCE: %d of %d passing (%d verified against Roblox, %d documented gaps, %d open questions, %d unsupported%s)",
+		"CONFORMANCE: %d of %d passing (%d verified against the engine, %d documented gaps, %d open questions, %d unsupported%s)",
 		passed,
 		executable,
 		verified_against_roblox,

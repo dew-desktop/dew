@@ -2,7 +2,7 @@
 //!
 //! An Aether application is loaded into an embedded Luau guest, driven for a
 //! frame, and its display list decoded in Rust — with the framework's own source
-//! required unmodified, exactly as Roblox requires it. If this passes, "the same
+//! required unmodified, exactly as the engine requires it. If this passes, "the same
 //! application runs on both hosts" is a property of the build rather than an
 //! intention.
 
@@ -94,7 +94,7 @@ fn a_frame_carries_the_tree_the_application_declared() {
 }
 
 /// THE DEFAULT IS THE HALF THAT MATTERS. An unset `TextXAlignment` is CENTRE in
-/// Roblox, and three painters once each invented a left inset instead. This
+/// The engine, and three painters once each invented a left inset instead. This
 /// pins the default at the seam so a painter never has to decide it again.
 #[test]
 fn unset_text_alignment_decodes_as_centre() {

@@ -900,7 +900,7 @@ pub extern "C" fn ar_stroke_rect(
 ///
 /// `stops` is a FLAT array of `[t, r, g, b, a]` per stop, t in 0..1 and channels
 /// in 0..255, so nothing structured crosses the ABI. `rotation` is degrees
-/// clockwise from left-to-right, matching Roblox's UIGradient and the browser
+/// clockwise from left-to-right, matching the engine's UIGradient and the browser
 /// painter.
 #[no_mangle]
 pub extern "C" fn ar_fill_gradient(
@@ -1058,7 +1058,7 @@ pub extern "C" fn ar_fill_gradient(
 ///
 /// `stops` is a FLAT array of `[t, r, g, b, a]` per stop, t in 0..1 and channels
 /// in 0..255. The ramp spreads outward from the element's centre with radius
-/// equal to the half-extent of the smaller axis, matching Roblox's UIGradient.
+/// equal to the half-extent of the smaller axis, matching the engine's UIGradient.
 /// If the painter cannot ramp, it falls back to a flat fill with the first stop's
 /// colour rather than drawing nothing, because drawing nothing produces blank UI.
 #[no_mangle]
@@ -1442,7 +1442,7 @@ pub extern "C" fn ar_clip_push(ptr: *mut Surface, x: i32, y: i32, w: i32, h: i32
 /// callers outside this crate already use. A square clip is the overwhelmingly
 /// common case and keeps its two-argument-cheaper call.
 ///
-/// Roblox masks descendants against the parent's `UICorner` radius. Dew clipped
+/// The engine masks descendants against the parent's `UICorner` radius. Dew clipped
 /// to a rectangle, so corner pixels leaked outside the rounded boundary --
 /// recorded as an observable divergence by `clips_descendants_has_no_radius` in
 /// milestone 3, and closed here.

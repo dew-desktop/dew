@@ -4,8 +4,8 @@
 
 	THIS FILE IS THE PARITY CLAIM, MADE CONCRETE. Everything below the vocabulary
 	install is ordinary Aether: `host.create` builds a tree, and the properties are
-	named exactly as they are named on Roblox — `Size`, `Position`,
-	`BackgroundColor3`, `Text`. A Roblox entry point differs only in that the
+	named exactly as they are named on the engine — `Size`, `Position`,
+	`BackgroundColor3`, `Text`. An engine entry point differs only in that the
 	engine mounts and drives, so it needs neither `InstallVocabulary` nor
 	`Live.Session`.
 

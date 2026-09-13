@@ -156,7 +156,7 @@ fn writes_the_example_png() {
 /// THE REACTIVE GRAPH DRIVES THE DISPLAY LIST, off-engine, with no engine to
 /// write properties back.
 ///
-/// The component gives `Text` a FUNCTION of a `source`. On Roblox vide reacts by
+/// The component gives `Text` a FUNCTION of a `source`. On the engine vide reacts by
 /// assigning the property and the engine repaints. Here nothing assigns anything
 /// — the same graph simply produces a different `Live.Frame` on the next solve.
 /// A static tree would pass every other test in this file and fail this one, so

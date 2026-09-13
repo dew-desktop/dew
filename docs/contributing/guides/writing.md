@@ -248,7 +248,7 @@ line. It appears in search results and next to the name in a list, so it should
 read as a definition rather than a slogan:
 
 ```
-A headless UI framework for Luau. One component runs in Roblox, on the desktop, and in CI.
+A headless UI framework for Luau. One component runs on the engine, on the desktop, and in CI.
 ```
 
 Not a tagline, not a promise, and no em dash.

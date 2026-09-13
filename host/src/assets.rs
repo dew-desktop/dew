@@ -31,7 +31,7 @@ use std::time::Duration;
 /// The primary local scheme this host resolves without asking anyone's permission.
 pub const LOCAL_SCHEME: &str = "mod://";
 
-/// The remote Roblox asset scheme, gated behind `rbxassetid` permission.
+/// The remote the engine asset scheme, gated behind `rbxassetid` permission.
 pub const RBX_SCHEME: &str = "rbxassetid://";
 
 /// Cryptographic hash (SHA-256 in hex) for content addressing.

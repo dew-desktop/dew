@@ -24,13 +24,24 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The scriptable API surface, pinned.
 ///
 /// Both the property half and the method/event half of the DataModel standard
-/// are pinned from Roblox's API dump at `0.736.0.7361346`.
+/// are pinned from the engine's API dump at `0.736.0.7361346`.
 ///
-/// `scripts/fetch_api_surface.luau` writes this from Roblox's own API dump.
-/// Embedded rather than read at runtime so the data is part of the build: a
-/// missing or malformed file is a compile error rather than a tool that runs and
-/// reports a smaller surface than exists.
-pub const API_SURFACE: &str = include_str!("../datamodel/api_surface.json");
+/// READ AT RUNTIME, AND NOT REDISTRIBUTED.
+///
+/// This was `include_str!`, which made the data part of the build and a missing
+/// file a compile error. It is generated from a third party's published interface
+/// dump, so the file is gitignored and regenerated locally rather than shipped by
+/// this repository -- see NOTICE.
+///
+/// The cost is that absence is now a runtime condition, and every caller has to
+/// say what it does without the data rather than reporting a smaller surface as
+/// though it were the whole one.
+pub const API_SURFACE_PATH: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/datamodel/api_surface.json");
+
+/// What to tell someone who needs the surface and has not generated it.
+pub const API_SURFACE_MISSING: &str =
+    "the interface surface has not been generated; run `lune run scripts/fetch_api_surface.luau`";
 
 #[derive(serde::Deserialize)]
 pub struct ApiSurface {
@@ -56,7 +67,7 @@ pub struct ApiClass {
 /// Properties that are engine bookkeeping rather than UI.
 pub const NOT_UI: &[&str] = &[
     "Archivable",
-    "RobloxLocked",
+    "the engineLocked",
     "AutoLocalize",
     "RootLocalizationTable",
     "Attributes",
@@ -101,7 +112,7 @@ pub const INPUT_DEVICE: &[&str] = &[
 /// Classes that exist under GuiObject and are not UI a host has to draw.
 ///
 /// Video, viewports and chat windows are engine features rather than layout, and
-/// a standard that demanded them would be describing Roblox rather than
+/// a standard that demanded them would be describing the engine rather than
 /// describing a UI. Named explicitly so the exclusion is a decision in a diff
 /// rather than a silent filter.
 pub const OUT_OF_SCOPE: &[&str] = &[
@@ -131,10 +142,14 @@ pub const MODIFIERS: &[&str] = &[
     "UIFlexItem",
 ];
 
-/// Parse the pinned dump. Panics on a malformed file, which is a build-data
-/// problem rather than a runtime one.
-pub fn api() -> ApiSurface {
-    serde_json::from_str(API_SURFACE).expect("host/datamodel/api_surface.json is malformed")
+/// Parse the generated surface, or `None` when it has not been generated.
+///
+/// A MALFORMED FILE STILL PANICS. Absent and corrupt are different: the first is
+/// an ordinary state on a fresh clone, and the second means the generator wrote
+/// something wrong and should be noisy.
+pub fn api() -> Option<ApiSurface> {
+    let raw = std::fs::read_to_string(API_SURFACE_PATH).ok()?;
+    Some(serde_json::from_str(&raw).expect("the generated interface surface is malformed"))
 }
 
 /// Everything that is, or descends from, `GuiObject`, plus the modifiers, minus
@@ -202,8 +217,8 @@ pub fn excluded(property: &str) -> bool {
 /// `in_scope_by_class` exists beside it -- a tool that wants to know whether
 /// `Color` was demonstrated on `UIStroke` as well as on `UIGradient` has to ask
 /// the per-class question, because the by-name answer cannot tell them apart.
-pub fn in_scope_properties() -> BTreeSet<String> {
-    let api = api();
+pub fn in_scope_properties() -> Option<BTreeSet<String>> {
+    let api = api()?;
     let mut names: BTreeSet<String> = BTreeSet::new();
     for class in ui_classes(&api).keys() {
         for p in properties_of(&api, class) {
@@ -212,7 +227,7 @@ pub fn in_scope_properties() -> BTreeSet<String> {
             }
         }
     }
-    names
+    Some(names)
 }
 
 /// Every in-scope (class, property) pair.
@@ -221,8 +236,8 @@ pub fn in_scope_properties() -> BTreeSet<String> {
 /// written in. This is the finer question, and the reason to keep it is that
 /// counting by name is exactly how one class's answer once masked another's and
 /// the surface read 100%.
-pub fn in_scope_by_class() -> BTreeMap<String, BTreeSet<String>> {
-    let api = api();
+pub fn in_scope_by_class() -> Option<BTreeMap<String, BTreeSet<String>>> {
+    let api = api()?;
     let mut out: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for class in ui_classes(&api).keys() {
         let set: BTreeSet<String> = properties_of(&api, class)
@@ -232,7 +247,7 @@ pub fn in_scope_by_class() -> BTreeMap<String, BTreeSet<String>> {
             .collect();
         out.insert(class.to_string(), set);
     }
-    out
+    Some(out)
 }
 
 #[cfg(test)]
@@ -241,7 +256,14 @@ mod tests {
 
     #[test]
     fn the_denominator_is_not_empty_and_excludes_what_it_says_it_does() {
-        let names = in_scope_properties();
+        // SKIPPED LOUDLY WHEN THERE IS NOTHING TO MEASURE. The surface is
+        // generated and gitignored (NOTICE), so a fresh clone has none and this
+        // test has nothing to assert. CI regenerates it, so the assertions below
+        // do run where a regression would matter.
+        let Some(names) = in_scope_properties() else {
+            eprintln!("SKIPPED: {API_SURFACE_MISSING}");
+            return;
+        };
         assert!(
             names.len() > 100,
             "the in-scope set collapsed to {}",
@@ -258,7 +280,10 @@ mod tests {
 
     #[test]
     fn out_of_scope_classes_are_not_walked() {
-        let api = api();
+        let Some(api) = api() else {
+            eprintln!("SKIPPED: {API_SURFACE_MISSING}");
+            return;
+        };
         let ui = ui_classes(&api);
         for excluded_class in OUT_OF_SCOPE {
             assert!(
@@ -278,12 +303,16 @@ mod tests {
     ///
     /// If this test fails, the standard's scope changed. That is allowed and it
     /// is sometimes right -- `InputAction` legitimately took it from 138 to 139
-    /// when the Roblox pin moved. Update the number here IN THE SAME COMMIT as
+    /// when the pinned surface moved. Update the number here IN THE SAME COMMIT as
     /// the change that moved it, so the diff says which.
     #[test]
     fn the_denominator_is_139() {
+        let Some(names) = in_scope_properties() else {
+            eprintln!("SKIPPED: {API_SURFACE_MISSING}");
+            return;
+        };
         assert_eq!(
-            in_scope_properties().len(),
+            names.len(),
             139,
             "the in-scope property count moved; see this test's comment"
         );
@@ -291,9 +320,12 @@ mod tests {
 
     #[test]
     fn by_class_and_by_name_describe_the_same_set() {
-        let by_name = in_scope_properties();
+        let (Some(by_name), Some(by_class)) = (in_scope_properties(), in_scope_by_class()) else {
+            eprintln!("SKIPPED: {API_SURFACE_MISSING}");
+            return;
+        };
         let mut flattened: BTreeSet<String> = BTreeSet::new();
-        for props in in_scope_by_class().values() {
+        for props in by_class.values() {
             flattened.extend(props.iter().cloned());
         }
         assert_eq!(

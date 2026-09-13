@@ -7,8 +7,8 @@
 	and only then calls `mount`. See docs/applet_contract.md.
 
 	Everything below `mount` is ORDINARY AETHER — `create`, `source`, `derive`,
-	and Roblox's property names. There is no Dew dialect, which is what keeps the
-	tree liftable: it can be mounted in a Roblox place or rendered by
+	and the engine's property names. There is no Dew dialect, which is what keeps the
+	tree liftable: it can be mounted in an engine place or rendered by
 	`aether snapshot` without a line changing.
 ]]
 
@@ -92,7 +92,7 @@ return {
 		--- That is right for a HOTKEY and wrong for a clock: nothing in Dew was
 		--- calling it, so the timer sat at 00:00 forever.
 		---
-		--- `Clock.OnFrame` is the same seam Roblox's Heartbeat fills, and
+		--- `Clock.OnFrame` is the same seam the engine's Heartbeat fills, and
 		--- `Live.Session` already steps it once per frame — so this is the engine's
 		--- own frame signal on both hosts rather than a Dew convention.
 		local clock = Aether.Host.detect().Clock

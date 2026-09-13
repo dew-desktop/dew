@@ -12,7 +12,7 @@
 
 	`DewRoot` RATHER THAN `game`, and the difference is not cosmetic.
 	`Host.detect()` in Aether keys on `typeof(game) == "Instance"`, so a `game`
-	global would flip every Aether mod in the same binary onto the Roblox branch
+	global would flip every Aether mod in the same binary onto the engine branch
 	and break it. `game` arrives when the services and the member surface are
 	behind it; until then a standalone script parents into `DewRoot`.
 
@@ -30,7 +30,7 @@ card.AnchorPoint = Vector2.new(0.5, 0.5)
 card.BackgroundColor3 = Color3.fromRGB(24, 30, 42)
 card.Parent = DewRoot
 
---- A modifier is a property of its parent expressed as a child. Roblox's shape,
+--- A modifier is a property of its parent expressed as a child. The engine's shape,
 --- and the renderer must not draw it as a rectangle.
 local corner = Instance.new("UICorner")
 corner.CornerRadius = UDim.new(0, 16)

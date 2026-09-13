@@ -24,7 +24,7 @@ See [`docs/hosting_architecture.md`](../../docs/hosting_architecture.md).
 
 `tests/parity.rs` is the load-bearing one. It loads a real Aether application into
 an embedded guest, drives a frame, and decodes the display list in Rust -- with the
-framework's source required unmodified, exactly as Roblox requires it. If it
+framework's source required unmodified, exactly as the engine requires it. If it
 passes, "the same application runs on both hosts" is a property of the build.
 
 ```sh

@@ -3,13 +3,13 @@
 //! This is a thin binding over `Live.Session` in `src/host/Live.luau`, and thin
 //! is the whole design. Every decision an application makes — layout, hover
 //! arbitration, focus, motion, what a click means — stays in Luau, exactly as it
-//! does when Roblox is the host. Rust supplies frames, pointer positions and
+//! does when the engine is the host. Rust supplies frames, pointer positions and
 //! keystrokes, and paints rectangles it did not choose.
 //!
-//! WHY THAT SPLIT AND NOT A MORE CONVENIENT ONE. Roblox divides a UI into an
+//! WHY THAT SPLIT AND NOT A MORE CONVENIENT ONE. The engine divides a UI into an
 //! engine that renders and reports, and an application that decides. If any of
 //! the deciding leaked into Rust here, the desktop host would diverge from the
-//! Roblox host the moment either changed — and it would diverge quietly, because
+//! The engine host the moment either changed — and it would diverge quietly, because
 //! nothing type-checks "these two hosts agree". Keeping Rust ignorant is what
 //! makes identical behaviour structural rather than aspirational.
 
@@ -89,7 +89,7 @@ impl Session {
     /// THE ORDER INSIDE IS NOT OURS TO CHOOSE and is worth knowing anyway: the
     /// clock moves first because motion changes geometry, then the router settles
     /// because an element that moved under a stationary pointer has changed what
-    /// is hovered. Roblox never reports that second case — it is why the router
+    /// is hovered. The engine never reports that second case — it is why the router
     /// polls at all — so a host that drives its own frames must pump it, or hover
     /// goes stale the moment anything animates.
     pub fn step(&self, dt: f32) -> LuaResult<()> {

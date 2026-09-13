@@ -186,7 +186,7 @@ fn text_is_actually_drawn() {
     //
     // This counted near-white and that was an accident of a broken vide. The
     // fixture never sets `TextColor3`; vide's `defaults.luau` does, to pure
-    // black, on Roblox and here alike. But `defaults` is one of the modules
+    // black, on the engine and here alike. But `defaults` is one of the modules
     // behind vide's `game` gate, so when the gate could not open it failed to
     // require, no default was applied, and the painter's own
     // `unwrap_or(Rgb(255, 255, 255))` filled in. The white text this asserted

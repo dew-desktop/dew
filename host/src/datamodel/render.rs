@@ -66,7 +66,7 @@ pub struct Box2 {
 /// Classes that are MODIFIERS rather than things to draw.
 ///
 /// A `UICorner` is a property of its parent expressed as a child, which is
-/// Roblox's shape and not ours to argue with. Drawing one as a rectangle would
+/// The engine's shape and not ours to argue with. Drawing one as a rectangle would
 /// put a black square behind every rounded card.
 fn is_modifier(class: &str) -> bool {
     class.starts_with("UI")
@@ -186,7 +186,7 @@ fn colour(dom: &Dom, id: usize, key: &str) -> Option<Rgb> {
 
 /// `Transparency` inverted into the alpha the display list carries.
 ///
-/// The display list is opaque at 1 and Roblox is opaque at 0. `Live.luau` inverts
+/// The display list is opaque at 1 and the engine is opaque at 0. `Live.luau` inverts
 /// at the source for exactly one reason, stated there: three painters each
 /// inverted it themselves and one forgot.
 fn alpha_from(dom: &Dom, id: usize, key: &str) -> f32 {
@@ -267,7 +267,7 @@ fn corner_radius(dom: &Dom, id: usize) -> f32 {
 /// the first, and neither is wrong.
 ///
 /// `ImageContent` WINS WHEN BOTH ARE SET, for one reason: it is the one the
-/// engine keeps. Roblox's own migration writes through `Image` into
+/// engine keeps. The engine's migration writes through `Image` into
 /// `ImageContent`, so the modern property is the more recent statement of intent
 /// whenever they disagree -- and an application that sets only `Image` never
 /// reaches the tie at all.
@@ -341,7 +341,7 @@ fn image_scale(dom: &mut Dom, id: usize) -> Scale {
 ///
 /// `None` MEANS THE ELEMENT NAMES NO IMAGE, and that is a different thing from an
 /// image that did not resolve. An `ImageLabel` with an empty `Image` is a plain
-/// rectangle -- the same as it is in Roblox -- and drawing a "missing" marker on
+/// rectangle -- the same as it is in the engine -- and drawing a "missing" marker on
 /// it would put one on every image element in every tree before its asset was
 /// assigned. An element that DID name something the host could not produce keeps
 /// its `Image` with `bitmap: None`, reaches the painter, and is drawn as missing.
@@ -471,7 +471,7 @@ pub struct Placed {
     /// The corner radius of that clipping box, 0.0 when it is square.
     ///
     /// Set from the `UICorner` on the ancestor that does the clipping, because
-    /// that is the shape Roblox masks against. Beside the box rather than inside
+    /// that is the shape the engine masks against. Beside the box rather than inside
     /// it: both are written at one site and the compiler checks every reader.
     pub clip_radius: f32,
     /// The clipping box inherited from the nearest `ClipsDescendants` ancestor.
@@ -802,14 +802,14 @@ fn visit(
     let is_scrolling_frame = dom.class_of(id).as_deref() == Some("ScrollingFrame");
 
     let box_rect = content_box(dom, id, rect);
-    // A ROUNDED PARENT MASKS ITS DESCENDANTS TO THE ROUNDING. Roblox does; Dew
+    // A ROUNDED PARENT MASKS ITS DESCENDANTS TO THE ROUNDING. The engine does; Dew
     // clipped to a rectangle and leaked the corner pixels, which milestone 3
     // recorded as an observable divergence rather than fixing.
     //
     // THE ROUNDER OF THE TWO WINS on nesting, matching `ar_clip_push_rounded`: a
     // square clip inside a rounded one is still inside the rounded one.
     //
-    // A SCROLLINGFRAME ALWAYS CLIPS ITS CONTENT TO ITS OWN BOX, matching Roblox.
+    // A SCROLLINGFRAME ALWAYS CLIPS ITS CONTENT TO ITS OWN BOX, matching the engine.
     let (child_clip, child_clip_radius) =
         if is_scrolling_frame || boolean(dom, id, "ClipsDescendants") == Some(true) {
             (
@@ -1001,7 +1001,7 @@ fn visit(
 
 /// Which end of the cross axis a `UIListLayout` gathers its children against.
 ///
-/// `Left` and `Top` are the same answer on different axes, and Roblox spells
+/// `Left` and `Top` are the same answer on different axes, and the engine spells
 /// them differently for the two enums, so both map onto one three-way.
 #[derive(Clone, Copy, PartialEq)]
 enum CrossAlign {
@@ -1310,7 +1310,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
         text_colour: colour(dom, id, "TextColor3"),
         // TRANSPARENCY IS THE INVERSE OF ALPHA, as it is everywhere in this
-        // vocabulary: Roblox counts how see-through a thing is and the painter
+        // vocabulary: the engine counts how see-through a thing is and the painter
         // counts how solid it is.
         text_alpha: 1.0
             - number(dom, id, "TextTransparency")
@@ -1469,7 +1469,7 @@ mod tests {
     /// The host accepted `TextTransparency` and the display list had nowhere to
     /// put it, so every run painted solid. Found by the gallery's differential
     /// pass, which reported that changing the property moved no pixels.
-    /// Roblox masks descendants against the clipping parent's `UICorner`. The
+    /// The engine masks descendants against the clipping parent's `UICorner`. The
     /// display list carried a bare rectangle, so corner pixels leaked --
     /// milestone 3 recorded it as an observable divergence rather than fixing it.
     #[test]
@@ -1732,7 +1732,7 @@ mod tests {
 
     #[test]
     fn transparency_is_inverted_into_alpha() {
-        // Roblox is opaque at 0, the display list is opaque at 1.
+        // The engine is opaque at 0, the display list is opaque at 1.
         let f = render(
             r#"
             local a = Instance.new("Frame")
@@ -2057,7 +2057,7 @@ mod tests {
     fn an_unresolvable_content_is_a_rendering_outcome_and_not_a_property_error() {
         // ADR-003, as a test. The assignment succeeds, the node reaches the
         // painter, it remembers what it asked for, and it has no pixels. Sprint 5
-        // is what makes `rbxassetid://` resolve; until then this is what a Roblox
+        // is what makes `rbxassetid://` resolve; until then this is what an engine
         // application moved to Dew looks like, and it is not a broken one.
         let f = render_with_assets(
             r#"

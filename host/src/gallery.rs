@@ -8,7 +8,7 @@
 //!
 //! NOT A CONFORMANCE RUNNER, and the separation is
 //! [ADR-005](../../.artifacts/project/milestones/5_the_surface_demonstrates_itself/decisions/adr-005-the-gallery-is-not-a-conformance-runner.md).
-//! A scene states no belief about Roblox: it has no `provenance`, no
+//! A scene states no belief about the engine: it has no `provenance`, no
 //! `verifiedAgainst` and no `expect`, and [`decode_scene`] REFUSES a file
 //! carrying any of them rather than ignoring them. The two artifacts share the
 //! scene format and the renderer ([`crate::conformance::TREE_BUILDER`]) and
@@ -232,7 +232,7 @@ pub fn decode_scene(lua: &Lua, path: &Path, pillar: &str) -> Result<Scene, Strin
         if table.contains_key(*banned).unwrap_or(false) {
             return Err(format!(
                 "{file_stem}: gallery scenes carry no '{banned}'. A scene shows the host \
-                 rendering something; it states no belief about Roblox. If this file wants \
+                 rendering something; it states no belief about the engine. If this file wants \
                  to assert engine behaviour it is a conformance case and belongs in \
                  aether/conformance/cases. See ADR-005."
             ));
@@ -566,6 +566,7 @@ pub fn excused(property: &str) -> Option<&'static str> {
 }
 
 /// What the gallery demonstrates, against the standard's own denominator.
+#[derive(Default)]
 pub struct Coverage {
     pub in_scope: BTreeSet<String>,
     pub demonstrated: BTreeSet<String>,
@@ -640,9 +641,18 @@ pub fn differential(scenes: &[Scene]) -> Result<(BTreeSet<String>, Vec<String>),
     Ok((moved, inert))
 }
 
+/// WITHOUT THE SURFACE THIS REPORTS NOTHING, rather than reporting zero.
+///
+/// The interface surface is generated and gitignored (see NOTICE), so on a fresh
+/// clone there is no denominator. A coverage figure of `0 of 0` would look like a
+/// measurement; an empty `Coverage` and a printed reason is one.
 pub fn coverage_with_moved(scenes: &[Scene], moved: &BTreeSet<String>) -> Coverage {
-    let in_scope = crate::scope::in_scope_properties();
-    let by_class = crate::scope::in_scope_by_class();
+    let (Some(in_scope), Some(by_class)) = (
+        crate::scope::in_scope_properties(),
+        crate::scope::in_scope_by_class(),
+    ) else {
+        return Coverage::default();
+    };
 
     let mut demonstrated: BTreeSet<String> = BTreeSet::new();
     let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
@@ -707,7 +717,9 @@ pub fn by_pillar(scenes_dir: &Path, scenes: &[Scene]) -> BTreeMap<String, (usize
             }
         }
     }
-    let in_scope = crate::scope::in_scope_properties();
+    let Some(in_scope) = crate::scope::in_scope_properties() else {
+        return out;
+    };
     let mut props: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for scene in scenes {
         let entry = out.entry(scene.pillar.clone()).or_insert((0, 0));
@@ -822,8 +834,12 @@ mod tests {
     /// The gallery counts against `scope`, not against a list of its own.
     #[test]
     fn coverage_measures_against_the_shared_denominator() {
+        let Some(in_scope) = crate::scope::in_scope_properties() else {
+            eprintln!("SKIPPED: {}", crate::scope::API_SURFACE_MISSING);
+            return;
+        };
         let cov = coverage(&[]);
-        assert_eq!(cov.total(), crate::scope::in_scope_properties().len());
+        assert_eq!(cov.total(), in_scope.len());
         assert_eq!(cov.count(), 0, "no scenes demonstrates nothing");
         assert_eq!(cov.missing.len(), cov.total());
     }
