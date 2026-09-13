@@ -416,13 +416,29 @@ pub fn paint_scene(
         .call::<Value>((tree_table, root_handle))
         .map_err(|e| format!("the tree failed to build: {e}"))?;
 
-    let frame = frame_of(&dom, root_id, scene.surface.width, scene.surface.height);
+    paint_dom(&dom, root_id, scene.surface.width, scene.surface.height)
+}
 
-    let width = scene.surface.width as usize;
-    let height = scene.surface.height as usize;
+/// Paint whatever is already parented under `root_id`.
+///
+/// SEPARATE FROM `paint_scene` BECAUSE NOT EVERY TREE IS A SCENE. A gallery scene
+/// is declarative data this module builds; an Aether demo builds its own tree
+/// through the framework, and by the time anything can be painted the instances
+/// already exist. Both want the same last step -- lay out, rasterise, swap BGRA
+/// for RGBA -- and it was written once here rather than twice.
+pub fn paint_dom(
+    dom: &SharedDom,
+    root_id: usize,
+    surface_width: f32,
+    surface_height: f32,
+) -> Result<Painted, String> {
+    let frame = frame_of(dom, root_id, surface_width, surface_height);
+
+    let width = surface_width as usize;
+    let height = surface_height as usize;
     let mut painter = RasterPainter::new(
-        scene.surface.width as u32,
-        scene.surface.height as u32,
+        surface_width as u32,
+        surface_height as u32,
         Backend::VelloCpu,
     )
     .ok_or("failed to create raster painter")?;

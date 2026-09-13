@@ -1,0 +1,20 @@
+name = "dew_demos/pressable"
+version = "0.0.1"
+description = "A pressable that changes under a press, so the framework can prove it responds"
+
+# A DEMO INSTALLS ITS OWN FRAMEWORK, per ADR-008. The host injects nothing, and
+# Dew's own [dependencies] is empty and gated -- an application that wants Aether
+# carries a manifest, exactly as mods/*/ do.
+[target]
+environment = "roblox"
+lib = "pressable.luau"
+
+[dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "9198c821e7eb0869676b4891f35384feacd4d3af" }
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"

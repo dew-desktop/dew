@@ -65,6 +65,13 @@ local config: CommitLintConfig = {
         "scripts",   -- scripts/
         "assets",    -- host/assets/
         "examples",  -- examples/, programs that are not mods
+        --- demos/ -- applications that exercise a guest framework so
+        --- `framework-coverage` can report how much of it is demonstrated rather
+        --- than merely shipped. Separate from `examples` because an example is
+        --- written to be read and a demo is written to be driven: it declares an
+        --- interaction script and fails the build when the pixels stop moving.
+        --- ADR-008 keeps them in this repository while the bootstrap lasts.
+        "demos",     -- demos/, applications driven to prove a framework responds
         "deps"       -- VERSION, manifests, pins
     },
     maxHeaderLength = 100,
