@@ -7,13 +7,13 @@ would run on inside Roblox.
 ## Running it
 
 ```sh
-cargo run -p dew-host -- --mod timetracker
+cargo run -p dew-host -- --applet timetracker
 ```
 
-From inside `host/`, plain `cargo run -- --mod timetracker` works too: the host
-walks up for `mods/` and for the installed vide, so either directory is fine.
+From inside `host/`, plain `cargo run -- --applet timetracker` works too: the host
+walks up for `applets/` and for the installed vide, so either directory is fine.
 
-`--mod <id>` picks a widget. Without it, Dew lists what it found and runs the
+`--applet <id>` picks a widget. Without it, Dew lists what it found and runs the
 first alphabetically.
 
 `--snapshot <path>` renders one frame to a PNG and exits, needing no window. It
@@ -27,7 +27,7 @@ default, and Exit.
 
 ## Writing a widget
 
-A widget is a directory under [`mods/`](mods/) holding a `mod.json` and a
+A widget is a directory under [`applets/`](applets/) holding a `dew.toml` and a
 `<id>.luau`:
 
 ```luau
@@ -43,8 +43,8 @@ return {
 ```
 
 `mount` runs once and returns a tree. `dew` carries exactly the capabilities
-`mod.json` declared, so a widget that asks for nothing can render and touch
-nothing. [docs/mod_contract.md](docs/mod_contract.md) has the rest.
+`dew.toml` declared, so a widget that asks for nothing can render and touch
+nothing. [docs/applet_contract.md](docs/applet_contract.md) has the rest.
 
 Three surfaces are available: a floating transparent widget, an ordinary window,
 or an overlay covering the desktop.
@@ -52,7 +52,7 @@ or an overlay covering the desktop.
 ### Without a framework
 
 A widget does not have to be an Aether component. `"runtime": "datamodel"` in
-`mod.json` gets a mod the DataModel Dew implements itself and nothing else:
+`dew.toml` gets an applet the DataModel Dew implements itself and nothing else:
 
 ```luau
 return {
@@ -69,7 +69,7 @@ return {
 ```
 
 No `require`, nothing imported, and every line of it would build the same tree
-inside Roblox. [`mods/nameplate`](mods/nameplate/) is the whole example. The
+inside Roblox. [`applets/nameplate`](applets/nameplate/) is the whole example. The
 runtime is declared rather than detected, and everything else -- discovery, the
 manifest, capabilities, the surface -- is identical either way.
 

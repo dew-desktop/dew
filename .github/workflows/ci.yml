@@ -1,6 +1,6 @@
-# Dew builds and every mod mounts.
+# Dew builds and every applet mounts.
 #
-# `--snapshot` needs no display, which is what makes a mod loading a testable
+# `--snapshot` needs no display, which is what makes an applet loading a testable
 # fact rather than something someone notices later. It exercises the whole
 # chain: manifest, VM, capabilities, the mod's own Luau, Aether's layout, and the
 # rasteriser.
@@ -185,7 +185,7 @@ jobs:
       - run: lune run scripts/verify_ascii.luau
 
   build:
-    name: build and mount every mod
+    name: build and mount every applet
     runs-on: windows-latest
     needs: [changes, checks]
     if: needs.changes.outputs.code == 'true'
@@ -274,7 +274,7 @@ jobs:
           "$env:RUNNER_TEMP/pesde" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       # Aether declares vide and a pinned checkout does not carry it, so the host
-      # supplies it. Without this every mod fails to mount with "no installed
+      # supplies it. Without this every applet fails to mount with "no installed
       # vide reachable".
       - run: pesde install
 
@@ -283,10 +283,10 @@ jobs:
       # mod fails to mount with "could not read entry module .../roblox_packages/
       # aether.luau". The host injects nothing any more, so there is no fallback
       # that would quietly cover a missed install.
-      - name: Install each mod's own dependencies
+      - name: Install each applet's own dependencies
         shell: bash
         run: |
-          for m in mods/*/pesde.toml; do
+          for m in applets/*/pesde.toml; do
             d=$(dirname "$m")
             (cd "$d" && pesde install)
             test -f "$d/roblox_packages/aether.luau" || {
@@ -326,22 +326,22 @@ jobs:
             exit 1
           }
 
-      # EVERY MOD, not the first one. A mod that fails to load is skipped with a
+      # EVERY MOD, not the first one. An applet that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
       # a broken mod here.
-      # Validate all mod manifests and syntax
+      # Validate all applet manifests and syntax
       - run: cargo run --quiet --manifest-path host/Cargo.toml -- check
 
-      # EVERY MOD, not the first one. A mod that fails to load is skipped with a
+      # EVERY MOD, not the first one. An applet that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
       # a broken mod here.
-      - name: Mount each mod
+      - name: Mount each applet
         shell: bash
         run: |
-          for m in mods/*/; do
+          for m in applets/*/; do
             id=$(basename "$m")
             echo "--- $id"
-            cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --mod "$id" "/tmp/$id.png"
+            cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --applet "$id" "/tmp/$id.png"
           done
 
 
@@ -455,10 +455,10 @@ jobs:
       # mod fails to mount with "could not read entry module .../roblox_packages/
       # aether.luau". The host injects nothing any more, so there is no fallback
       # that would quietly cover a missed install.
-      - name: Install each mod's own dependencies
+      - name: Install each applet's own dependencies
         shell: bash
         run: |
-          for m in mods/*/pesde.toml; do
+          for m in applets/*/pesde.toml; do
             d=$(dirname "$m")
             (cd "$d" && pesde install)
             test -f "$d/roblox_packages/aether.luau" || {
@@ -509,7 +509,7 @@ jobs:
       - name: Render named mod snapshot
         shell: bash
         run: |
-          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --mod nameplate /tmp/nameplate.png)
+          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --applet nameplate /tmp/nameplate.png)
           echo "$output"
           echo "$output" | grep -q "wrote /tmp/nameplate.png (340x148) for nameplate" || {
             echo "Expected snapshot of nameplate by name, got: $output"
@@ -531,9 +531,9 @@ jobs:
         run: |
           cargo run --quiet --manifest-path host/Cargo.toml -- init test_scaffold --runtime datamodel
           cargo run --quiet --manifest-path host/Cargo.toml -- check test_scaffold
-          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --mod test_scaffold /tmp/scaffold.png
+          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --applet test_scaffold /tmp/scaffold.png
           test -s /tmp/scaffold.png || { echo "scaffold.png was not created or is empty"; exit 1; }
-          rm -rf mods/test_scaffold
+          rm -rf applets/test_scaffold
           echo "Scaffolded, checked, and rendered test_scaffold mod successfully"
 
       # THE GALLERY RENDERS, AND SAYS HOW MUCH IT SHOWS.

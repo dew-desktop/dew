@@ -107,7 +107,7 @@ document makes on the host's behalf.
 **24 of them are events**, reachable through `RBXScriptSignal` and
 `RBXScriptConnection`.
 
-**16 of them are input**, which is what makes a mod written
+**16 of them are input**, which is what makes an applet written
 without a framework CLICKABLE. The host resolves the tree's geometry once
 and both the painter and the hit test read that one answer, so what
 responds to a click is what is on screen. The rest are what an instance

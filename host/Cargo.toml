@@ -92,6 +92,10 @@ ureq = { version = "2.10", default-features = false, features = ["tls"] }
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# The applet manifest is `dew.toml`. TOML rather than JSON for one reason:
+# comments. Every manifest here is hand-written and this project comments
+# everything. See ADR-009.
+toml = "0.8"
 dirs = "6.0"
 
 # WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs

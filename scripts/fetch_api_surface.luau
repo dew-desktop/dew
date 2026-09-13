@@ -139,7 +139,7 @@ for _, name in ipairs(MODIFIERS) do
 	keepWithAncestors(name)
 end
 
---- A member is IN if a mod author could call it.
+--- A member is IN if an applet author could call it.
 ---
 --- `Security` gates that, and it is two shapes in one file: a string for
 --- functions and events, a `{ Read, Write }` table for properties. Only `None`

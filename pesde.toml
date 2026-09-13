@@ -21,7 +21,7 @@ lib = "scripts/init.luau"
 # THE REVISION IS READ BY `pesde install` AND BY NOTHING ELSE AT RUN TIME, so a
 # bump is only real once the install has run: `aether_runtime::installed_package`
 # finds whatever is on disk under `roblox_packages/.pesde/`, not what this file
-# says. A stale checkout is a mod mounting against a framework nobody edited.
+# says. A stale checkout is an applet mounting against a framework nobody edited.
 [dependencies]
 # VIDE COMES FROM A FORK, one patch ahead of upstream.
 #
@@ -51,9 +51,9 @@ lib = "scripts/init.luau"
 [dev_dependencies]
 # NOT DEPENDENCIES ANY MORE, AND THE DISTINCTION IS THE POINT OF MILESTONE 6.
 #
-# The host used to install Aether and vide and hand them to every mod through
-# injected aliases. A mod now declares its own, so nothing Dew ships needs a
-# framework: `mods.rs` grants a mod one require root -- its own directory -- and
+# The host used to install Aether and vide and hand them to every applet through
+# injected aliases. An applet now declares its own, so nothing Dew ships needs a
+# framework: `mods.rs` grants an applet one require root -- its own directory -- and
 # injects no alias at all.
 #
 # They stay here because Dew's own tests need something to test against, and

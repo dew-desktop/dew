@@ -16,7 +16,7 @@
 //! A TAGGED UNION, though, and not a bag of optional fields. `resizable` means
 //! nothing to a floating widget and `anchor` means nothing to a window; a flat
 //! table would let a mod set either and have it silently ignored, which is
-//! exactly how `mod.json`'s permissions were decoration before they were
+//! exactly how `dew.toml`'s permissions were decoration before they were
 //! enforced.
 
 #[cfg(windows)]

@@ -82,23 +82,37 @@ struct Demo {
 }
 
 /// Every directory under `demos/` that carries a manifest and an entry named
-/// after itself, which is the shape `mods/` already uses.
+/// after itself, which is the shape `applets/` already uses.
+/// WALKED RATHER THAN LISTED, because demos are grouped by runtime --
+/// `demos/applets/aether/pressable`, `demos/applets/datamodel/...` (ADR-009).
+/// Scanning one level found nothing after that move and printed an
+/// honest-looking `0 of 56`, which is the failure a generated number is supposed
+/// to prevent rather than produce.
 fn demo_entries(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
             continue;
         };
-        let luau = dir.join(format!("{name}.luau"));
-        if luau.is_file() && dir.join("pesde.toml").is_file() {
-            out.push(luau);
+        for entry in entries.flatten() {
+            let child = entry.path();
+            if !child.is_dir() {
+                continue;
+            }
+            // A demo's own installed packages are not a place to look for demos.
+            if child.file_name().is_some_and(|n| n == "roblox_packages") {
+                continue;
+            }
+            let Some(name) = child.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let luau = child.join(format!("{name}.luau"));
+            if luau.is_file() && child.join("pesde.toml").is_file() {
+                out.push(luau);
+            } else {
+                stack.push(child);
+            }
         }
     }
     out.sort();

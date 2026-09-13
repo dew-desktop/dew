@@ -115,9 +115,9 @@ end
 
 -- 1 - THE HOST IS RUST; THE GUEST BRINGS THE LUAU ----------------------------
 --
--- `docs/mod_contract.md` states it: "Dew ships no Luau of its own". A host that
+-- `docs/applet_contract.md` states it: "Dew ships no Luau of its own". A host that
 -- grew a Luau layer would be a second framework competing with the one its guests
--- already chose, and the mod contract would stop being a contract.
+-- already chose, and the applet contract would stop being a contract.
 
 --- `crates/` IS WALKED TOO, and it was not before, because before this sprint
 --- there was nothing there. The rule is about Dew's host, and the host is now
@@ -129,7 +129,7 @@ for _, dir in ipairs({ "host", "crates" }) do
 	for _, path in ipairs(walk(dir, {})) do
 		--- A FIXTURE UNDER `tests/` IS A GUEST, AND THAT IS THE RULE RATHER THAN AN
 		--- exception to it. `crates/runtime/tests/fixtures/app.luau` is an Aether
-		--- application, written the way a mod is written, so that a Rust test can
+		--- application, written the way an applet is written, so that a Rust test can
 		--- drive one. Counting it would say the host ships Luau because it has a
 		--- test that loads some -- which is the opposite of what happens.
 		if string.find(path, "/tests/", 1, true) then
@@ -138,7 +138,7 @@ for _, dir in ipairs({ "host", "crates" }) do
 		if string.match(path, "%.luau?$") and not table.find(HOST_LUAU_ALLOWED, path) then
 			fail(
 				`{path}: Luau inside the host. Dew ships no Luau of its own -- the host is Rust `
-					.. `and the guest brings the Luau. See docs/mod_contract.md.`
+					.. `and the guest brings the Luau. See docs/applet_contract.md.`
 			)
 		end
 	end
@@ -268,7 +268,7 @@ end
 
 --- THE HOST DECLARES NO FRAMEWORK, and this is what keeps that true.
 ---
---- Milestone 6 emptied `[dependencies]`: a mod declares Aether and vide in its
+--- Milestone 6 emptied `[dependencies]`: an applet declares Aether and vide in its
 --- own manifest and reaches them through the redirect pesde writes beside it, so
 --- nothing Dew ships needs a framework. Both stayed on as DEV dependencies,
 --- because Dew tests against them and `dew test` reads suites out of a checkout.
@@ -288,7 +288,7 @@ if deps then
 			fail(
 				`pesde.toml declares '{name}' under [dependencies]. The host ships no `
 					.. "framework: an application that needs one carries its own manifest, the "
-					.. "way mods/*/pesde.toml do. Move it to [dev_dependencies] if Dew's own "
+					.. "way applets/*/pesde.toml do. Move it to [dev_dependencies] if Dew's own "
 					.. "tests need it."
 			)
 		end

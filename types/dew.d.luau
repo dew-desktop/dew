@@ -3,15 +3,15 @@
 	Type declarations for what a Dew mod is handed.
 
 	Kept beside the host that produces it: `host/src/capabilities.rs` builds the
-	table this describes, and `host/src/mods.rs` reads the declaration. If those
+	table this describes, and `host/src/applets.rs` reads the declaration. If those
 	two and this file disagree, they are wrong and this is stale.
 ]]
 
---- What a mod's module returns.
+--- What an applet's module returns.
 ---
 --- A DECLARATION, not a registration. Requiring the module defines this table
 --- and does nothing else, so the host can read `id` and `size`, check them
---- against `mod.json`, and refuse the mod before a line of its logic runs.
+--- against `dew.toml`, and refuse the applet before a line of its logic runs.
 export type Mod = {
 	id: string,
 	--- Ignored for an overlay surface, which is sized by the screen.
@@ -66,11 +66,11 @@ export type OverlaySurface = {
 
 --- The capability table `mount` receives.
 ---
---- EVERY FIELD BUT `time` IS OPTIONAL, and present only if `mod.json` declared
---- the matching permission. That is the point: what a mod cannot name it cannot
---- reach, and a mod declaring nothing gets a table carrying only the clock.
+--- EVERY FIELD BUT `time` IS OPTIONAL, and present only if `dew.toml` declared
+--- the matching permission. That is the point: what an applet cannot name it cannot
+--- reach, and an applet declaring nothing gets a table carrying only the clock.
 export type Dew = {
-	--- Ungated. Reading a clock discloses nothing a mod could not get by counting
+	--- Ungated. Reading a clock discloses nothing an applet could not get by counting
 	--- frames, and gating it would put a permission in every manifest that exists
 	--- to say "this mod is allowed to know what time it is".
 	time: {

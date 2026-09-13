@@ -12,4 +12,4 @@ Three things worth knowing before the first pull request:
 - **Plain ASCII**, in commits, pull requests and documentation alike.
 
 If you are writing a widget rather than changing the host, you probably want
-[docs/mod_contract.md](docs/mod_contract.md) instead.
+[docs/applet_contract.md](docs/applet_contract.md) instead.

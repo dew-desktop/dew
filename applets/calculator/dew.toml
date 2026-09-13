@@ -1,0 +1,10 @@
+# Calculator
+#
+# Quick math widget
+
+id = "calculator"
+name = "Calculator"
+description = "Quick math widget"
+
+# DECLARES NO PERMISSIONS, and gets none. Deny by default, working.
+permissions = []

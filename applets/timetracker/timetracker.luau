@@ -3,8 +3,8 @@
 	Time Tracker — a Dew widget.
 
 	A DECLARATION. Requiring this file defines a table and does nothing else; the
-	host reads `id` and `size`, checks `mod.json`, builds the capability table,
-	and only then calls `mount`. See docs/mod_contract.md.
+	host reads `id` and `size`, checks `dew.toml`, builds the capability table,
+	and only then calls `mount`. See docs/applet_contract.md.
 
 	Everything below `mount` is ORDINARY AETHER — `create`, `source`, `derive`,
 	and Roblox's property names. There is no Dew dialect, which is what keeps the
@@ -48,7 +48,7 @@ return {
 		clickThrough = false,
 	},
 
-	--- `dew` carries exactly what mod.json declared: storage, audio,
+	--- `dew` carries exactly what dew.toml declared: storage, audio,
 	--- notifications. Not a global, and not the whole host surface.
 	mount = function(dew: any)
 		local isRunning = source(false)

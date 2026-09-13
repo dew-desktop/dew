@@ -42,5 +42,5 @@ Every commit on it compiles, passes its checks, and runs.
 - Commit types and scopes are validated by
   [`scripts/commitlint.luau`](../../scripts/commitlint.luau). Scopes map to
   directories.
-- The mod contract, for anyone writing a widget rather than changing the host,
-  is [docs/mod_contract.md](../mod_contract.md).
+- The applet contract, for anyone writing a widget rather than changing the host,
+  is [docs/applet_contract.md](../applet_contract.md).

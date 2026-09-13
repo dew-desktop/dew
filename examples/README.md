@@ -1,6 +1,6 @@
 # Examples
 
-Not mods. A mod is discovered from `mods/`, carries a `mod.json`, and is granted
+Not mods. An applet is discovered from `applets/`, carries a `dew.toml`, and is granted
 capabilities by its manifest. These are the smallest programs that demonstrate one
 thing each, run directly.
 

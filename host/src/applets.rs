@@ -3,7 +3,7 @@
 //! THE ORDER IS THE POINT. Everything the host needs to decide whether a mod may
 //! run is known before the mod's logic executes:
 //!
-//!   1. `mod.json` is read from disk. It names the mod, its runtime and its
+//!   1. `dew.toml` is read from disk. It names the mod, its runtime and its
 //!      permissions.
 //!   2. A VM is created — deny-by-default, with no ffi, io, os or ambient `dew`.
 //!   3. The `dew` table is built from the GRANTED permissions and nothing else.
@@ -63,7 +63,7 @@ impl Mounted {
     }
 }
 
-pub struct Mod {
+pub struct Applet {
     pub manifest: Manifest,
     pub width: u32,
     pub height: u32,
@@ -121,7 +121,7 @@ pub fn load(
     _aether_root: &Path,
     aliases: &std::collections::HashMap<String, PathBuf>,
     state: &Shared,
-) -> Result<Mod, String> {
+) -> Result<Applet, String> {
     // 1 ── the manifest, before anything of the mod's runs.
     let manifest = Manifest::load(dir)?;
 
@@ -424,7 +424,7 @@ pub fn load(
         capabilities::describe(&manifest.permissions)
     );
 
-    Ok(Mod {
+    Ok(Applet {
         manifest,
         width,
         height,
@@ -448,7 +448,7 @@ mod tests {
 
     /// A mod on disk, in a directory of its own, removed when the test ends.
     ///
-    /// The loader reads `mod.json` and an entry module from a real directory,
+    /// The loader reads `dew.toml` and an entry module from a real directory,
     /// which is the behaviour under test; faking the filesystem here would test
     /// a different loader.
     struct Fixture(PathBuf);
@@ -458,12 +458,12 @@ mod tests {
             let dir = std::env::temp_dir().join(format!("dew-mods-test-{name}"));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("temp dir");
-            std::fs::write(dir.join("mod.json"), manifest).expect("mod.json");
+            std::fs::write(dir.join("dew.toml"), manifest).expect("dew.toml");
             std::fs::write(dir.join("main.luau"), entry).expect("entry");
             Fixture(dir)
         }
 
-        fn load(&self) -> Result<Mod, String> {
+        fn load(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
             // A DataModel mod never reads Aether's source; the path is still a
             // require root, and pointing it at the mod's own directory keeps this
@@ -484,7 +484,7 @@ mod tests {
         /// naming the Aether this mod declared. Copying the package in would be
         /// truer still and costs seconds per test; the redirect is the same
         /// shape a real mod loads through.
-        fn load_aether(&self) -> Result<Mod, String> {
+        fn load_aether(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
             let root = dew_runtime::installed_package("aether")
                 .expect("no installed aether -- run `pesde install` at the repository root");
@@ -522,7 +522,7 @@ mod tests {
     fn a_mod_cannot_reach_a_framework_it_did_not_declare() {
         let fixture = Fixture::new(
             "undeclared",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             r#"
                 local Aether = require("@aether/api")
                 return { id = "plain", size = { width = 10, height = 10 } }
@@ -562,11 +562,7 @@ mod tests {
 
     #[test]
     fn a_datamodel_mod_mounts_and_the_renderer_finds_what_it_parented() {
-        let fixture = Fixture::new(
-            "mounts",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
-            PLAIN,
-        );
+        let fixture = Fixture::new("mounts", "id = \"plain\"\nruntime = \"datamodel\"\n", PLAIN);
         let loaded = fixture.load().expect("the mod loads");
 
         assert_eq!(loaded.mounted.runtime(), Runtime::DataModel);
@@ -589,7 +585,7 @@ mod tests {
         // the root the host made, and the VM a mod is actually given.
         let fixture = Fixture::new(
             "clickable",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             r#"
                 return {
                     id = "plain",
@@ -647,7 +643,7 @@ mod tests {
         // it is a GLOBAL, since a mod is handed `dew` and `root` and nothing else.
         let fixture = Fixture::new(
             "services",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             r#"
                 return {
                     id = "plain",
@@ -676,7 +672,7 @@ mod tests {
         // sees it as `take_dirty` answering true for a mod that changed nothing.
         let fixture = Fixture::new(
             "idleclock",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             r#"
                 ticks = 0
                 return {
@@ -721,7 +717,7 @@ mod tests {
         // listener must repaint -- the paint follows the change, not the tick.
         let fixture = Fixture::new(
             "animclock",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             r#"
                 return {
                     id = "plain",
@@ -817,7 +813,7 @@ mod tests {
         // it built is in this host's own arena.
         let fixture = Fixture::new(
             "aetherhost",
-            r#"{ "id": "plain", "runtime": "aether" }"#,
+            "id = \"plain\"\nruntime = \"aether\"\n",
             AETHER_MOD,
         );
         let loaded = fixture.load_aether().expect("the mod loads");
@@ -889,7 +885,7 @@ mod tests {
         // test noticed, because none read one back.
         let fixture = Fixture::new(
             "aethervalues",
-            r#"{ "id": "plain", "runtime": "aether" }"#,
+            "id = \"plain\"\nruntime = \"aether\"\n",
             AETHER_MOD,
         );
         let loaded = fixture.load_aether().expect("the mod loads");
@@ -924,7 +920,7 @@ mod tests {
         // reports the solved rectangle through `Host.SetBounds`. That used to
         // write it into `Position` and `Size` -- the properties the solver READS
         // -- so every frame it added the parent's offset to an offset it had
-        // already made absolute. On `mods/timetracker` a label walked 286 pixels
+        // already made absolute. On `applets/timetracker` a label walked 286 pixels
         // right per frame and the widget repainted 305 times a second doing
         // nothing. It passed every test in both repositories, because nothing
         // off-engine had ever driven that host before.
@@ -963,7 +959,7 @@ mod tests {
         // count being wrong.
         let fixture = Fixture::new(
             "vocabulary",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             PLAIN,
         );
         assert!(fixture.load().is_ok());
@@ -993,7 +989,7 @@ mod tests {
         // manifest granted.
         let fixture = Fixture::new(
             "caps",
-            r#"{ "id": "plain", "runtime": "datamodel", "permissions": ["storage"] }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1012,7 +1008,7 @@ mod tests {
     fn a_datamodel_mod_without_mount_is_told_the_signature_it_needed() {
         let fixture = Fixture::new(
             "nomount",
-            r#"{ "id": "plain", "runtime": "datamodel" }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\n",
             r#"return { id = "plain" }"#,
         );
         let Err(message) = fixture.load() else {
@@ -1037,7 +1033,7 @@ mod tests {
     fn a_mod_resolves_an_image_through_rbxassetid_with_grant() {
         let fixture = Fixture::new(
             "rbxgrant",
-            r#"{ "id": "plain", "runtime": "datamodel", "permissions": ["rbxassetid"] }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"rbxassetid\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1085,7 +1081,7 @@ mod tests {
     fn a_mod_is_refused_an_image_through_rbxassetid_without_grant() {
         let fixture = Fixture::new(
             "rbxnogrant",
-            r#"{ "id": "plain", "runtime": "datamodel", "permissions": ["storage"] }"#,
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"storage\"]\n",
             r#"
                 return {
                     id = "plain",

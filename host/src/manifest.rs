@@ -1,4 +1,4 @@
-//! `mod.json` — what a mod says it is, before any of it runs.
+//! `dew.toml` — what a mod says it is, before any of it runs.
 //!
 //! Read from disk and checked BEFORE the mod's own code is loaded, which is the
 //! whole reason the mod contract is a returned declaration rather than a
@@ -44,7 +44,7 @@ impl Permission {
 /// and both get painted by the same painter, so there is no reliable artefact to
 /// sniff: a heuristic on `require("@aether/api")` would be reading source to
 /// decide how to execute it, and it would answer wrong for the first mod that
-/// requires Aether conditionally or wraps it. One key in `mod.json` is the whole
+/// requires Aether conditionally or wraps it. One key in `dew.toml` is the whole
 /// mechanism.
 ///
 /// A CLOSED SET, like `Permission`, and for the same reason. `"runtime": "solid"`
@@ -80,7 +80,7 @@ impl Runtime {
 /// What a mod declares about itself.
 ///
 /// EVERY FIELD HERE IS READ BY SOMETHING. `id` names the mod and picks its entry
-/// module, `runtime` picks the branch `mods::load` takes, `permissions` builds
+/// module, `runtime` picks the branch `applets::load` takes, `permissions` builds
 /// the capability table, `name` titles the window and the tray, `description`
 /// fills the tray tooltip. `hotkeys` is the one exception, and it is a LOUD one:
 /// nothing in the host registers a global hotkey yet, so `unhonoured()` names
@@ -100,7 +100,7 @@ pub struct Manifest {
     /// Which runtime this mod's `mount` is written against.
     ///
     /// THE ONE MANIFEST KEY THAT CHANGES HOW THE MOD IS LOADED. Everything else
-    /// here describes a mod; this decides what `mods::load` does with it — which
+    /// here describes a mod; this decides what `applets::load` does with it — which
     /// globals the VM gets, whether Aether's desktop ceremony runs at all, and
     /// what `mount` is handed. It is a field rather than an inference because
     /// getting it wrong is not a cosmetic error: an Aether mod loaded on the
@@ -119,14 +119,14 @@ pub struct Manifest {
     /// Named bindings the mod wants, e.g. `"togglePomodoro": "Alt+Shift+P"`.
     ///
     /// DECLARED, NOT YET BOUND. Nothing in the host registers a global hotkey,
-    /// so every one of these is inert -- `mods/timetracker` ships three that
+    /// so every one of these is inert -- `applets/timetracker` ships three that
     /// have never once fired. The field stays because it is the contract Dew
     /// intends to honour, and `unhonoured()` says so at load rather than leaving
     /// an author to conclude from silence that the binding took.
     #[serde(default)]
     pub hotkeys: BTreeMap<String, String>,
 
-    /// Keys in `mod.json` that this struct does not model.
+    /// Keys in `dew.toml` that this struct does not model.
     ///
     /// Serde drops an unknown key without a word, which is how `timetracker`'s
     /// `version`, `author` and its entire `settings` block have gone nowhere for
@@ -137,7 +137,7 @@ pub struct Manifest {
     pub unknown: Vec<String>,
 }
 
-/// The keys `Manifest` models. Anything else in a `mod.json` lands in `unknown`.
+/// The keys `Manifest` models. Anything else in a `dew.toml` lands in `unknown`.
 ///
 /// Written out rather than derived. Serde offers no way to ask a struct for its
 /// field names, and the alternative -- a list of keys seen in the wild -- goes
@@ -153,7 +153,7 @@ const KNOWN: &[&str] = &[
 
 impl Manifest {
     pub fn load(dir: &Path) -> Result<Manifest, String> {
-        let path = dir.join("mod.json");
+        let path = dir.join("dew.toml");
         let raw = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
         Manifest::parse(&raw, &path.display().to_string())
     }
@@ -164,26 +164,25 @@ impl Manifest {
     /// checking is which keys survive and which get reported, and routing that
     /// through a temporary directory would test the filesystem instead.
     fn parse(raw: &str, label: &str) -> Result<Manifest, String> {
-        // A BOM survives `read_to_string` and serde_json rejects it as a value.
+        // A BOM survives `read_to_string` and a parser rejects it as a value.
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
 
         // TWO PASSES OVER THE SAME TEXT, and the first is the only chance to see
-        // what the second throws away: `serde_json::Value` keeps every key, and
-        // `Manifest` keeps five.
-        let mut unknown: Vec<String> = match serde_json::from_str::<serde_json::Value>(raw) {
-            Ok(serde_json::Value::Object(map)) => map
+        // what the second throws away: `toml::Value` keeps every key, and
+        // `Manifest` keeps six.
+        let mut unknown: Vec<String> = match raw.parse::<toml::Value>() {
+            Ok(toml::Value::Table(map)) => map
                 .into_iter()
                 .map(|(key, _)| key)
                 .filter(|key| !KNOWN.contains(&key.as_str()))
                 .collect(),
-            // Not an object, or not JSON at all. The typed parse below reports
+            // Not a table, or not TOML at all. The typed parse below reports
             // that properly, and there is nothing useful to say about its keys.
             _ => Vec::new(),
         };
         unknown.sort();
 
-        let mut manifest: Manifest =
-            serde_json::from_str(raw).map_err(|e| format!("{label}: {e}"))?;
+        let mut manifest: Manifest = toml::from_str(raw).map_err(|e| format!("{label}: {e}"))?;
         manifest.unknown = unknown;
         Ok(manifest)
     }
@@ -243,25 +242,22 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_captured_rather_than_dropped() {
-        // The three keys `mods/timetracker/mod.json` really carries.
-        let m = parse(
-            r#"{ "id": "t", "version": "1.0.0", "author": "someone",
-                 "settings": { "a": 1 } }"#,
-        );
+        // The three keys `applets/timetracker/dew.toml` really carries.
+        let m = parse("id = \"t\"\nversion = \"1.0.0\"\nauthor = \"someone\"\n[settings]\na = 1\n");
         assert_eq!(m.unknown, vec!["author", "settings", "version"]);
     }
 
     #[test]
     fn a_manifest_the_host_fully_reads_reports_nothing() {
         let m =
-            parse(r#"{ "id": "t", "name": "T", "description": "d", "permissions": ["storage"] }"#);
+            parse("id = \"t\"\nname = \"T\"\ndescription = \"d\"\npermissions = [\"storage\"]\n");
         assert!(m.unknown.is_empty());
         assert!(m.unhonoured().is_empty());
     }
 
     #[test]
     fn every_declared_hotkey_is_named_as_unbound() {
-        let m = parse(r#"{ "id": "t", "hotkeys": { "go": "Alt+G", "stop": "Alt+S" } }"#);
+        let m = parse("id = \"t\"\n[hotkeys]\ngo = \"Alt+G\"\nstop = \"Alt+S\"\n");
         let said = m.unhonoured();
         assert_eq!(said.len(), 2);
         assert!(said
@@ -274,29 +270,29 @@ mod tests {
 
     #[test]
     fn unhonoured_covers_hotkeys_and_unknown_keys_together() {
-        let m = parse(r#"{ "id": "t", "hotkeys": { "go": "Alt+G" }, "author": "someone" }"#);
+        let m = parse("id = \"t\"\nauthor = \"someone\"\n[hotkeys]\ngo = \"Alt+G\"\n");
         assert_eq!(m.unhonoured().len(), 2);
     }
 
     #[test]
     fn display_name_falls_back_to_the_id() {
-        assert_eq!(parse(r#"{ "id": "t" }"#).display_name(), "t");
-        assert_eq!(parse(r#"{ "id": "t", "name": "  " }"#).display_name(), "t");
-        assert_eq!(parse(r#"{ "id": "t", "name": "T" }"#).display_name(), "T");
+        assert_eq!(parse("id = \"t\"\n").display_name(), "t");
+        assert_eq!(parse("id = \"t\"\nname = \"  \"\n").display_name(), "t");
+        assert_eq!(parse("id = \"t\"\nname = \"T\"\n").display_name(), "T");
     }
 
     #[test]
     fn runtime_defaults_to_aether_and_is_not_reported_as_unknown() {
         // Every mod that existed before this key did. The absent key has to mean
         // what it has always meant, or adding the field breaks all three.
-        let m = parse(r#"{ "id": "t" }"#);
+        let m = parse("id = \"t\"\n");
         assert_eq!(m.runtime, Runtime::Aether);
         assert!(m.unhonoured().is_empty());
     }
 
     #[test]
     fn a_datamodel_mod_declares_its_runtime_and_the_key_is_read() {
-        let m = parse(r#"{ "id": "t", "runtime": "datamodel" }"#);
+        let m = parse("id = \"t\"\nruntime = \"datamodel\"\n");
         assert_eq!(m.runtime, Runtime::DataModel);
         // The whole reason this is a modelled field rather than an extra key:
         // arriving in `unknown` would mean the host ignored it and mounted the
@@ -308,18 +304,16 @@ mod tests {
     fn an_unknown_runtime_is_refused_rather_than_falling_back() {
         // Silently defaulting would hand a DataModel mod to `Desktop.Mount` and
         // report the failure from inside a framework the author never used.
-        assert!(Manifest::parse(r#"{ "id": "t", "runtime": "solid" }"#, "test").is_err());
+        assert!(Manifest::parse("id = \"t\"\nruntime = \"solid\"\n", "test").is_err());
     }
 
     #[test]
     fn an_unknown_permission_is_refused_rather_than_ignored() {
-        assert!(
-            Manifest::parse(r#"{ "id": "t", "permissions": ["filesystem"] }"#, "test").is_err()
-        );
+        assert!(Manifest::parse("id = \"t\"\npermissions = [\"filesystem\"]\n", "test").is_err());
     }
 
     #[test]
     fn a_leading_bom_still_parses() {
-        assert_eq!(parse("\u{feff}{ \"id\": \"t\" }").id, "t");
+        assert_eq!(parse("\u{feff}id = \"t\"\n").id, "t");
     }
 }

@@ -45,7 +45,7 @@ opt-level = 3
 # is the whole trap in this sprint's diff. The rasteriser and the runtime were
 # git dependencies and so were covered by the glob above; moving them into the
 # workspace took them out of it, and they started building at opt-level 0 with
-# nothing failing. It cost 7x on the live window -- `--mod nameplate --stats`
+# nothing failing. It cost 7x on the live window -- `--applet nameplate --stats`
 # read 420 fps against sprint 9's 3029, on the same machine, in the same hour --
 # and it would have been invisible to `cargo test`, to clippy and to every
 # snapshot, because all three are still CORRECT at opt-level 0. Only `--stats`

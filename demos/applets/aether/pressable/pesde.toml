@@ -4,7 +4,7 @@ description = "A pressable that changes under a press, so the framework can prov
 
 # A DEMO INSTALLS ITS OWN FRAMEWORK, per ADR-008. The host injects nothing, and
 # Dew's own [dependencies] is empty and gated -- an application that wants Aether
-# carries a manifest, exactly as mods/*/ do.
+# carries a manifest, exactly as applets/*/ do.
 [target]
 environment = "roblox"
 lib = "pressable.luau"

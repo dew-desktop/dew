@@ -1,12 +1,12 @@
-name = "dew_mods/timetracker"
+name = "dew_applets/calculator"
 version = "0.0.1"
 
-# A MOD DECLARES ITS OWN FRAMEWORK. The host used to hand every mod Aether and
-# vide through injected aliases, so a mod could not say what it depended on. A
+# A MOD DECLARES ITS OWN FRAMEWORK. The host used to hand every applet Aether and
+# vide through injected aliases, so an applet could not say what it depended on. A
 # Roblox place installs its packages and requires them by name; so does this.
 [target]
 environment = "roblox"
-lib = "timetracker.luau"
+lib = "calculator.luau"
 
 [dependencies]
 aether = { repo = "project-aether-ui/aether", rev = "5c44eb469601bda06e0b366e41c938f718b1cd32" }

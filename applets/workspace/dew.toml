@@ -1,0 +1,10 @@
+# Workspace
+#
+# Virtual window manager, running inside one Dew window
+
+id = "workspace"
+name = "Workspace"
+description = "Virtual window manager, running inside one Dew window"
+
+# DECLARES NO PERMISSIONS, and gets none. Deny by default, working.
+permissions = []

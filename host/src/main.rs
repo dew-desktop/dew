@@ -21,7 +21,7 @@
 mod capabilities;
 use dew_host::datamodel;
 use dew_host::manifest;
-mod mods;
+mod applets;
 mod surface;
 #[cfg(windows)]
 mod tray;
@@ -514,7 +514,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
 }
 
 fn create_renderer(
-    mounted: mods::Mounted,
+    mounted: applets::Mounted,
     vm: &dew_runtime::Vm,
     clock: &SharedClock,
     surface: &surface::Declared,
@@ -527,11 +527,11 @@ fn create_renderer(
         Some(BACKGROUND)
     };
     match mounted {
-        mods::Mounted::Aether(session) => Ok(Renderer::Aether {
+        applets::Mounted::Aether(session) => Ok(Renderer::Aether {
             driver: Driver::new(session, painter(width, height)?, background),
             clock: clock.clone(),
         }),
-        mods::Mounted::DataModel { dom, root } => Ok(Renderer::DataModel {
+        applets::Mounted::DataModel { dom, root } => Ok(Renderer::DataModel {
             dom,
             root,
             painter: painter(width, height)?,
@@ -548,7 +548,7 @@ fn create_renderer(
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Run {
-        mod_id: Option<String>,
+        applet_id: Option<String>,
         stats: bool,
         bench: bool,
     },
@@ -583,7 +583,7 @@ pub enum Command {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotTarget {
-    Mod(Option<String>),
+    Applet(Option<String>),
     Script {
         path: String,
         width: u32,
@@ -599,7 +599,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
     if args_vec.is_empty() {
         if is_windows {
             return Ok(Command::Run {
-                mod_id: None,
+                applet_id: None,
                 stats: false,
                 bench: false,
             });
@@ -625,16 +625,16 @@ pub fn parse_args<I: Iterator<Item = String>>(
 }
 
 fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
-    let mut mod_id = None;
+    let mut applet_id = None;
     let mut stats = false;
     let mut bench = false;
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--mod" | "-m" => {
-                let val = iter.next().ok_or("missing value for --mod")?;
-                mod_id = Some(val.clone());
+            "--applet" | "-a" => {
+                let val = iter.next().ok_or("missing value for --applet")?;
+                applet_id = Some(val.clone());
             }
             "--stats" => {
                 if !is_windows {
@@ -664,14 +664,14 @@ fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
     }
 
     Ok(Command::Run {
-        mod_id,
+        applet_id,
         stats,
         bench,
     })
 }
 
 fn parse_snapshot(args: &[String]) -> Result<Command, String> {
-    let mut mod_id = None;
+    let mut applet_id = None;
     let mut script = None;
     let mut size = (400, 300);
     let mut output = None;
@@ -680,9 +680,9 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--mod" | "-m" => {
-                let val = iter.next().ok_or("missing value for --mod")?;
-                mod_id = Some(val.clone());
+            "--applet" | "-a" => {
+                let val = iter.next().ok_or("missing value for --applet")?;
+                applet_id = Some(val.clone());
             }
             "--script" | "-s" => {
                 let val = iter.next().ok_or("missing value for --script")?;
@@ -716,8 +716,8 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
 
     if let Some(out) = output {
         if let Some(pos) = positionals.first() {
-            if mod_id.is_none() && script.is_none() {
-                mod_id = Some(pos.clone());
+            if applet_id.is_none() && script.is_none() {
+                applet_id = Some(pos.clone());
             } else {
                 return Err(format!("unexpected argument '{pos}'"));
             }
@@ -728,7 +728,7 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
             0 => {}
             1 => {
                 let pos = positionals.remove(0);
-                if mod_id.is_some()
+                if applet_id.is_some()
                     || script.is_some()
                     || pos.ends_with(".png")
                     || pos.contains('/')
@@ -736,14 +736,14 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
                 {
                     output = Some(pos);
                 } else {
-                    mod_id = Some(pos);
+                    applet_id = Some(pos);
                 }
             }
             2 => {
-                if mod_id.is_some() || script.is_some() {
+                if applet_id.is_some() || script.is_some() {
                     return Err(format!("unexpected argument '{}'", positionals[1]));
                 }
-                mod_id = Some(positionals.remove(0));
+                applet_id = Some(positionals.remove(0));
                 output = Some(positionals.remove(0));
             }
             _ => return Err(format!("unexpected argument '{}'", positionals[2])),
@@ -758,7 +758,7 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
             height: size.1,
         }
     } else {
-        SnapshotTarget::Mod(mod_id)
+        SnapshotTarget::Applet(applet_id)
     };
 
     Ok(Command::Snapshot {
@@ -832,7 +832,7 @@ fn parse_init(args: &[String]) -> Result<Command, String> {
         }
     }
 
-    let name = name.ok_or("missing mod name for init (usage: dew init <name>)")?;
+    let name = name.ok_or("missing applet name for init (usage: dew init <name>)")?;
     Ok(Command::Init {
         name,
         runtime,
@@ -915,7 +915,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
     let mut script = None;
     let mut size = (400, 300);
     let mut snapshot_out = None;
-    let mut mod_id = None;
+    let mut applet_id = None;
     let mut stats = false;
     let mut bench = false;
 
@@ -937,9 +937,9 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
                 let val = iter.next().ok_or("missing value for --snapshot")?;
                 snapshot_out = Some(val.clone());
             }
-            "--mod" => {
-                let val = iter.next().ok_or("missing value for --mod")?;
-                mod_id = Some(val.clone());
+            "--applet" => {
+                let val = iter.next().ok_or("missing value for --applet")?;
+                applet_id = Some(val.clone());
             }
             "--stats" => {
                 if !is_windows {
@@ -969,7 +969,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
                 height: size.1,
             }
         } else {
-            SnapshotTarget::Mod(mod_id)
+            SnapshotTarget::Applet(applet_id)
         };
         Ok(Command::Snapshot {
             target,
@@ -989,25 +989,25 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
             return Err("no headless action specified (use --script or --snapshot)".to_string());
         }
         Ok(Command::Run {
-            mod_id,
+            applet_id,
             stats,
             bench,
         })
     }
 }
 
-fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
-    let mods_dir = find_dir("mods").ok_or("could not find a `mods` directory")?;
+fn load_active_mod(wanted: Option<&str>) -> Result<applets::Applet, String> {
+    let mods_dir = find_dir("applets").ok_or("could not find an `applets` directory")?;
     let (aether_root, aliases) = aether_aliases()?;
 
     let state = Arc::new(Mutex::new(capabilities::HostState::default()));
 
     // MANIFESTS FIRST, AND ONLY THEN A MOUNT.
     //
-    // This used to load every mod and then pick one, so `--mod calculator`
+    // This used to load every mod and then pick one, so `--applet calculator`
     // mounted four VMs, built four trees and printed four lines about mods it was
-    // about to discard -- and `--mod <typo>` paid for all of it before saying so.
-    // Reading `mod.json` costs a file read; mounting costs a Luau VM, a
+    // about to discard -- and `--applet <typo>` paid for all of it before saying so.
+    // Reading `dew.toml` costs a file read; mounting costs a Luau VM, a
     // DataModel, the framework and a layout pass.
     let mut candidates: Vec<(PathBuf, String)> = Vec::new();
     for entry in std::fs::read_dir(&mods_dir)
@@ -1027,23 +1027,23 @@ fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
     }
 
     if candidates.is_empty() {
-        return Err(format!("no mods found in {}", mods_dir.display()));
+        return Err(format!("no applets found in {}", mods_dir.display()));
     }
 
     candidates.sort_by(|a, b| a.1.cmp(&b.1));
     let ids: Vec<&str> = candidates.iter().map(|(_, id)| id.as_str()).collect();
 
     let Some(id) = wanted else {
-        // NO `--mod`: mount them all, which is what running Dew means.
+        // NO `--applet`: mount them all, which is what running Dew means.
         let mut loaded = Vec::new();
         for (dir, _) in &candidates {
-            match mods::load(dir, &aether_root, &aliases, &state) {
+            match applets::load(dir, &aether_root, &aliases, &state) {
                 Ok(m) => loaded.push(m),
-                Err(message) => eprintln!("[dew] skipping mod: {message}"),
+                Err(message) => eprintln!("[dew] skipping applet: {message}"),
             }
         }
         if loaded.is_empty() {
-            return Err(format!("no mods loaded from {}", mods_dir.display()));
+            return Err(format!("no applets loaded from {}", mods_dir.display()));
         }
         let first = loaded
             .into_iter()
@@ -1053,13 +1053,13 @@ fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
     };
 
     if let Some((dir, _)) = candidates.iter().find(|(_, have)| have == id) {
-        return mods::load(dir, &aether_root, &aliases, &state);
+        return applets::load(dir, &aether_root, &aliases, &state);
     }
 
-    // `--mod` TAKES AN ID, AND A PATH IS WHAT PEOPLE TRY FIRST.
+    // `--applet` TAKES AN ID, AND A PATH IS WHAT PEOPLE TRY FIRST.
     //
-    // Shell completion offers `mods/nameplate/` and the flag reads like it wants
-    // one, so `--mod ./mods/nameplate/` is the natural first guess. It failed
+    // Shell completion offers `applets/nameplate/` and the flag reads like it wants
+    // one, so `--applet ./applets/nameplate/` is the natural first guess. It failed
     // naming the mistake without saying what to type instead -- and for a
     // directory that IS a mod, the id is sitting in its manifest.
     let looks_like_a_path = id.contains('/') || id.contains('\\') || id.starts_with('.');
@@ -1071,17 +1071,17 @@ fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
             .unwrap_or(id);
         if let Some((_, found)) = candidates.iter().find(|(_, have)| have == leaf) {
             return Err(format!(
-                "--mod takes an id, not a path. That directory's mod is {found:?}, so: --mod {found}"
+                "--applet takes an id, not a path. That directory's applet is {found:?}, so: --applet {found}"
             ));
         }
         return Err(format!(
-            "--mod takes an id, not a path, and no mod there. Available: {}",
+            "--applet takes an id, not a path, and no applet there. Available: {}",
             ids.join(", ")
         ));
     }
 
     Err(format!(
-        "no mod with id {id:?}. Available: {}",
+        "no applet with id {id:?}. Available: {}",
         ids.join(", ")
     ))
 }
@@ -1100,9 +1100,9 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
             println!("[dew] {path}: {report} -> {output} ({width}x{height})");
             Ok(())
         }
-        SnapshotTarget::Mod(wanted) => {
+        SnapshotTarget::Applet(wanted) => {
             let active = load_active_mod(wanted.as_deref())?;
-            let mods::Mod {
+            let applets::Applet {
                 manifest,
                 width,
                 height,
@@ -1141,7 +1141,7 @@ fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), Str
     {
         println!("💧 Dew starting");
         let active = load_active_mod(wanted)?;
-        let mods::Mod {
+        let applets::Applet {
             manifest,
             mut width,
             mut height,
@@ -1157,7 +1157,7 @@ fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), Str
             height = screen.1.max(1) as u32;
         }
 
-        if let mods::Mounted::DataModel { ref dom, .. } = mounted {
+        if let applets::Mounted::DataModel { ref dom, .. } = mounted {
             dom.lock().expect("dom").assets.set_blocking(false);
         }
 
@@ -1292,7 +1292,7 @@ fn execute_check(target: Option<String>) -> Result<(), String> {
             let p = PathBuf::from(&t);
             if p.is_dir() {
                 vec![p]
-            } else if let Some(mods_dir) = find_dir("mods") {
+            } else if let Some(mods_dir) = find_dir("applets") {
                 let candidate = mods_dir.join(&t);
                 if candidate.is_dir() {
                     vec![candidate]
@@ -1307,9 +1307,9 @@ fn execute_check(target: Option<String>) -> Result<(), String> {
             }
         }
         None => {
-            if Path::new("mod.json").is_file() {
+            if Path::new("dew.toml").is_file() {
                 vec![PathBuf::from(".")]
-            } else if let Some(mods_dir) = find_dir("mods") {
+            } else if let Some(mods_dir) = find_dir("applets") {
                 let mut found = Vec::new();
                 for entry in std::fs::read_dir(&mods_dir)
                     .map_err(|e| e.to_string())?
@@ -1322,7 +1322,9 @@ fn execute_check(target: Option<String>) -> Result<(), String> {
                 found.sort();
                 found
             } else {
-                return Err("could not find a `mods` directory or a local `mod.json`".to_string());
+                return Err(
+                    "could not find an `applets` directory or a local `dew.toml`".to_string(),
+                );
             }
         }
     };
@@ -1376,7 +1378,7 @@ fn execute_init(
 
     let target_dir = if name.contains('/') || name.contains('\\') {
         PathBuf::from(&name)
-    } else if let Some(mods_dir) = find_dir("mods") {
+    } else if let Some(mods_dir) = find_dir("applets") {
         mods_dir.join(&name)
     } else {
         PathBuf::from(&name)
@@ -1409,7 +1411,7 @@ fn execute_init(
     });
 
     let mod_json_str = serde_json::to_string_pretty(&mod_json).map_err(|e| e.to_string())?;
-    let mod_json_path = target_dir.join("mod.json");
+    let mod_json_path = target_dir.join("dew.toml");
     std::fs::write(&mod_json_path, mod_json_str + "\n")
         .map_err(|e| format!("could not write {}: {e}", mod_json_path.display()))?;
 
@@ -1488,7 +1490,7 @@ return {{
 
     println!("[dew] initialized mod '{name}' in {}", target_dir.display());
     println!("[dew] check with: dew check {name}");
-    println!("[dew] snapshot with: dew snapshot --mod {name}");
+    println!("[dew] snapshot with: dew snapshot --applet {name}");
     Ok(())
 }
 
@@ -1814,7 +1816,9 @@ fn execute_help(subcommand: Option<String>) {
             println!("Render a mod or standalone script headlessly to a PNG image.");
             println!();
             println!("Options:");
-            println!("  --mod, -m <ID>        Mod to snapshot (defaults to first available mod)");
+            println!(
+                "  --applet, -m <ID>        Mod to snapshot (defaults to first available mod)"
+            );
             println!("  --script, -s <PATH>   Standalone script to execute and snapshot");
             println!("  --size <WxH>          Dimensions for standalone script (default: 400x300)");
             println!("  --output, -o <PATH>   Output PNG path (default: dew.png)");
@@ -1825,14 +1829,14 @@ fn execute_help(subcommand: Option<String>) {
             println!("Run a mod interactively in a desktop window (Windows only).");
             println!();
             println!("Options:");
-            println!("  --mod, -m <ID>        Mod to run (defaults to first available mod)");
+            println!("  --applet, -m <ID>        Mod to run (defaults to first available mod)");
             println!("  --stats               Print FPS and render timings");
             println!("  --bench               Run in benchmark mode");
         }
         Some("check") => {
             println!("Usage: dew check [TARGET]");
             println!();
-            println!("Validate a mod's manifest (mod.json), entrypoint, and Luau syntax.");
+            println!("Validate a mod's manifest (dew.toml), entrypoint, and Luau syntax.");
             println!();
             println!("Arguments:");
             println!(
@@ -1900,8 +1904,8 @@ fn execute_help(subcommand: Option<String>) {
             println!("  help         Show help for a command");
             println!();
             println!("Legacy Flags:");
-            println!("  --snapshot <PATH>     Render default or --mod to PNG");
-            println!("  --mod <ID>            Select mod for run or snapshot");
+            println!("  --snapshot <PATH>     Render default or --applet to PNG");
+            println!("  --applet <ID>            Select mod for run or snapshot");
             println!("  --script <PATH>       Run standalone script");
             println!("  --size <WxH>          Dimensions for standalone script");
             println!("  --stats, --bench      Performance monitoring (Windows only)");
@@ -1948,10 +1952,10 @@ fn run() -> Result<(), String> {
     let cmd = parse_args(std::env::args().skip(1), cfg!(windows))?;
     match cmd {
         Command::Run {
-            mod_id,
+            applet_id,
             stats,
             bench,
-        } => execute_run(mod_id.as_deref(), stats, bench),
+        } => execute_run(applet_id.as_deref(), stats, bench),
         Command::Snapshot { target, output } => execute_snapshot(target, output),
         Command::Check { target } => execute_check(target),
         Command::Init {
@@ -2050,7 +2054,7 @@ mod tests {
             "400x300",
             "--snapshot",
             "out.png",
-            "--mod",
+            "--applet",
             "nameplate",
         ]
         .iter()
@@ -2103,7 +2107,7 @@ mod tests {
 
     #[test]
     fn subcommand_snapshot_mod() {
-        let args = ["snapshot", "--mod", "nameplate", "out.png"]
+        let args = ["snapshot", "--applet", "nameplate", "out.png"]
             .iter()
             .map(|s| s.to_string());
         let cmd = parse_args(args, true).unwrap();
@@ -2111,7 +2115,7 @@ mod tests {
             Command::Snapshot { target, output } => {
                 assert_eq!(output, "out.png");
                 match target {
-                    SnapshotTarget::Mod(Some(id)) => assert_eq!(id, "nameplate"),
+                    SnapshotTarget::Applet(Some(id)) => assert_eq!(id, "nameplate"),
                     _ => panic!("expected Mod target with nameplate"),
                 }
             }
@@ -2129,7 +2133,7 @@ mod tests {
             Command::Snapshot { target, output } => {
                 assert_eq!(output, "out.png");
                 match target {
-                    SnapshotTarget::Mod(Some(id)) => assert_eq!(id, "nameplate"),
+                    SnapshotTarget::Applet(Some(id)) => assert_eq!(id, "nameplate"),
                     _ => panic!("expected Mod target with nameplate"),
                 }
             }
@@ -2145,7 +2149,7 @@ mod tests {
             Command::Snapshot { target, output } => {
                 assert_eq!(output, "out.png");
                 match target {
-                    SnapshotTarget::Mod(None) => {}
+                    SnapshotTarget::Applet(None) => {}
                     _ => panic!("expected default Mod target"),
                 }
             }
@@ -2198,15 +2202,17 @@ mod tests {
 
     #[test]
     fn subcommand_run_accepted_on_windows() {
-        let args = ["run", "--mod", "nameplate"].iter().map(|s| s.to_string());
+        let args = ["run", "--applet", "nameplate"]
+            .iter()
+            .map(|s| s.to_string());
         let cmd = parse_args(args, true).unwrap();
         match cmd {
             Command::Run {
-                mod_id,
+                applet_id,
                 stats,
                 bench,
             } => {
-                assert_eq!(mod_id.as_deref(), Some("nameplate"));
+                assert_eq!(applet_id.as_deref(), Some("nameplate"));
                 assert!(!stats);
                 assert!(!bench);
             }
@@ -2274,7 +2280,7 @@ mod tests {
 
     #[test]
     fn check_mod_dir_nameplate() {
-        if let Some(mods_dir) = find_dir("mods") {
+        if let Some(mods_dir) = find_dir("applets") {
             let nameplate = mods_dir.join("nameplate");
             if nameplate.is_dir() {
                 let (manifest, entry, warnings) = check_mod_dir(&nameplate).unwrap();

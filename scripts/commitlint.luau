@@ -59,7 +59,7 @@ local config: CommitLintConfig = {
         --- said the wrong thing: these are four packages now, not one with
         --- wiring.
         "crates",    -- crates/, the rendering stack
-        "mods",      -- mods/
+        "applets",      -- applets/
         "types",     -- types/
         "docs",      -- docs/, CONTRIBUTING, README
         "scripts",   -- scripts/

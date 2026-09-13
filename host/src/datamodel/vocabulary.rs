@@ -517,7 +517,7 @@ pub fn install(lua: &Lua) -> LuaResult<()> {
         })?,
     )?;
     // HEX, AND IT IS NOT DECORATION. `Color3.fromHex` has 17 call sites in
-    // `mods/` and 5 more in Aether's own source, and it is the single
+    // `applets/` and 5 more in Aether's own source, and it is the single
     // constructor whose absence stopped all three Aether mods when Dew's
     // vocabulary was first installed into one.
     //
@@ -909,7 +909,7 @@ mod tests {
         // gets the host selected, and surfaces as a nil index inside a component.
         //
         // That is measured history rather than a worry. `Color3.fromHex` has 17
-        // call sites in `mods/` and 5 in Aether's own source, this host had `new`
+        // call sites in `applets/` and 5 in Aether's own source, this host had `new`
         // and `fromRGB` and not `fromHex`, and installing the partial vocabulary
         // into an Aether mod VM stopped all three mods loading.
         //

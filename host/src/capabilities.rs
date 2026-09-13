@@ -3,7 +3,7 @@
 //! THIS FILE IS THE SECURITY BOUNDARY, and it is deliberately boring to read:
 //! a match on a declared permission, and a table with exactly the fields that
 //! permission covers. What a mod can do is the value this function returns —
-//! printable, diffable against `mod.json`, and assertable in a test.
+//! printable, diffable against `dew.toml`, and assertable in a test.
 //!
 //! Nothing here is installed as a global. The table is handed to the mod's
 //! `mount` as an argument, so a capability that was not granted is not merely

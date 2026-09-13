@@ -1,0 +1,13 @@
+# Nameplate
+#
+# A Dew widget with no framework: Instance.new, the vocabulary, and nothing imported
+
+id = "nameplate"
+name = "Nameplate"
+description = "A Dew widget with no framework: Instance.new, the vocabulary, and nothing imported"
+runtime = "datamodel"
+
+# WHAT THIS APPLET MAY REACH. Absent means nothing, which is the correct
+# default: an applet that renders and cannot touch the machine fails loudly
+# and locally.
+permissions = ["storage"]

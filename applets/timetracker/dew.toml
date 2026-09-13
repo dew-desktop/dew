@@ -1,0 +1,48 @@
+# Time Tracker & Pomodoro HUD
+#
+# Minimalist active time tracker, Pomodoro focus cycles, and task logger.
+
+id = "timetracker"
+name = "Time Tracker & Pomodoro HUD"
+description = "Minimalist active time tracker, Pomodoro focus cycles, and task logger"
+
+# WHAT THIS APPLET MAY REACH. Absent means nothing, which is the correct default:
+# an applet that renders and cannot touch the machine fails loudly and locally.
+permissions = ["storage", "audio", "notifications"]
+
+# KEYS DEW DOES NOT READ YET, AND THEY STAY.
+#
+# `dew check` reports each one -- "not a field Dew reads, and was ignored" -- and
+# that report is the only thing standing between an author and the conclusion that
+# a field took effect. Commenting them out would silence the warning rather than
+# answer it, so they remain until the host reads them.
+version = "1.0.0"
+author = "Dew Core Team"
+
+# DECLARED, NOT YET BOUND. Dew registers no global hotkeys, so every one of these
+# is inert and `dew check` says so.
+[hotkeys]
+toggleActiveTimer = "Alt+Shift+T"
+quickTaskLog = "Alt+Shift+L"
+togglePomodoro = "Alt+Shift+P"
+
+# UNREAD, like `version` and `author` above.
+[settings.pomodoroWorkMin]
+type = "number"
+label = "Pomodoro Work Duration (minutes)"
+default = 25
+
+[settings.pomodoroBreakMin]
+type = "number"
+label = "Pomodoro Short Break (minutes)"
+default = 5
+
+[settings.dailyTargetHours]
+type = "number"
+label = "Daily Goal Target (hours)"
+default = 6
+
+[settings.soundEnabled]
+type = "boolean"
+label = "Sound Chimes on Interval Finish"
+default = true

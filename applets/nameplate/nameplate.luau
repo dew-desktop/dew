@@ -2,7 +2,7 @@
 --[[
 	Nameplate — a Dew mod written against no framework at all.
 
-	    cargo run --manifest-path host/Cargo.toml -- --mod nameplate --snapshot out.png
+	    cargo run --manifest-path host/Cargo.toml -- --applet nameplate --snapshot out.png
 
 	THE THIRD MOD, AND THE FIRST THAT IMPORTS NOTHING. `calculator`, `timetracker`
 	and `workspace` are Aether components: they `require("./roblox_packages/aether")`, return a
@@ -13,11 +13,11 @@
 
 	IT IS A MOD, NOT A SCRIPT, and that is the whole point of this sprint.
 	`examples/standalone/app.luau` already proved the DataModel reaches a pixel,
-	but it was run with `--script`: no `mod.json`, no capability table, no surface
-	placement, and not discovered from `mods/`. This one arrives through the
+	but it was run with `--script`: no `dew.toml`, no capability table, no surface
+	placement, and not discovered from `applets/`. This one arrives through the
 	ordinary loader with all four.
 
-	`runtime = "datamodel"` IN `mod.json` IS WHAT SELECTS THIS PATH. The host does
+	`runtime = "datamodel"` IN `dew.toml` IS WHAT SELECTS THIS PATH. The host does
 	not sniff for a framework — declaring it is the author's job, because both
 	flavours build a tree and there is no artefact that tells them apart.
 
@@ -39,7 +39,7 @@
 	AND THE HOST NO LONGER REPAINTS THIS EVERY FRAME. It used to, because nothing
 	signalled a change and "assume so" was the only honest answer; the same
 	plumbing that fires `Changed` now marks the tree dirty, so a card that never
-	moves is drawn once. A mod that animates does it by assigning to a property,
+	moves is drawn once. An applet that animates does it by assigning to a property,
 	which is exactly what dirties the tree — so that costs an animating mod
 	nothing, and this file did not have to change for either.
 
@@ -52,10 +52,10 @@
 
 --- Reading a capability, and reading the ABSENCE of one.
 ---
---- `dew.storage` is present because `mod.json` asked for `storage` and the host
+--- `dew.storage` is present because `dew.toml` asked for `storage` and the host
 --- granted it. `dew.clipboard` is nil because it did not ask — not guarded, not
 --- refused at the call, ABSENT. That is the capability model in one comparison,
---- and it is worth a line on screen because it is the half of the mod contract a
+--- and it is worth a line on screen because it is the half of the applet contract a
 --- render normally cannot show.
 local function capabilityReport(dew: any): string
 	if dew.storage == nil then
@@ -85,7 +85,7 @@ return {
 	size = { width = 340, height = 148 },
 
 	--- A widget, top-right, like the platform's default. Declared rather than
-	--- inherited so this file shows the surface block a mod author writes.
+	--- inherited so this file shows the surface block an applet author writes.
 	surface = {
 		kind = "widget",
 		anchor = "topRight",
@@ -93,7 +93,7 @@ return {
 	},
 
 	--- `mount(dew, root)`. Two arguments, and neither is a global: the capability
-	--- table because what a mod may DO is per mod, and the root because what a mod
+	--- table because what an applet may DO is per mod, and the root because what a mod
 	--- may DRAW INTO is the surface the host opened for it. An Aether mod's
 	--- `mount(dew)` returns a tree instead; that difference is the runtime.
 	mount = function(dew: any, root: Instance)
@@ -121,7 +121,7 @@ return {
 		--- the comment here said so; tree navigation and lifecycle are the first
 		--- 14 of it. A test calling `GetChildren` on a bare VM proves the dispatch
 		--- works. This proves it survives the ordinary loader — the same VM a mod
-		--- is really given, with the same globals, discovered from `mods/`.
+		--- is really given, with the same globals, discovered from `applets/`.
 		---
 		--- `card:IsA("GuiObject")` is the one worth printing: `card` is a Frame,
 		--- and the answer is true only because `IsA` walks the superclass chain
@@ -171,7 +171,7 @@ return {
 		--- pass prefers `ImageContent` only when both are set, because that is the
 		--- one the engine's own migration keeps.
 		---
-		--- `mod://` RESOLVES BESIDE THIS FILE, which is `mods/nameplate/`. It is
+		--- `mod://` RESOLVES BESIDE THIS FILE, which is `applets/nameplate/`. It is
 		--- the only scheme this host resolves today: `rbxassetid://` needs the
 		--- scheme registry, the permission and the fetch that are Sprint 5, and
 		--- until then it reports itself by name and draws as a missing box rather
@@ -248,7 +248,7 @@ return {
 		---
 		--- `card.Active = true` is that line. A `Frame` ships `Active = false` and is
 		--- therefore not a hit candidate at all — the same default that stops a
-		--- `TextLabel` stealing a click from the button underneath it. A mod that
+		--- `TextLabel` stealing a click from the button underneath it. An applet that
 		--- wants a hoverable panel says so, which is what a Roblox developer writes
 		--- for one anyway.
 		card.Active = true

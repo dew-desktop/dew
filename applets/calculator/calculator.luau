@@ -14,7 +14,7 @@
 	of the shape it should take.
 
 	DECLARES NO PERMISSIONS. It does arithmetic on its own state and touches
-	nothing, so `mod.json` grants it nothing, and `dew` arrives carrying only the
+	nothing, so `dew.toml` grants it nothing, and `dew` arrives carrying only the
 	ungated clock. That is the deny-by-default case working, and it is worth
 	having one mod in the tree that demonstrates it.
 ]]
@@ -55,7 +55,7 @@ return {
 		--- NO `loadstring`. The VM does not have one — the runtime removes it
 		--- along with every other way to compile a chunk at runtime — so this
 		--- parses the two-operand forms it supports and refuses the rest. A
-		--- calculator that could evaluate arbitrary Luau would be a mod that runs
+		--- calculator that could evaluate arbitrary Luau would be an applet that runs
 		--- arbitrary Luau on behalf of whoever typed into it.
 		local function evaluate()
 			local text = expression()

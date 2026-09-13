@@ -1,6 +1,6 @@
-# The Dew mod contract
+# The Dew applet contract
 
-## A mod returns a declaration; it does not perform a registration
+## An applet returns a declaration; it does not perform a registration
 
 ```luau
 local Aether = require("@aether")
@@ -17,19 +17,19 @@ return {
 }
 ```
 
-Loading a mod **describes** it. It does not **do** anything.
+Loading an applet **describes** it. It does not **do** anything.
 
 The previous shape was `dew.hud.registerComponent({ ... })` -- a call with effects,
 made during load. That ordering makes the host's job impossible: to find out what
-a mod is, it had to run the mod, and by then the mod had already reached for
-whatever it wanted. A declaration can be read, checked against `mod.json`, and
+a mod is, it had to run the mod, and by then the applet had already reached for
+whatever it wanted. A declaration can be read, checked against `dew.toml`, and
 refused, all before a line of the mod's own logic executes.
 
 This is the same rule the runtime already enforces one layer down: the guest VM
 is deny-by-default and every capability is a function the host installs by name.
 A registration-by-side-effect API quietly undoes that at the layer above.
 
-## A mod declares the runtime it is written against
+## An applet declares the runtime it is written against
 
 ```json
 { "id": "nameplate", "runtime": "datamodel", "permissions": ["storage"] }
@@ -40,7 +40,7 @@ mod written before the key existed is.
 
 | | `"aether"` | `"datamodel"` |
 | :--- | :--- | :--- |
-| the mod imports | `@aether/api` | nothing |
+| the applet imports | `@aether/api` | nothing |
 | the VM gets | `Instance` | `Instance`, plus `UDim2`, `Color3`, `Vector2`, `UDim`, `Rect`, `Enum` and `Content` |
 | `mount` is | `function(dew)`, returning a tree | `function(dew, root)`, parenting into `root` |
 | it is called | through `Desktop.Mount`, inside a reactive scope | directly |
@@ -74,7 +74,7 @@ mod on the Aether branch is handed no root. So it is one key, in a closed set, a
 `"runtime": "solid"` is refused at load rather than falling back.
 
 **The root is a parameter, like `dew`.** A DataModel mod does not reach for a
-global, because what a mod may draw into is granted to it in the same way as what
+global, because what an applet may draw into is granted to it in the same way as what
 it may do. The root is a `ScreenGui` named `DewRoot` -- **not `game`**, which is
 what `Host.detect()` keys on (`typeof(game) == "Instance"`); installing one before
 the services and the member surface exist would flip every Aether mod in the same
@@ -111,16 +111,16 @@ still dropped for this flavour.
 
 `mount` receives `dew`. There is no `_G.dew`, and mods are not handed one.
 
-`mod.json` has always declared `permissions`:
+`dew.toml` has always declared `permissions`:
 
 ```json
 "permissions": ["storage", "audio", "notifications"]
 ```
 
 While `dew` was a global, that list was decoration -- the whole surface was
-reachable whatever the manifest said, and a mod that quietly used `clipboard`
+reachable whatever the manifest said, and an applet that quietly used `clipboard`
 without declaring it worked exactly as well as one that declared it. Passing the
-capability table in makes the manifest load-bearing: what a mod cannot name, it
+capability table in makes the manifest load-bearing: what an applet cannot name, it
 cannot reach.
 
 It also makes the boundary testable. "What can this mod do" is the table the host
@@ -141,21 +141,21 @@ same way it does in an engine: the graph re-runs what depends on it, and the nex
 `Live.Frame` differs. The same component behaves identically in both places,
 which is the property the whole stack exists to preserve.
 
-## An Aether mod authors in Aether's own idiom
+## An Aether applet authors in Aether's own idiom
 
 `create`, `source`, `derive`, and Roblox's property vocabulary -- `UDim2`,
 `Color3`, `BackgroundTransparency`. Not a Dew dialect.
 
-This is what keeps a widget's visual half **liftable**: the tree a mod builds is
+This is what keeps a widget's visual half **liftable**: the tree an applet builds is
 an ordinary Aether component, so it can be mounted in a Roblox place unchanged,
 or previewed with `aether snapshot`. A Dew-specific construction API would make
 every widget a dead end.
 
 Dew's own additions are capabilities and lifecycle, not construction.
 
-The same argument is why a `"datamodel"` mod authors in the engine's idiom rather
+The same argument is why a `"datamodel"` applet authors in the engine's idiom rather
 than a host one: `Instance.new`, property assignment and `Parent` are what a
-Roblox developer already knows, and `mods/nameplate` would build the identical
+Roblox developer already knows, and `applets/nameplate` would build the identical
 tree inside a place. Neither flavour is a Dew dialect; they are the two idioms
 that already exist.
 
@@ -185,7 +185,7 @@ icon.ScaleType = Enum.ScaleType.Fit
 icon.Parent = root
 ```
 
-`mod://` resolves against **the directory the mod was loaded from** -- the same
+`mod://` resolves against **the directory the applet was loaded from** -- the same
 directory `require` is allowed to reach, and for the same reason. A path that
 climbs out of it is refused rather than followed, so an image cannot become the
 way around the boundary the requirer already enforces. A `--script` run resolves
@@ -243,16 +243,16 @@ surface = {
 surface = { kind = "window", title = "Time Tracker Settings" }
 ```
 
-**One `mount`, because the mod builds the same tree either way.** Chrome or none,
+**One `mount`, because the applet builds the same tree either way.** Chrome or none,
 in the taskbar or not, blitted into a rectangle or composited from its own alpha
 -- every one of those is a property of the WINDOW, not of the widget. Two entry
 points would mean two paths through the loader for a difference that is entirely
-window-creation flags, and would force a mod wanting both a HUD and a settings
+window-creation flags, and would force an applet wanting both a HUD and a settings
 panel to be two mods.
 
 **A tagged union, though, not a bag of optional fields.** `title` means nothing
 to a floating widget and `anchor` means nothing to a window. A flat table would
-let a mod set either and have it silently ignored, which is exactly how
+let an applet set either and have it silently ignored, which is exactly how
 `permissions` was decoration before it was enforced.
 
 Omitting `surface` gets a widget. Dew is a desktop applet platform; a default of
@@ -289,7 +289,7 @@ silhouette, not a rounded shape drawn on a dark rectangle.
 pinned 24px from the top-right stays in the corner when the display changes; one
 at `x = 1872` is in the corner of the display it was written on.
 
-## Every `mod.json` field, and whether the host reads it
+## Every `dew.toml` field, and whether the host reads it
 
 A manifest field that is parsed and ignored is indistinguishable, from the
 author's side, from one that works. So the list is exhaustive and the host says
@@ -298,7 +298,7 @@ the difference out loud at load.
 | field | read by |
 | :--- | :--- |
 | `id` | mod selection (`--mod`), and the entry module `<id>.luau` |
-| `runtime` | which branch `mods::load` takes: `"aether"` (the default) or `"datamodel"` |
+| `runtime` | which branch `applets::load` takes: `"aether"` (the default) or `"datamodel"` |
 | `permissions` | the capability table, and nothing outside this list is reachable |
 | `name` | the window caption when the declaration sets no `surface.title`, and the tray tooltip |
 | `description` | the tray tooltip |
@@ -306,7 +306,7 @@ the difference out loud at load.
 
 `hotkeys` is the one field Dew accepts and does not act on. Nothing in the host
 registers a global hotkey, so a declared binding has never fired.
-`mods/timetracker` ships three. Rather than delete the field, which would make
+`applets/timetracker` ships three. Rather than delete the field, which would make
 the format quietly narrower without deciding anything, the host reports each one
 by name at load:
 
@@ -328,7 +328,7 @@ appearing in it.
 
 | | |
 | :--- | :--- |
-| **Aether** | layout, hit testing, pointer arbitration, focus, motion -- *for a mod that chose it* |
+| **Aether** | layout, hit testing, pointer arbitration, focus, motion -- *for an applet that chose it* |
 | **`crates/runtime`** | the VM, require resolution, the frame loop, the display list |
 | **`crates/raster`** | the rasteriser |
 | **`crates/window`** | the window, input, the blit |

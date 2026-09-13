@@ -485,7 +485,7 @@ impl Assets {
                 self.note_once(
                     uri.to_string(),
                     &format!(
-                        "{uri}: requires permission `{}` which was not granted in mod.json -- \
+                        "{uri}: requires permission `{}` which was not granted in dew.toml -- \
                          the property keeps its value and the node draws as missing",
                         required.name()
                     ),
