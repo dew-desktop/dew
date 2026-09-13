@@ -122,10 +122,69 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// Run one demo: record what it used, then drive its script and see whether the
 /// pixels moved.
 ///
-/// TWO PASSES OVER THE SAME DEMO, DELIBERATELY. The coverage pass mounts the tree
-/// with a proxy and measures; the differential pass mounts it with the real table
-/// and paints. One pass doing both would mean measuring a run that had been
-/// altered to be measurable.
+/// TWO PASSES, AND TWO SEPARATE VMs. The coverage pass mounts the tree with a
+/// proxy and measures; the differential pass mounts it with the real table and
+/// paints. They cannot share a VM, and finding out why cost an afternoon:
+///
+/// `PointerRouter` is a MODULE-LEVEL SINGLETON. Measuring in the same VM mounts a
+/// second live tree that registers its own pressables with the same router, and
+/// the router then hands the press to whichever it resolves first. The painted
+/// tree never saw it, so `Presses` read 1 while the pixels never moved -- a demo
+/// reporting a working feature as broken, for a reason entirely inside the
+/// harness.
+/// What the demo reached for, measured in a VM of its own.
+///
+/// ITS OWN VM IS THE POINT. See `run_demo`: sharing one with the differential pass
+/// puts two live trees behind one module-level `PointerRouter`, and the press goes
+/// to whichever it resolves first.
+fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Vec<String>, String> {
+    let mut caps = Capabilities::cli(dir.to_path_buf());
+    caps.require_roots = vec![dir.to_path_buf()];
+    caps.aliases.clear();
+    caps.print = false;
+
+    let dom: SharedDom = Arc::new(Mutex::new(Default::default()));
+    let clock: SharedClock = Arc::new(Mutex::new(Clock::default()));
+    let root_id = dom
+        .lock()
+        .map_err(|_| "dom lock")?
+        .insert("ScreenGui".into(), "DewRoot".into());
+
+    let installer_dom = dom.clone();
+    let installer_clock = clock.clone();
+    let app = Application::load_with(caps, entry, move |vm: &Vm| {
+        datamodel::install(vm.lua(), &installer_dom)?;
+        services::install(vm.lua(), &installer_clock)?;
+        datamodel::install_vocabulary(vm.lua())?;
+        let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
+        vm.lua().globals().set("DewRoot", root_handle)?;
+        Ok(())
+    })
+    .map_err(|e| format!("{name}: the demo did not load for measurement: {e}"))?;
+
+    let lua = app.vm().lua();
+    let real: LuaTable = app
+        .get("Aether")
+        .map_err(|e| format!("{name}: a demo must export the Aether it required: {e}"))?;
+    let measure: mlua::Function = app
+        .get("Measure")
+        .map_err(|e| format!("{name}: a demo must export Measure: {e}"))?;
+
+    let seen = lua.create_table().map_err(|e| e.to_string())?;
+    let proxy = recording_proxy(lua, real, seen.clone()).map_err(|e| e.to_string())?;
+    measure
+        .call::<LuaValue>(proxy)
+        .map_err(|e| format!("{name}: Measure failed: {e}"))?;
+
+    let mut used: Vec<String> = seen
+        .pairs::<String, bool>()
+        .flatten()
+        .map(|(k, _)| k)
+        .collect();
+    used.sort();
+    Ok(used)
+}
+
 fn run_demo(entry: &Path) -> Result<Demo, String> {
     let dir = entry
         .parent()
@@ -136,6 +195,11 @@ fn run_demo(entry: &Path) -> Result<Demo, String> {
         .and_then(|s| s.to_str())
         .unwrap_or("demo")
         .to_string();
+
+    // Measured first, in a VM of its own, for the reason in this function's
+    // header: two live trees behind one router is a press that goes to the wrong
+    // one.
+    let used = measure_demo(entry, &dir, &name)?;
 
     // THE DEMO'S OWN PACKAGES ARE ITS ONLY REQUIRE ROOT, and it gets no aliases.
     // A demo that only loads because the host handed it a framework would prove
@@ -171,29 +235,7 @@ fn run_demo(entry: &Path) -> Result<Demo, String> {
     })
     .map_err(|e| format!("{name}: the demo did not load: {e}"))?;
 
-    // ---- pass one: what did it use?
-    let lua = app.vm().lua();
-    let real: LuaTable = app
-        .get("Aether")
-        .map_err(|e| format!("{name}: a demo must export the Aether it required: {e}"))?;
-    let measure: mlua::Function = app
-        .get("Measure")
-        .map_err(|e| format!("{name}: a demo must export Measure: {e}"))?;
-
-    let seen = lua.create_table().map_err(|e| e.to_string())?;
-    let proxy = recording_proxy(lua, real, seen.clone()).map_err(|e| e.to_string())?;
-    measure
-        .call::<LuaValue>(proxy)
-        .map_err(|e| format!("{name}: Measure failed: {e}"))?;
-
-    let mut used: Vec<String> = seen
-        .pairs::<String, bool>()
-        .flatten()
-        .map(|(k, _)| k)
-        .collect();
-    used.sort();
-
-    // ---- pass two: did the pixels move?
+    // ---- the differential: did the pixels move?
     let width: f32 = app
         .get("Width")
         .map_err(|e| format!("{name}: Width: {e}"))?;

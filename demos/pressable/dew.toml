@@ -1,0 +1,11 @@
+# Pressable
+#
+# A pressable that changes colour while pressed, so `framework-coverage` can
+# prove the framework responds rather than merely loads.
+
+id = "pressable"
+name = "Pressable"
+description = "A pressable that changes colour under a press"
+
+# NO PERMISSIONS. It does arithmetic on its own state and touches nothing.
+permissions = []
