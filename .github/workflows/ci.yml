@@ -7,10 +7,26 @@
 
 name: CI
 
+# WHAT WINDOWS COSTS, AND WHY THIS FILE IS SHAPED AROUND IT.
+#
+# `windows-latest` bills at 2x and `ubuntu-latest` at 1x, so a Windows job is the
+# expensive thing here and there is exactly one. `build` compiles, tests, mounts
+# every applet, and then runs fmt and clippy on the artifacts it already has --
+# rather than paying a second Windows machine to install a toolchain and compile
+# the same code again.
+#
+# IF EVERY JOB FAILS IN TWO SECONDS WITH NO LOGS, it is not this file. A job that
+# dies before its first step, whose log fetch returns `BlobNotFound`, did not get
+# a runner -- which in practice means the Actions minutes are gone. Check billing
+# before reading YAML. That happened on 2026-09-13 after a day of cold-cache
+# Windows builds, and the shape above is the response to it.
 on:
   push:
     branches: [main]
   pull_request:
+  # SO A RUN CAN BE ASKED FOR, once minutes are back or a quota window resets,
+  # without pushing an empty commit to trigger one.
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -188,7 +204,14 @@ jobs:
     name: build and mount every applet
     runs-on: windows-latest
     needs: [changes, checks]
-    if: needs.changes.outputs.code == 'true'
+    # PULL REQUESTS ONLY, because a push to `main` is a merge of a pull request
+    # that just ran this exact matrix. Running it again bills a second Windows
+    # machine to learn what was learned four minutes earlier.
+    #
+    # The trade, stated: nothing re-checks `main` after a merge. That is
+    # acceptable while every change arrives through a pull request, and it is the
+    # first thing to revisit if that stops being true.
+    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
@@ -228,12 +251,15 @@ jobs:
       # cache key includes the JOB NAME and the ref, every branch starts empty,
       # and the first run pays a full build -- 6m20s on Linux, measured.
       #
-      # ONE KEY PER JOB, NOT ONE PER PLATFORM. The first attempt gave `build` and
-      # `fmt and clippy` the same key because both run on Windows. They do not
-      # produce the same artifacts -- clippy's differ from a plain build -- so
-      # they would overwrite each other's cache every run and both stay cold
-      # forever. Shared ACROSS BRANCHES is the point; shared across jobs is a
-      # thrash.
+      # ONE KEY PER JOB, NOT ONE PER PLATFORM. An earlier attempt gave `build` and
+      # a separate `fmt and clippy` job the same key because both ran on Windows.
+      # They do not produce the same artifacts, so they overwrote each other's
+      # cache every run and both stayed cold. Shared ACROSS BRANCHES is the point;
+      # shared across jobs was a thrash.
+      #
+      # That problem is now moot from the other direction: clippy runs INSIDE this
+      # job, against the target directory this job already filled, so there is one
+      # cache and one save rather than two competing for a key.
       #
       # Caches saved on a branch are only restorable by that branch until `main`
       # has run under the same key, so the win lands on the first push after
@@ -345,58 +371,32 @@ jobs:
           done
 
 
-  format:
-    name: fmt and clippy
-    runs-on: windows-latest
-    needs: [changes, checks]
-    if: needs.changes.outputs.code == 'true'
-    steps:
-      - uses: actions/checkout@v4
-
-      # THE TOOLCHAIN HAS ONE HOME, rust-toolchain.toml, and this reads it rather
-      # than naming a version twice. `@stable` floated six releases ahead of the
-      # machine this is developed on, which `-D warnings` turns into a red build
-      # nobody can reproduce locally.
-      - name: Resolve the toolchain pin
-        id: rust
-        shell: bash
-        run: |
-          channel=$(grep -m1 -oE 'channel = "[^"]+"' rust-toolchain.toml | cut -d'"' -f2)
-          test -n "$channel" || { echo "no channel in rust-toolchain.toml"; exit 1; }
-          echo "channel=$channel" >> "$GITHUB_OUTPUT"
-          echo "Rust pinned at $channel"
-
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.rust.outputs.channel }}
-          components: rustfmt, clippy
-
-      # `.`, NOT `host`. See the note in the build job.
-      # `shared-key`, SO A NEW BRANCH DOES NOT BUILD FROM COLD. Without it the
-      # cache key includes the ref, every branch starts empty, and the first run
-      # pays a full build -- 6m20s on Linux, measured. A shared key per platform
-      # lets every branch restore what `main` already built.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-          shared-key: ${{ runner.os }}-clippy
-
+      # FMT AND CLIPPY HERE RATHER THAN IN A JOB OF THEIR OWN.
+      #
+      # They had a second windows-latest runner, which meant a second toolchain
+      # install, a second cache restore and a second billed machine -- and Windows
+      # minutes bill at 2x. Cold, that job's clippy took 424s of billed time to
+      # check code this job had already compiled.
+      #
+      # Running them last, after the build and the mounts, keeps the useful
+      # property the separate job had: a formatting complaint does not hide a
+      # mount failure, because the mounts have already run.
       - run: cargo fmt --manifest-path host/Cargo.toml --all --check
 
-      # `-D warnings` OR THIS STEP IS DECORATION. clippy exits 0 with warnings on
-      # stdout, so without it the job is green whether the code is clean or not --
-      # and a lint nobody fails is a lint nobody fixes.
-      #
-      # --all-targets covers the test builds too. The tray's `WM_COMMAND` cast was
-      # only reported there.
       - run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
-
 
   linux:
     name: build and render without win32
     runs-on: ubuntu-latest
     needs: [changes, checks]
-    if: needs.changes.outputs.code == 'true'
+    # PULL REQUESTS ONLY, because a push to `main` is a merge of a pull request
+    # that just ran this exact matrix. Running it again bills a second Windows
+    # machine to learn what was learned four minutes earlier.
+    #
+    # The trade, stated: nothing re-checks `main` after a merge. That is
+    # acceptable while every change arrives through a pull request, and it is the
+    # first thing to revisit if that stops being true.
+    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
 
