@@ -114,3 +114,7 @@ windows = { version = "0.59", features = [
 [[bin]]
 name = "upstream-probe"
 path = "src/bin/upstream_probe.rs"
+
+[[bin]]
+name = "framework-coverage"
+path = "src/bin/framework_coverage.rs"
