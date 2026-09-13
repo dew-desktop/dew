@@ -1002,68 +1002,88 @@ fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
 
     let state = Arc::new(Mutex::new(capabilities::HostState::default()));
 
-    let entries = std::fs::read_dir(&mods_dir).map_err(|e| e.to_string())?;
-    let mut loaded = Vec::new();
-    for entry in entries.flatten() {
+    // MANIFESTS FIRST, AND ONLY THEN A MOUNT.
+    //
+    // This used to load every mod and then pick one, so `--mod calculator`
+    // mounted four VMs, built four trees and printed four lines about mods it was
+    // about to discard -- and `--mod <typo>` paid for all of it before saying so.
+    // Reading `mod.json` costs a file read; mounting costs a Luau VM, a
+    // DataModel, the framework and a layout pass.
+    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
+    for entry in std::fs::read_dir(&mods_dir)
+        .map_err(|e| e.to_string())?
+        .flatten()
+    {
         let dir = entry.path();
         if !dir.is_dir() {
             continue;
         }
-        match mods::load(&dir, &aether_root, &aliases, &state) {
-            Ok(m) => loaded.push(m),
-            Err(message) => eprintln!("[dew] skipping mod: {message}"),
+        match crate::manifest::Manifest::load(&dir) {
+            Ok(m) => candidates.push((dir, m.id)),
+            // A directory without a readable manifest is not a mod. It is worth
+            // one line, not a failure: `roblox_packages/` lives here too.
+            Err(message) => eprintln!("[dew] skipping: {message}"),
         }
     }
 
-    if loaded.is_empty() {
-        return Err(format!("no mods loaded from {}", mods_dir.display()));
+    if candidates.is_empty() {
+        return Err(format!("no mods found in {}", mods_dir.display()));
     }
 
-    match wanted {
-        Some(id) => {
-            // `--mod` TAKES AN ID, AND A PATH IS WHAT PEOPLE TRY FIRST.
-            //
-            // Shell completion offers `mods/nameplate/` and the flag reads like it
-            // wants one, so `--mod ./mods/nameplate/` is the natural first guess.
-            // It failed with `no mod with id ".\mods\nameplate\\"`, which
-            // names the mistake without saying what to type instead -- and for a
-            // directory that IS a mod, the id is sitting right there in its
-            // manifest.
-            let looks_like_a_path = id.contains('/') || id.contains('\\') || id.starts_with('.');
-            let ids: Vec<&str> = loaded.iter().map(|m| m.manifest.id.as_str()).collect();
+    candidates.sort_by(|a, b| a.1.cmp(&b.1));
+    let ids: Vec<&str> = candidates.iter().map(|(_, id)| id.as_str()).collect();
 
-            if let Some(found) = loaded.iter().position(|m| m.manifest.id == id) {
-                return Ok(loaded.into_iter().nth(found).expect("found"));
+    let Some(id) = wanted else {
+        // NO `--mod`: mount them all, which is what running Dew means.
+        let mut loaded = Vec::new();
+        for (dir, _) in &candidates {
+            match mods::load(dir, &aether_root, &aliases, &state) {
+                Ok(m) => loaded.push(m),
+                Err(message) => eprintln!("[dew] skipping mod: {message}"),
             }
-
-            if looks_like_a_path {
-                let leaf = id
-                    .trim_end_matches(['/', '\\'])
-                    .rsplit(['/', '\\'])
-                    .next()
-                    .unwrap_or(id);
-                if let Some(m) = loaded.iter().find(|m| m.manifest.id == leaf) {
-                    return Err(format!(
-                        "--mod takes an id, not a path. That directory's mod is {:?}, so: --mod {}",
-                        m.manifest.id, m.manifest.id
-                    ));
-                }
-                return Err(format!(
-                    "--mod takes an id, not a path, and nothing loaded from {id:?}. Loaded: {}",
-                    ids.join(", ")
-                ));
-            }
-
-            Err(format!("no mod with id {id:?}. Loaded: {}", ids.join(", ")))
         }
-        None => {
-            let mut sorted = loaded;
-            sorted.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
-            let ids: Vec<&str> = sorted.iter().map(|m| m.manifest.id.as_str()).collect();
-            println!("[dew] mods: {} (pick one with --mod <id>)", ids.join(", "));
-            Ok(sorted.into_iter().next().expect("non-empty"))
+        if loaded.is_empty() {
+            return Err(format!("no mods loaded from {}", mods_dir.display()));
         }
+        let first = loaded
+            .into_iter()
+            .next()
+            .expect("a non-empty set has a first");
+        return Ok(first);
+    };
+
+    if let Some((dir, _)) = candidates.iter().find(|(_, have)| have == id) {
+        return mods::load(dir, &aether_root, &aliases, &state);
     }
+
+    // `--mod` TAKES AN ID, AND A PATH IS WHAT PEOPLE TRY FIRST.
+    //
+    // Shell completion offers `mods/nameplate/` and the flag reads like it wants
+    // one, so `--mod ./mods/nameplate/` is the natural first guess. It failed
+    // naming the mistake without saying what to type instead -- and for a
+    // directory that IS a mod, the id is sitting in its manifest.
+    let looks_like_a_path = id.contains('/') || id.contains('\\') || id.starts_with('.');
+    if looks_like_a_path {
+        let leaf = id
+            .trim_end_matches(['/', '\\'])
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(id);
+        if let Some((_, found)) = candidates.iter().find(|(_, have)| have == leaf) {
+            return Err(format!(
+                "--mod takes an id, not a path. That directory's mod is {found:?}, so: --mod {found}"
+            ));
+        }
+        return Err(format!(
+            "--mod takes an id, not a path, and no mod there. Available: {}",
+            ids.join(", ")
+        ));
+    }
+
+    Err(format!(
+        "no mod with id {id:?}. Available: {}",
+        ids.join(", ")
+    ))
 }
 
 fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String> {
