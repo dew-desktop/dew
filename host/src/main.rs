@@ -1041,7 +1041,7 @@ fn load_active_mod(wanted: Option<&str>) -> Result<mods::Mod, String> {
                     .trim_end_matches(['/', '\\'])
                     .rsplit(['/', '\\'])
                     .next()
-                    .unwrap_or(&id);
+                    .unwrap_or(id);
                 if let Some(m) = loaded.iter().find(|m| m.manifest.id == leaf) {
                     return Err(format!(
                         "--mod takes an id, not a path. That directory's mod is {:?}, so: --mod {}",
