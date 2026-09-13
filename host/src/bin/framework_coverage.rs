@@ -20,10 +20,11 @@
 
 use dew_host::datamodel::{self, SharedDom};
 use dew_host::framework;
+use dew_host::gallery;
 use dew_host::services::{self, Clock, SharedClock};
-use dew_runtime::{modules, Capabilities, Vm};
+use dew_runtime::{modules, Application, Capabilities, Pointer, Vm};
 use mlua::{Lua, Table as LuaTable, Value as LuaValue};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 fn install_host(vm: &Vm) -> mlua::Result<()> {
@@ -62,6 +63,216 @@ fn load_aether(vm: &Vm, caps: &Capabilities, root: &Path) -> mlua::Result<LuaTab
     modules::install(vm, caps)?;
     let chunk = modules::load_entry(vm, &root.join("src/api.luau"))?;
     chunk.call(())
+}
+
+/// One demo's verdict.
+struct Demo {
+    name: String,
+    /// Pixels the first paint put on the surface at all.
+    ///
+    /// SEPARATE FROM `moved`, because "nothing rendered" and "nothing changed"
+    /// are different bugs with the same symptom. A demo whose tree never reached
+    /// the surface paints an empty image twice and reports a feature broken when
+    /// the wiring is.
+    painted: usize,
+    /// Symbols the demo reached for while building, recorded by the proxy.
+    used: Vec<String>,
+    /// Pixels that changed between the first paint and the last.
+    moved: usize,
+}
+
+/// Every directory under `demos/` that carries a manifest and an entry named
+/// after itself, which is the shape `mods/` already uses.
+fn demo_entries(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        if !dir.is_dir() {
+            continue;
+        }
+        let Some(name) = dir.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let luau = dir.join(format!("{name}.luau"));
+        if luau.is_file() && dir.join("pesde.toml").is_file() {
+            out.push(luau);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Run one demo: record what it used, then drive its script and see whether the
+/// pixels moved.
+///
+/// TWO PASSES OVER THE SAME DEMO, DELIBERATELY. The coverage pass mounts the tree
+/// with a proxy and measures; the differential pass mounts it with the real table
+/// and paints. One pass doing both would mean measuring a run that had been
+/// altered to be measurable.
+fn run_demo(entry: &Path) -> Result<Demo, String> {
+    let dir = entry
+        .parent()
+        .ok_or("a demo has no directory")?
+        .to_path_buf();
+    let name = entry
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("demo")
+        .to_string();
+
+    // THE DEMO'S OWN PACKAGES ARE ITS ONLY REQUIRE ROOT, and it gets no aliases.
+    // A demo that only loads because the host handed it a framework would prove
+    // nothing about a mod, which is the thing it stands in for.
+    let mut caps = Capabilities::cli(dir.clone());
+    caps.require_roots = vec![dir.clone()];
+    caps.aliases.clear();
+    caps.print = false;
+
+    let dom: SharedDom = Arc::new(Mutex::new(Default::default()));
+    let clock: SharedClock = Arc::new(Mutex::new(Clock::default()));
+
+    // `DewRoot` BEFORE THE DEMO RUNS, because a demo parents its tree into the
+    // root the host made -- the same arrangement `main.rs` gives a standalone
+    // script and `mods.rs` gives a DataModel mod. A tree parented to nothing
+    // lays out against nothing and paints an empty surface, which is
+    // indistinguishable from a feature that did not work.
+    let root_id = dom
+        .lock()
+        .map_err(|_| "dom lock")?
+        .insert("ScreenGui".into(), "DewRoot".into());
+
+    let installer_dom = dom.clone();
+    let installer_clock = clock.clone();
+
+    let app = Application::load_with(caps, entry, move |vm: &Vm| {
+        datamodel::install(vm.lua(), &installer_dom)?;
+        services::install(vm.lua(), &installer_clock)?;
+        datamodel::install_vocabulary(vm.lua())?;
+        let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
+        vm.lua().globals().set("DewRoot", root_handle)?;
+        Ok(())
+    })
+    .map_err(|e| format!("{name}: the demo did not load: {e}"))?;
+
+    // ---- pass one: what did it use?
+    let lua = app.vm().lua();
+    let real: LuaTable = app
+        .get("Aether")
+        .map_err(|e| format!("{name}: a demo must export the Aether it required: {e}"))?;
+    let measure: mlua::Function = app
+        .get("Measure")
+        .map_err(|e| format!("{name}: a demo must export Measure: {e}"))?;
+
+    let seen = lua.create_table().map_err(|e| e.to_string())?;
+    let proxy = recording_proxy(lua, real, seen.clone()).map_err(|e| e.to_string())?;
+    measure
+        .call::<LuaValue>(proxy)
+        .map_err(|e| format!("{name}: Measure failed: {e}"))?;
+
+    let mut used: Vec<String> = seen
+        .pairs::<String, bool>()
+        .flatten()
+        .map(|(k, _)| k)
+        .collect();
+    used.sort();
+
+    // ---- pass two: did the pixels move?
+    let width: f32 = app
+        .get("Width")
+        .map_err(|e| format!("{name}: Width: {e}"))?;
+    let height: f32 = app
+        .get("Height")
+        .map_err(|e| format!("{name}: Height: {e}"))?;
+    let session = app
+        .session()
+        .map_err(|e| format!("{name}: no session: {e}"))?;
+
+    let before = gallery::paint_dom(&dom, root_id, width, height)?;
+
+    let script: LuaTable = app
+        .get("Script")
+        .map_err(|e| format!("{name}: a demo must export Script: {e}"))?;
+    for step in script.sequence_values::<LuaTable>() {
+        let step = step.map_err(|e| format!("{name}: a Script step: {e}"))?;
+        if let Ok(seconds) = step.get::<f32>("step") {
+            // TICK, THEN STEP -- one frame the way Dew's own loop runs one.
+            //
+            // `services::tick` is what drives `DewHost.Clock.OnFrame`, and
+            // `PointerRouter` registers its hover pass there when no Heartbeat
+            // exists. Stepping the session alone lays out and routes input but
+            // never advances the clock, so hover never re-evaluates and a tooltip
+            // cannot open. That was the first demo's whole failure.
+            services::tick(&clock, seconds);
+            session
+                .step(seconds)
+                .map_err(|e| format!("{name}: step: {e}"))?;
+            continue;
+        }
+        let kind: String = step
+            .get("pointer")
+            .map_err(|e| format!("{name}: a Script step is neither a step nor a pointer: {e}"))?;
+        let x: f32 = step.get("x").map_err(|e| format!("{name}: x: {e}"))?;
+        let y: f32 = step.get("y").map_err(|e| format!("{name}: y: {e}"))?;
+        let pointer = match kind.as_str() {
+            "move" => Pointer::Move,
+            "down" => Pointer::Down,
+            "up" => Pointer::Up,
+            other => return Err(format!("{name}: unknown pointer '{other}'")),
+        };
+        session
+            .pointer(pointer, x, y)
+            .map_err(|e| format!("{name}: pointer: {e}"))?;
+    }
+
+    // WHAT THE DEMO SAW, if it offers to say. A demo may export `Hovered` so a
+    // static differential can distinguish "the input never arrived" from "the
+    // feature ignored it" -- two bugs with one symptom.
+    // WHATEVER THE DEMO OFFERS TO SAY. A demo may export readers so a static
+    // differential can distinguish "the input never arrived" from "the feature
+    // ignored it" -- two bugs with one symptom, and the pixel count cannot tell
+    // them apart. Finding the pressable's own was worth four rounds of guessing.
+    for field in ["Presses", "Hovered", "Ticks", "Opened"] {
+        if let Ok(reader) = app.get::<mlua::Function>(field) {
+            if let Ok(v) = reader.call::<LuaValue>(()) {
+                eprintln!("  probe   {name}: {field} = {v:?}");
+            }
+        }
+    }
+
+    // WHAT IS ACTUALLY ON THE SURFACE. A feature can open, add instances, and
+    // still paint nothing -- transparent, zero-sized, or positioned off the
+    // surface. Printing the tree separates "it never appeared" from "it appeared
+    // and is invisible", which no pixel count can.
+    if std::env::args().any(|a| a == "--tree") {
+        let guard = dom.lock().map_err(|_| "dom lock")?;
+        let mut stack = vec![(root_id, 0usize)];
+        while let Some((id, depth)) = stack.pop() {
+            let class = guard.class_of(id).unwrap_or_default();
+            let iname = guard.name_of(id).unwrap_or_default();
+            eprintln!(
+                "  tree    {:indent$}{class} {iname}",
+                "",
+                indent = depth * 2
+            );
+            for child in guard.children(id).into_iter().rev() {
+                stack.push((child, depth + 1));
+            }
+        }
+    }
+
+    let after = gallery::paint_dom(&dom, root_id, width, height)?;
+    let moved = gallery::pixels_differing(&before, &after);
+    let painted = before.rgba.chunks(4).filter(|px| px[3] != 0).count();
+
+    Ok(Demo {
+        name,
+        painted,
+        used,
+        moved,
+    })
 }
 
 fn main() {
@@ -121,6 +332,27 @@ fn main() {
         touched.sort();
     }
 
+    // ---- the demos
+    let demos_root = PathBuf::from("demos");
+    let mut demos: Vec<Demo> = Vec::new();
+    let mut failures: Vec<String> = Vec::new();
+    for entry in demo_entries(&demos_root) {
+        match run_demo(&entry) {
+            Ok(d) => demos.push(d),
+            Err(e) => failures.push(e),
+        }
+    }
+
+    for d in &demos {
+        for u in &d.used {
+            if !touched.contains(u) {
+                touched.push(u.clone());
+            }
+        }
+    }
+    touched.retain(|t| scope.contains(t));
+    touched.sort();
+
     println!(
         "FRAMEWORK: {} of {} demonstrated",
         touched.len(),
@@ -135,21 +367,68 @@ fn main() {
         println!("    not a feature  {name:<12} {why}");
     }
 
+    if !demos.is_empty() {
+        println!();
+        for d in &demos {
+            // A DEMO THAT MOVED NO PIXELS DEMONSTRATED NOTHING, whatever it
+            // touched. A closed tooltip and a broken tooltip paint the same
+            // image, so the number that matters is how many pixels the script
+            // changed.
+            let verdict = if d.moved > 0 { "moved" } else { "STATIC" };
+            println!(
+                "  {verdict:>6} {:>7} px moved, {:>7} px painted  {:<14} {} symbol(s)",
+                d.moved,
+                d.painted,
+                d.name,
+                d.used.len()
+            );
+        }
+    }
+
+    for f in &failures {
+        eprintln!("  FAILED  {f}");
+    }
+
     if self_test {
         println!();
-        println!(
-            "  SELF TEST: a chunk touching three symbols recorded {}",
-            touched.len()
-        );
-        for t in &touched {
-            println!("    {t}");
-        }
-        if touched.len() != 3 {
+        let probe = ["Presence", "create", "source"];
+        let hits = probe
+            .iter()
+            .filter(|s| touched.contains(&s.to_string()))
+            .count();
+        println!("  SELF TEST: a chunk touching three symbols recorded {hits} of them");
+        if hits != probe.len() {
             eprintln!(
-                "the proxy recorded {} reads for a chunk that made three; it is not measuring what ran",
-                touched.len()
+                "the proxy recorded {hits} of the three symbols the probe read; it is not measuring what ran"
             );
             std::process::exit(1);
         }
+    }
+
+    if !failures.is_empty() {
+        std::process::exit(1);
+    }
+
+    // A DEMO THAT STOPPED RESPONDING IS A FEATURE THAT STOPPED WORKING, and that
+    // is a red build rather than a smaller number. The coverage figure itself is
+    // reported and not gated: gating an honest early number teaches somebody to
+    // inflate it, which is the failure `gallery.rs` names in its own header.
+    let static_demos: Vec<&Demo> = demos.iter().filter(|d| d.moved == 0).collect();
+    if !static_demos.is_empty() {
+        eprintln!();
+        for d in &static_demos {
+            if d.painted == 0 {
+                eprintln!(
+                    "  {}: the surface is empty. The tree never reached `DewRoot`, so this is wiring rather than the feature.",
+                    d.name
+                );
+            } else {
+                eprintln!(
+                    "  {}: {} px painted and none changed. The script ran and the feature did not respond.",
+                    d.name, d.painted
+                );
+            }
+        }
+        std::process::exit(1);
     }
 }
