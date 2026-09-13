@@ -11,13 +11,16 @@ written standard.
 ## Running it
 
 ```sh
-cargo run -p dew-host -- --applet timetracker
+cargo run -p dew-host -- applets/timetracker
 ```
+
+An applet is named by its directory. There is no registry and no id.
 
 | | |
 | :--- | :--- |
-| `--applet <id>` | run one applet. Without it, Dew lists what it found and runs the first |
-| `--snapshot <path>` | render one frame to a PNG and exit, needing no window |
+| `dew <path>` | run the applet in that directory |
+| `dew check <path>...` | validate manifests and entry points, or the working directory |
+| `dew snapshot <path> -o out.png` | render one frame and exit, needing no window |
 | `--stats` | report where frame time goes |
 | `--bench` | repaint every frame, which is the load a drag produces |
 

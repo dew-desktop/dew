@@ -6,9 +6,9 @@
   "scripts": {
     "dev": "cargo run --manifest-path host/Cargo.toml --",
     "build": "cargo build --release --manifest-path host/Cargo.toml",
-    "timetracker": "cargo run --manifest-path host/Cargo.toml -- --applet timetracker",
-    "calculator": "cargo run --manifest-path host/Cargo.toml -- --applet calculator",
-    "nameplate": "cargo run --manifest-path host/Cargo.toml -- --applet nameplate",
+    "timetracker": "cargo run --manifest-path host/Cargo.toml -- applets/timetracker",
+    "calculator": "cargo run --manifest-path host/Cargo.toml -- applets/calculator",
+    "nameplate": "cargo run --manifest-path host/Cargo.toml -- applets/nameplate",
     "snapshot": "cargo run --manifest-path host/Cargo.toml -- --snapshot dew.png"
   }
 }

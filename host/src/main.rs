@@ -548,7 +548,8 @@ fn create_renderer(
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     Run {
-        applet_id: Option<String>,
+        /// The applets to mount, each a directory containing a `dew.toml`.
+        applets: Vec<PathBuf>,
         stats: bool,
         bench: bool,
     },
@@ -557,7 +558,8 @@ pub enum Command {
         output: String,
     },
     Check {
-        target: Option<String>,
+        /// Directories to check. Empty means the working directory, if it is one.
+        targets: Vec<PathBuf>,
     },
     Init {
         name: String,
@@ -583,7 +585,7 @@ pub enum Command {
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotTarget {
-    Applet(Option<String>),
+    Applet(PathBuf),
     Script {
         path: String,
         width: u32,
@@ -598,11 +600,13 @@ pub fn parse_args<I: Iterator<Item = String>>(
     let args_vec: Vec<String> = args.collect();
     if args_vec.is_empty() {
         if is_windows {
-            return Ok(Command::Run {
-                applet_id: None,
-                stats: false,
-                bench: false,
-            });
+            // NOTHING TO RUN WITHOUT A PATH. This used to mount everything in a
+            // blessed directory; there is no blessed directory any more, so an
+            // empty invocation is a usage question rather than a default.
+            return Err(
+                "nothing to run: pass an applet directory, e.g. `dew applets/timetracker`"
+                    .to_string(),
+            );
         } else {
             return Err("no headless action specified (use --script or --snapshot)".to_string());
         }
@@ -625,16 +629,17 @@ pub fn parse_args<I: Iterator<Item = String>>(
 }
 
 fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
-    let mut applet_id = None;
+    let mut applets: Vec<PathBuf> = Vec::new();
     let mut stats = false;
     let mut bench = false;
 
-    let mut iter = args.iter();
-    while let Some(arg) = iter.next() {
+    for arg in args.iter() {
         match arg.as_str() {
             "--applet" | "-a" => {
-                let val = iter.next().ok_or("missing value for --applet")?;
-                applet_id = Some(val.clone());
+                return Err(
+                    "`--applet` is gone: pass the applet's directory, e.g. `dew applets/timetracker`"
+                        .to_string(),
+                );
             }
             "--stats" => {
                 if !is_windows {
@@ -652,6 +657,9 @@ fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
                 }
                 bench = true;
             }
+            // A PATH, NOT A NAME. Anything that is not a flag is an applet
+            // directory, so the shape of the argument says what it is.
+            _ if !arg.starts_with('-') => applets.push(PathBuf::from(arg)),
             _ => return Err(format!("unrecognised argument '{arg}'")),
         }
     }
@@ -664,14 +672,14 @@ fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
     }
 
     Ok(Command::Run {
-        applet_id,
+        applets,
         stats,
         bench,
     })
 }
 
 fn parse_snapshot(args: &[String]) -> Result<Command, String> {
-    let mut applet_id = None;
+    let mut applet: Option<PathBuf> = None;
     let mut script = None;
     let mut size = (400, 300);
     let mut output = None;
@@ -680,9 +688,14 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
+            // THE FLAG IS GONE, and saying so beats `unrecognised argument`. It
+            // took a name that had to be looked up, which is the id system this
+            // removed.
             "--applet" | "-a" => {
-                let val = iter.next().ok_or("missing value for --applet")?;
-                applet_id = Some(val.clone());
+                return Err(
+                    "`--applet` is gone: pass the applet's directory, e.g. `dew snapshot applets/timetracker -o out.png`"
+                        .to_string(),
+                );
             }
             "--script" | "-s" => {
                 let val = iter.next().ok_or("missing value for --script")?;
@@ -714,40 +727,34 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
         }
     }
 
-    if let Some(out) = output {
-        if let Some(pos) = positionals.first() {
-            if applet_id.is_none() && script.is_none() {
-                applet_id = Some(pos.clone());
+    // ONE POSITIONAL, AND ITS KIND IS READ FROM THE FILESYSTEM.
+    //
+    // This used to guess: a positional containing a slash or ending in `.png` was
+    // treated as the output, anything else as an applet name. Once an applet is
+    // named by its PATH that heuristic is wrong on every invocation, because every
+    // path contains a slash. The output now comes from `-o` and nothing else.
+    //
+    // A directory is an applet; a file is a script. The filesystem already knows
+    // which, so neither needs a flag.
+    match positionals.len() {
+        0 => {}
+        1 => {
+            let pos = PathBuf::from(positionals.remove(0));
+            if script.is_some() {
+                return Err(format!("unexpected argument '{}'", pos.display()));
+            }
+            if pos.is_dir() {
+                applet = Some(pos);
+            } else if pos.is_file() {
+                script = Some(pos.display().to_string());
             } else {
-                return Err(format!("unexpected argument '{pos}'"));
+                // A TYPO IS NOT A SCRIPT. Falling through to the script branch
+                // made a mistyped directory fail later, inside the Luau loader,
+                // with a message about a module rather than about the path.
+                return Err(format!("{}: no such file or directory", pos.display()));
             }
         }
-        output = Some(out);
-    } else {
-        match positionals.len() {
-            0 => {}
-            1 => {
-                let pos = positionals.remove(0);
-                if applet_id.is_some()
-                    || script.is_some()
-                    || pos.ends_with(".png")
-                    || pos.contains('/')
-                    || pos.contains('\\')
-                {
-                    output = Some(pos);
-                } else {
-                    applet_id = Some(pos);
-                }
-            }
-            2 => {
-                if applet_id.is_some() || script.is_some() {
-                    return Err(format!("unexpected argument '{}'", positionals[1]));
-                }
-                applet_id = Some(positionals.remove(0));
-                output = Some(positionals.remove(0));
-            }
-            _ => return Err(format!("unexpected argument '{}'", positionals[2])),
-        }
+        _ => return Err(format!("unexpected argument '{}'", positionals[1])),
     }
 
     let out = output.unwrap_or_else(|| "dew.png".to_string());
@@ -758,7 +765,10 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
             height: size.1,
         }
     } else {
-        SnapshotTarget::Applet(applet_id)
+        let dir = applet.ok_or(
+            "nothing to snapshot: pass an applet directory or a script, e.g. `dew snapshot applets/timetracker -o out.png`",
+        )?;
+        SnapshotTarget::Applet(dir)
     };
 
     Ok(Command::Snapshot {
@@ -768,17 +778,14 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
 }
 
 fn parse_check(args: &[String]) -> Result<Command, String> {
-    let mut target = None;
+    let mut targets: Vec<PathBuf> = Vec::new();
     for arg in args {
         if arg.starts_with('-') {
             return Err(format!("unrecognised argument '{arg}'"));
         }
-        if target.is_some() {
-            return Err(format!("unexpected argument '{arg}'"));
-        }
-        target = Some(arg.clone());
+        targets.push(PathBuf::from(arg));
     }
-    Ok(Command::Check { target })
+    Ok(Command::Check { targets })
 }
 
 fn parse_init(args: &[String]) -> Result<Command, String> {
@@ -915,7 +922,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
     let mut script = None;
     let mut size = (400, 300);
     let mut snapshot_out = None;
-    let mut applet_id = None;
+    let applets: Vec<PathBuf> = Vec::new();
     let mut stats = false;
     let mut bench = false;
 
@@ -938,8 +945,10 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
                 snapshot_out = Some(val.clone());
             }
             "--applet" => {
-                let val = iter.next().ok_or("missing value for --applet")?;
-                applet_id = Some(val.clone());
+                return Err(
+                    "`--applet` is gone: pass the applet's directory, e.g. `dew applets/timetracker`"
+                        .to_string(),
+                );
             }
             "--stats" => {
                 if !is_windows {
@@ -969,7 +978,10 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
                 height: size.1,
             }
         } else {
-            SnapshotTarget::Applet(applet_id)
+            let dir = applets.first().cloned().ok_or(
+                "nothing to snapshot: pass an applet directory, e.g. `dew snapshot applets/timetracker -o out.png`",
+            )?;
+            SnapshotTarget::Applet(dir)
         };
         Ok(Command::Snapshot {
             target,
@@ -989,101 +1001,38 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
             return Err("no headless action specified (use --script or --snapshot)".to_string());
         }
         Ok(Command::Run {
-            applet_id,
+            applets,
             stats,
             bench,
         })
     }
 }
 
-fn load_active_mod(wanted: Option<&str>) -> Result<applets::Applet, String> {
-    let mods_dir = find_dir("applets").ok_or("could not find an `applets` directory")?;
-    let (aether_root, aliases) = aether_aliases()?;
-
-    let state = Arc::new(Mutex::new(capabilities::HostState::default()));
-
-    // MANIFESTS FIRST, AND ONLY THEN A MOUNT.
-    //
-    // This used to load every mod and then pick one, so `--applet calculator`
-    // mounted four VMs, built four trees and printed four lines about mods it was
-    // about to discard -- and `--applet <typo>` paid for all of it before saying so.
-    // Reading `dew.toml` costs a file read; mounting costs a Luau VM, a
-    // DataModel, the framework and a layout pass.
-    let mut candidates: Vec<(PathBuf, String)> = Vec::new();
-    for entry in std::fs::read_dir(&mods_dir)
-        .map_err(|e| e.to_string())?
-        .flatten()
-    {
-        let dir = entry.path();
-        if !dir.is_dir() {
-            continue;
-        }
-        match crate::manifest::Manifest::load(&dir) {
-            Ok(m) => candidates.push((dir, m.id)),
-            // A directory without a readable manifest is not a mod. It is worth
-            // one line, not a failure: `roblox_packages/` lives here too.
-            Err(message) => eprintln!("[dew] skipping: {message}"),
-        }
+/// Load the applet in `dir`.
+///
+/// NO SCANNING, AND NO IDS. An applet is a directory containing a `dew.toml`.
+/// That is the whole definition, and it is the one a browser uses for a page: the
+/// address is the identity.
+///
+/// This used to read every manifest under a blessed `applets/` directory to build
+/// an id list, so a directory with a perfectly good manifest somewhere else was
+/// not an applet, and the same applet moved was a different applet. It also meant
+/// the CLI took a name that had to be looked up, which is why `--applet
+/// ./applets/nameplate/` failed with a message about ids.
+fn load_applet(dir: &Path) -> Result<applets::Applet, String> {
+    if !dir.is_dir() {
+        return Err(format!("{}: not a directory", dir.display()));
     }
-
-    if candidates.is_empty() {
-        return Err(format!("no applets found in {}", mods_dir.display()));
-    }
-
-    candidates.sort_by(|a, b| a.1.cmp(&b.1));
-    let ids: Vec<&str> = candidates.iter().map(|(_, id)| id.as_str()).collect();
-
-    let Some(id) = wanted else {
-        // NO `--applet`: mount them all, which is what running Dew means.
-        let mut loaded = Vec::new();
-        for (dir, _) in &candidates {
-            match applets::load(dir, &aether_root, &aliases, &state) {
-                Ok(m) => loaded.push(m),
-                Err(message) => eprintln!("[dew] skipping applet: {message}"),
-            }
-        }
-        if loaded.is_empty() {
-            return Err(format!("no applets loaded from {}", mods_dir.display()));
-        }
-        let first = loaded
-            .into_iter()
-            .next()
-            .expect("a non-empty set has a first");
-        return Ok(first);
-    };
-
-    if let Some((dir, _)) = candidates.iter().find(|(_, have)| have == id) {
-        return applets::load(dir, &aether_root, &aliases, &state);
-    }
-
-    // `--applet` TAKES AN ID, AND A PATH IS WHAT PEOPLE TRY FIRST.
-    //
-    // Shell completion offers `applets/nameplate/` and the flag reads like it wants
-    // one, so `--applet ./applets/nameplate/` is the natural first guess. It failed
-    // naming the mistake without saying what to type instead -- and for a
-    // directory that IS a mod, the id is sitting in its manifest.
-    let looks_like_a_path = id.contains('/') || id.contains('\\') || id.starts_with('.');
-    if looks_like_a_path {
-        let leaf = id
-            .trim_end_matches(['/', '\\'])
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(id);
-        if let Some((_, found)) = candidates.iter().find(|(_, have)| have == leaf) {
-            return Err(format!(
-                "--applet takes an id, not a path. That directory's applet is {found:?}, so: --applet {found}"
-            ));
-        }
+    if !dir.join("dew.toml").is_file() {
         return Err(format!(
-            "--applet takes an id, not a path, and no applet there. Available: {}",
-            ids.join(", ")
+            "{}: no dew.toml, so this is not an applet",
+            dir.display()
         ));
     }
 
-    Err(format!(
-        "no applet with id {id:?}. Available: {}",
-        ids.join(", ")
-    ))
+    let (aether_root, aliases) = aether_aliases()?;
+    let state = Arc::new(Mutex::new(capabilities::HostState::default()));
+    applets::load(dir, &aether_root, &aliases, &state)
 }
 
 fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String> {
@@ -1100,8 +1049,8 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
             println!("[dew] {path}: {report} -> {output} ({width}x{height})");
             Ok(())
         }
-        SnapshotTarget::Applet(wanted) => {
-            let active = load_active_mod(wanted.as_deref())?;
+        SnapshotTarget::Applet(dir) => {
+            let active = load_applet(&dir)?;
             let applets::Applet {
                 manifest,
                 width,
@@ -1127,10 +1076,10 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
     }
 }
 
-fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), String> {
+fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
-        let _ = (wanted, stats, bench);
+        let _ = (dir, stats, bench);
         Err(
             "'run' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
                 .to_string(),
@@ -1140,7 +1089,7 @@ fn execute_run(wanted: Option<&str>, stats: bool, bench: bool) -> Result<(), Str
     #[cfg(windows)]
     {
         println!("💧 Dew starting");
-        let active = load_active_mod(wanted)?;
+        let active = load_applet(dir)?;
         let applets::Applet {
             manifest,
             mut width,
@@ -1286,47 +1235,25 @@ fn check_mod_dir(dir: &Path) -> Result<(manifest::Manifest, PathBuf, Vec<String>
     Ok((manifest, entry, warnings))
 }
 
-fn execute_check(target: Option<String>) -> Result<(), String> {
-    let dirs: Vec<PathBuf> = match target {
-        Some(t) => {
-            let p = PathBuf::from(&t);
-            if p.is_dir() {
-                vec![p]
-            } else if let Some(mods_dir) = find_dir("applets") {
-                let candidate = mods_dir.join(&t);
-                if candidate.is_dir() {
-                    vec![candidate]
-                } else {
-                    return Err(format!(
-                        "no directory or mod found at '{t}' (checked '{}')",
-                        candidate.display()
-                    ));
-                }
-            } else {
-                return Err(format!("no directory or mod found at '{t}'"));
-            }
+fn execute_check(targets: Vec<PathBuf>) -> Result<(), String> {
+    // PATHS, AND NO SEARCHING. `check applets/timetracker` checks that directory.
+    // Bare `check` checks the working directory if it is an applet, which makes
+    // `cd` into one and `dew check` the obvious thing.
+    //
+    // This used to resolve a name against a blessed `applets/` directory and, with
+    // no argument, check everything it found there. A directory with a manifest
+    // somewhere else was not checkable, which is the id system in another costume.
+    let dirs: Vec<PathBuf> = if targets.is_empty() {
+        if Path::new("dew.toml").is_file() {
+            vec![PathBuf::from(".")]
+        } else {
+            return Err(
+                "nothing to check: pass an applet directory, or run this from inside one"
+                    .to_string(),
+            );
         }
-        None => {
-            if Path::new("dew.toml").is_file() {
-                vec![PathBuf::from(".")]
-            } else if let Some(mods_dir) = find_dir("applets") {
-                let mut found = Vec::new();
-                for entry in std::fs::read_dir(&mods_dir)
-                    .map_err(|e| e.to_string())?
-                    .flatten()
-                {
-                    if entry.path().is_dir() {
-                        found.push(entry.path());
-                    }
-                }
-                found.sort();
-                found
-            } else {
-                return Err(
-                    "could not find an `applets` directory or a local `dew.toml`".to_string(),
-                );
-            }
-        }
+    } else {
+        targets
     };
 
     if dirs.is_empty() {
@@ -1951,13 +1878,23 @@ fn execute_conformance(
 fn run() -> Result<(), String> {
     let cmd = parse_args(std::env::args().skip(1), cfg!(windows))?;
     match cmd {
+        // ONE WINDOW, ONE APPLET, FOR NOW. Several paths parse, and mounting more
+        // than one is a window-management question this host has not answered, so
+        // it says so rather than silently running the first.
         Command::Run {
-            applet_id,
+            applets,
             stats,
             bench,
-        } => execute_run(applet_id.as_deref(), stats, bench),
+        } => match applets.as_slice() {
+            [] => Err(
+                "nothing to run: pass an applet directory, e.g. `dew applets/timetracker`"
+                    .to_string(),
+            ),
+            [one] => execute_run(one, stats, bench),
+            _ => Err("running more than one applet at once is not supported yet".to_string()),
+        },
         Command::Snapshot { target, output } => execute_snapshot(target, output),
-        Command::Check { target } => execute_check(target),
+        Command::Check { targets } => execute_check(targets),
         Command::Init {
             name,
             runtime,
@@ -2054,8 +1991,6 @@ mod tests {
             "400x300",
             "--snapshot",
             "out.png",
-            "--applet",
-            "nameplate",
         ]
         .iter()
         .map(|s| s.to_string());
@@ -2105,56 +2040,53 @@ mod tests {
         }
     }
 
+    /// A DIRECTORY IS AN APPLET, decided by the filesystem rather than a flag.
     #[test]
-    fn subcommand_snapshot_mod() {
-        let args = ["snapshot", "--applet", "nameplate", "out.png"]
-            .iter()
-            .map(|s| s.to_string());
-        let cmd = parse_args(args, true).unwrap();
+    fn subcommand_snapshot_takes_a_path() {
+        // A REAL DIRECTORY, because the kind is read from the filesystem. The test
+        // makes one rather than assuming what exists beside the crate.
+        let dir = std::env::temp_dir().join("dew-cli-test-applet");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let args = [
+            "snapshot".to_string(),
+            dir.display().to_string(),
+            "-o".to_string(),
+            "out.png".to_string(),
+        ]
+        .into_iter();
+        let cmd = parse_args(args, false).unwrap();
         match cmd {
             Command::Snapshot { target, output } => {
                 assert_eq!(output, "out.png");
                 match target {
-                    SnapshotTarget::Applet(Some(id)) => assert_eq!(id, "nameplate"),
-                    _ => panic!("expected Mod target with nameplate"),
+                    SnapshotTarget::Applet(got) => assert_eq!(got, dir),
+                    _ => panic!("a directory should read as an applet"),
                 }
             }
             _ => panic!("expected Snapshot command"),
         }
     }
 
+    /// The flag is gone, and saying so beats `unrecognised argument`.
     #[test]
-    fn subcommand_snapshot_positional_mod() {
-        let args = ["snapshot", "nameplate", "out.png"]
+    fn snapshot_refuses_the_old_flag_and_says_what_to_type() {
+        let args = ["snapshot", "--applet", "nameplate"]
             .iter()
             .map(|s| s.to_string());
-        let cmd = parse_args(args, false).unwrap();
-        match cmd {
-            Command::Snapshot { target, output } => {
-                assert_eq!(output, "out.png");
-                match target {
-                    SnapshotTarget::Applet(Some(id)) => assert_eq!(id, "nameplate"),
-                    _ => panic!("expected Mod target with nameplate"),
-                }
-            }
-            _ => panic!("expected Snapshot command"),
-        }
+        let err = parse_args(args, false).unwrap_err();
+        assert!(
+            err.contains("directory"),
+            "the error should point at a path, got: {err}"
+        );
     }
 
+    /// WITHOUT A TARGET THERE IS NOTHING TO RENDER. This used to fall back to
+    /// whichever applet a blessed directory listed first.
     #[test]
-    fn subcommand_snapshot_default() {
-        let args = ["snapshot", "out.png"].iter().map(|s| s.to_string());
-        let cmd = parse_args(args, false).unwrap();
-        match cmd {
-            Command::Snapshot { target, output } => {
-                assert_eq!(output, "out.png");
-                match target {
-                    SnapshotTarget::Applet(None) => {}
-                    _ => panic!("expected default Mod target"),
-                }
-            }
-            _ => panic!("expected Snapshot command"),
-        }
+    fn subcommand_snapshot_needs_a_target() {
+        let args = ["snapshot", "-o", "out.png"].iter().map(|s| s.to_string());
+        let err = parse_args(args, false).unwrap_err();
+        assert!(err.contains("nothing to snapshot"), "got: {err}");
     }
 
     #[test]
@@ -2165,6 +2097,7 @@ mod tests {
             "app.luau",
             "--size",
             "360x240",
+            "-o",
             "/tmp/app.png",
         ]
         .iter()
@@ -2202,17 +2135,15 @@ mod tests {
 
     #[test]
     fn subcommand_run_accepted_on_windows() {
-        let args = ["run", "--applet", "nameplate"]
-            .iter()
-            .map(|s| s.to_string());
+        let args = ["run", "applets/nameplate"].iter().map(|s| s.to_string());
         let cmd = parse_args(args, true).unwrap();
         match cmd {
             Command::Run {
-                applet_id,
+                applets,
                 stats,
                 bench,
             } => {
-                assert_eq!(applet_id.as_deref(), Some("nameplate"));
+                assert_eq!(applets, vec![PathBuf::from("applets/nameplate")]);
                 assert!(!stats);
                 assert!(!bench);
             }
@@ -2222,10 +2153,12 @@ mod tests {
 
     #[test]
     fn subcommand_check() {
-        let args = ["check", "nameplate"].iter().map(|s| s.to_string());
+        let args = ["check", "applets/nameplate"].iter().map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Check { target } => assert_eq!(target.as_deref(), Some("nameplate")),
+            Command::Check { targets } => {
+                assert_eq!(targets, vec![PathBuf::from("applets/nameplate")])
+            }
             _ => panic!("expected Check command"),
         }
     }

@@ -2,7 +2,7 @@
 --[[
 	Nameplate — a Dew mod written against no framework at all.
 
-	    cargo run --manifest-path host/Cargo.toml -- --applet nameplate --snapshot out.png
+	    cargo run --manifest-path host/Cargo.toml -- snapshot applets/nameplate -o out.png
 
 	THE THIRD MOD, AND THE FIRST THAT IMPORTS NOTHING. `calculator`, `timetracker`
 	and `workspace` are Aether components: they `require("./roblox_packages/aether")`, return a

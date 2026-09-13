@@ -369,7 +369,7 @@ jobs:
       # message and the host carries on, which is right at runtime and would hide
       # a broken mod here.
       # Validate all applet manifests and syntax
-      - run: cargo run --quiet --manifest-path host/Cargo.toml -- check
+      - run: cargo run --quiet --manifest-path host/Cargo.toml -- check applets/*/ demos/*/
 
       # EVERY MOD, not the first one. An applet that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
@@ -380,7 +380,7 @@ jobs:
           for m in applets/*/; do
             id=$(basename "$m")
             echo "--- $id"
-            cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --applet "$id" "/tmp/$id.png"
+            cargo run --quiet --manifest-path host/Cargo.toml -- snapshot "$m" -o "/tmp/$id.png"
           done
 
 
@@ -519,8 +519,8 @@ jobs:
       - name: Validate mods with check
         shell: bash
         run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- check
-          cargo run --quiet --manifest-path host/Cargo.toml -- check nameplate
+          cargo run --quiet --manifest-path host/Cargo.toml -- check applets/*/ demos/*/
+          cargo run --quiet --manifest-path host/Cargo.toml -- check applets/nameplate
 
       # HEADLESS RENDERING: must produce real PNGs without a display.
       - name: Render standalone script snapshot
@@ -535,7 +535,7 @@ jobs:
       - name: Render named mod snapshot
         shell: bash
         run: |
-          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --applet nameplate /tmp/nameplate.png)
+          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- snapshot applets/nameplate -o /tmp/nameplate.png)
           echo "$output"
           echo "$output" | grep -q "wrote /tmp/nameplate.png (340x148) for nameplate" || {
             echo "Expected snapshot of nameplate by name, got: $output"
@@ -556,8 +556,8 @@ jobs:
         shell: bash
         run: |
           cargo run --quiet --manifest-path host/Cargo.toml -- init test_scaffold --runtime datamodel
-          cargo run --quiet --manifest-path host/Cargo.toml -- check test_scaffold
-          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot --applet test_scaffold /tmp/scaffold.png
+          cargo run --quiet --manifest-path host/Cargo.toml -- check applets/test_scaffold
+          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot applets/test_scaffold -o /tmp/scaffold.png
           test -s /tmp/scaffold.png || { echo "scaffold.png was not created or is empty"; exit 1; }
           rm -rf applets/test_scaffold
           echo "Scaffolded, checked, and rendered test_scaffold mod successfully"
