@@ -13,6 +13,16 @@ different question.
 
 Read in that order the first time. After that they are reference.
 
+## Planning notes are not published
+
+`.artifacts/` holds the plans, decisions and sprint records this work is shaped
+by. It is gitignored, so a fresh clone does not have it and a reader of the
+public history cannot open it.
+
+Never cite it. A commit or pull request naming a milestone, a step letter or an
+ADR number points at something nobody outside can read, and it dates the moment
+the plan moves on. Say what the work is FOR instead.
+
 ## The short version
 
 **One observable goal per branch**, and the prefix says which kind of work it is.

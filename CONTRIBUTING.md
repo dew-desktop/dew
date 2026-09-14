@@ -11,20 +11,21 @@ Three things worth knowing before the first pull request:
   runs.
 - **Plain ASCII**, in commits, pull requests and documentation alike.
 
-## Before your first push
+## Start here
 
 ```sh
-git config core.hooksPath .githooks
+lune run scripts/setup.luau
 ```
 
-That points git at `.githooks/pre-push`, which runs the commit subject check, the
-ASCII and boundary gates, and every command the CLI promises. It takes under
-three seconds when nothing needs rebuilding.
+It checks the tools, points git at `.githooks/pre-push`, and says which examples
+still need their own packages installed. Run it again whenever something looks
+wrong; it reports rather than assumes and changes nothing that is already set.
 
-It is worth the one line. The cheap CI job gates the expensive ones, so a commit
-subject with the wrong scope costs a full round trip and reports nothing about
-your code. All three of those gates run from the same scripts CI runs, so a pass
-here is a pass there.
+The hook runs the commit subject check, the ASCII and boundary gates, and every
+command the CLI promises, in under three seconds. It is worth having: the cheap
+CI job gates the expensive ones, so a commit subject with the wrong scope costs a
+full round trip and reports nothing about your code. Those gates run from the
+same scripts CI runs, so a pass here is a pass there.
 
 Run the CLI checks on their own with:
 
