@@ -82,6 +82,22 @@ else
 	end
 end
 
+--- WHAT DEW'S OWN TOOLING NEEDS.
+---
+--- NOT A DEPENDENCY OF DEW. `[dependencies]` in the root manifest is empty and a
+--- gate keeps it that way: nothing Dew ships needs a framework. The pins are
+--- `[dev_dependencies]`, because the conformance runner and the coverage tool
+--- need a framework to read cases and measure against, and `framework-coverage`
+--- exits rather than reporting a zero when it cannot find one.
+print("")
+if fs.isDir("roblox_packages/.pesde") then
+	print("  ok       the framework Dew tests against")
+else
+	print("  MISSING  the framework Dew tests against")
+	blocked = true
+	table.insert(notes, "`pesde install` at the repository root. Without it the conformance runner and framework-coverage have nothing to read.")
+end
+
 --- WHAT AN EXAMPLE NEEDS BEFORE IT RUNS.
 print("")
 local missingPackages: { string } = {}
