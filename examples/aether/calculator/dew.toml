@@ -6,10 +6,5 @@ id = "calculator"
 name = "Calculator"
 description = "Quick math widget"
 
-# This applet mounts its own framework, so the host hands it a root and stays out
-# of the way.
-runtime = "datamodel"
-
-# Only the surface it draws on. It does arithmetic on its own state and
-# touches nothing else, so `dew` carries only the ungated clock.
+# DECLARES NO PERMISSIONS, and gets none. Deny by default, working.
 permissions = ["widget"]

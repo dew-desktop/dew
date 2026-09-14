@@ -29,24 +29,28 @@ local function formatTimer(seconds: number): string
 	return string.format("%02d:%02d", m, s)
 end
 
-local WIDTH, HEIGHT = 380, 56
+return {
+	id = "timetracker",
+	size = { width = 380, height = 56 },
 
---- A floating widget: no chrome, always on top, out of the taskbar, and shaped
---- by its own alpha, so the rounded card below is the window's real silhouette
---- rather than a shape drawn on a dark rectangle.
----
---- `clickThrough` stays false because the START button is a control. A widget
---- that only displays would set it true and let clicks reach the desktop.
-local widget = assert(dew.widget, "dew.toml must grant `widget`")
-local root = widget({
-	width = WIDTH,
-	height = HEIGHT,
-	anchor = "topRight",
-	offset = { x = 24, y = 24 },
-	clickThrough = false,
-})
+	--- A FLOATING WIDGET. No chrome, always on top, out of the taskbar, and
+	--- shaped by its own alpha — so the rounded card below is the window's real
+	--- silhouette rather than a shape drawn on a dark rectangle.
+	---
+	--- Omitting `surface` entirely gets this too; it is spelled out here because
+	--- this is the reference mod and the fields should be visible somewhere.
+	surface = {
+		kind = "widget",
+		anchor = "top-right",
+		offset = { x = 24, y = 24 },
+		--- False, because the START button is a control. A monitor that only
+		--- displays would set this true and let clicks reach the desktop.
+		clickThrough = false,
+	},
 
-local function build()
+	--- `dew` carries exactly what dew.toml declared: storage, audio,
+	--- notifications. Not a global, and not the whole host surface.
+	mount = function(dew: any)
 		local isRunning = source(false)
 		local elapsed = source(0)
 		local task = source("Deep Focus")
@@ -215,8 +219,6 @@ local function build()
 		--- `toggle` is still exposed: a hotkey should be able to start the
 		--- timer without the pointer, and that genuinely is the host's to
 		--- cause. `tick` is gone — it drives itself.
-		return tree
-	end
-
-local mounted = Aether.Desktop.Mount(build, WIDTH, HEIGHT)
-;(mounted.Tree :: any).Parent = root
+		return tree, { toggle = toggle }
+	end,
+}

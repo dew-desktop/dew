@@ -1,15 +1,22 @@
 --!strict
 --[[
-	Calculator -- a Dew widget built with Aether.
+	Calculator — a Dew widget.
 
-	    cargo run -- examples/aether/calculator
+	The smaller of the two reference mods, and deliberately written in the SAME
+	idiom as the larger one. It used to speak a different API entirely
+	(`registerWidget` with a `{ text, subtext, icon, color }` descriptor the host
+	rendered in a house style), which meant Dew had two rendering paths to keep
+	correct and this widget's tree was not liftable anywhere.
 
-	Type digits and an operator, press equals. It parses the two-operand forms it
-	supports and refuses the rest.
+	The shorthand is still worth having — most small widgets want it — but as a
+	Luau helper that BUILDS one of these trees, not as a second path through the
+	renderer. It is not written yet, because one consumer is not enough evidence
+	of the shape it should take.
 
-	It declares no capabilities beyond the surface it draws on, so `dew` arrives
-	carrying only the ungated clock. That is deny-by-default working, and it is
-	worth having one applet in the tree that shows it.
+	DECLARES NO PERMISSIONS. It does arithmetic on its own state and touches
+	nothing, so `dew.toml` grants it nothing, and `dew` arrives carrying only the
+	ungated clock. That is the deny-by-default case working, and it is worth
+	having one mod in the tree that demonstrates it.
 ]]
 
 local Aether = require("./roblox_packages/aether")
@@ -18,19 +25,19 @@ local create = Aether.create
 local source = Aether.source
 local derive = Aether.derive
 
-local WIDTH, HEIGHT = 260, 56
+return {
+	id = "calculator",
+	size = { width = 260, height = 56 },
 
---- Anchored lower than the other reference widget, so both can be on screen at
---- once and neither has to be moved to see the other.
-local widget = assert(dew.widget, "dew.toml must grant `widget`")
-local root = widget({
-	width = WIDTH,
-	height = HEIGHT,
-	anchor = "topRight",
-	offset = { x = 24, y = 104 },
-})
+	--- ANCHORED LOWER, so both reference widgets can be on screen at once and
+	--- neither has to be moved to see the other.
+	surface = {
+		kind = "widget",
+		anchor = "top-right",
+		offset = { x = 24, y = 104 },
+	},
 
-local function build()
+	mount = function(_dew: any)
 		local expression = source("")
 		local result = source("")
 
@@ -115,8 +122,6 @@ local function build()
 			},
 		}
 
-		return tree
-	end
-
-local mounted = Aether.Desktop.Mount(build, WIDTH, HEIGHT)
-;(mounted.Tree :: any).Parent = root
+		return tree, { typed = typed, evaluate = evaluate, clear = clear }
+	end,
+}

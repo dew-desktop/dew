@@ -1366,3 +1366,113 @@ end
         );
     }
 }
+
+#[cfg(test)]
+mod a_pressable_responds {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Aether's `Pressable` responds when the host drives the tree.
+    ///
+    /// IGNORED, AND IT FAILS. It is the reproduction for a gap rather than a
+    /// regression guard: an applet that performs its own `Desktop.Mount` keeps
+    /// the framework's session, and nothing then steps it, so the framework's own
+    /// hit testing never sees a press the host delivered to the tree.
+    ///
+    /// `framework-coverage` does not cover this. It drives `session.pointer` and
+    /// `session.step` directly, which is the path the host used to take and not
+    /// the one an applet runs on, so its green number says nothing about either.
+    ///
+    /// Remove the `ignore` when an applet that mounts itself is driven. Until
+    /// then `calculator` and `timetracker` keep their returned declaration, and
+    /// the host keeps mounting them.
+    ///
+    /// THE APPLET IS THE REAL ONE, not a fixture. What is under test is whether a
+    /// framework's own hit testing survives being rendered through this host's
+    /// DataModel rather than through the framework's session, and a fixture that
+    /// built its own pressable would be testing something simpler.
+    #[test]
+    #[ignore = "an applet that mounts itself keeps the session, and nothing steps it"]
+    fn timetracker_toggles_when_its_button_is_pressed() {
+        let dir = PathBuf::from("../examples/aether/timetracker");
+        let dir = if dir.is_dir() {
+            dir
+        } else {
+            PathBuf::from("examples/aether/timetracker")
+        };
+        if !dir.join("roblox_packages/aether.luau").is_file() {
+            //  A MISSING INSTALL IS NOT A FAILING TEST, and it is not a silent
+            //  pass either: this says which command is missing.
+            panic!(
+                "no installed aether at {} -- run `pesde install` in that directory",
+                dir.display()
+            );
+        }
+
+        let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+        let aether_root = dew_runtime::installed_package("aether")
+            .expect("no installed aether at the repository root");
+        let loaded =
+            load(&dir, &aether_root, &Default::default(), &state).expect("timetracker should load");
+
+        let Mounted::DataModel { dom, root } = &loaded.mounted else {
+            panic!(
+                "this reproduction wants an applet that mounts itself;                  timetracker is back on the host's ceremony until the gap is closed"
+            );
+        };
+
+        let label_before = button_label(dom, *root);
+
+        let surface = datamodel::input::Surface {
+            lua: loaded.vm.lua(),
+            dom,
+            root: *root,
+            size: (loaded.width as f32, loaded.height as f32),
+        };
+        let mut pointer = datamodel::input::Pointer::default();
+        let button = datamodel::input::Button::Left;
+
+        //  THE CENTRE OF THE TOGGLE, which sits at (286, 16) and is 74 by 24.
+        let (x, y) = (286.0 + 37.0, 16.0 + 12.0);
+
+        //  A FRAME BETWEEN EACH STEP, because the framework polls the pointer on
+        //  a heartbeat rather than being pushed at. Without one it never sees the
+        //  press it is being asked about.
+        //  RECORDED BEFORE DISPATCHED, which is the order the renderer uses. A
+        //  framework polls `services` for where the pointer is and whether a
+        //  button is down; dispatching without recording delivers the event to
+        //  an instance and leaves the poller reading a pointer that never moved.
+        services::pointer_moved(x, y);
+        pointer.moved(&surface, x, y).expect("moved");
+        services::tick(&loaded.clock, 1.0 / 60.0);
+
+        services::pointer_button(button as usize, true);
+        pointer.down(&surface, button, x, y).expect("down");
+        services::tick(&loaded.clock, 1.0 / 60.0);
+
+        services::pointer_button(button as usize, false);
+        pointer.up(&surface, button, x, y).expect("up");
+        services::tick(&loaded.clock, 1.0 / 60.0);
+
+        let label_after = button_label(dom, *root);
+        assert_ne!(
+            label_before, label_after,
+            "pressing the toggle should change its label, was {label_before:?} and still is"
+        );
+    }
+
+    /// The toggle's caption, read out of the tree by name.
+    fn button_label(dom: &datamodel::SharedDom, root: usize) -> String {
+        let guard = dom.lock().expect("dom");
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if guard.name_of(id).as_deref() == Some("Label") {
+                if let Some(rbx_types::Variant::String(text)) = guard.property(id, "Text") {
+                    return text;
+                }
+            }
+            stack.extend(guard.children(id));
+        }
+        String::new()
+    }
+}
