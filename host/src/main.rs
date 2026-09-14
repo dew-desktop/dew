@@ -30,7 +30,7 @@ use dew_host::services::{self, SharedClock};
 use dew_raster::Backend;
 use dew_runtime::{Driver, RasterPainter, Rgb};
 #[cfg(windows)]
-use dew_window::{Button, Event, Window};
+use dew_window::{Button, Event, Pump, Window};
 use mlua::Lua;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1156,8 +1156,18 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
         let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
         let mut last_report = Instant::now();
 
-        while let Some(events) = window.poll() {
-            for event in events {
+        // THE PUMP IS THE THREAD'S, NOT THE WINDOW'S, and every event says which
+        // surface produced it. One surface is open here, so routing is a
+        // comparison that always succeeds; it is written out rather than
+        // assumed because the second surface is what step B adds, and an event
+        // silently applied to the wrong tree is not a failure that announces
+        // itself.
+        let mut pump = Pump::new();
+        while let Some(events) = pump.poll() {
+            for (from, event) in events {
+                if from != window.id() {
+                    continue;
+                }
                 match event {
                     Event::PointerMove { x, y } => renderer.moved(x, y)?,
                     Event::PointerDown { x, y, button } => renderer.down(button, x, y)?,
@@ -1165,7 +1175,16 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
                     Event::Wheel { x, y, delta } => {
                         renderer.wheel(x, y, delta)?;
                     }
-                    Event::Resized { .. } | Event::Exposed => renderer.invalidate(),
+                    Event::Resized {
+                        width: w,
+                        height: h,
+                    } => {
+                        // THE SHELL APPLIES THE SIZE NOW. The window used to
+                        // catch its own resize while draining its own queue.
+                        window.resized(w, h);
+                        renderer.invalidate();
+                    }
+                    Event::Exposed => renderer.invalidate(),
                     Event::CloseRequested => return Ok(()),
                     Event::Key { name, .. } => renderer.key(&name)?,
                     Event::Char(_) => {}
