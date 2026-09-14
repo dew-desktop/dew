@@ -25,10 +25,11 @@ use crate::capabilities::{self, Shared};
 use crate::datamodel;
 use crate::manifest::{Manifest, Runtime};
 use crate::services::{self, Clock, SharedClock};
-use crate::surface::Declared;
+use crate::surface::{Declared, Requested};
 use dew_runtime::{modules, Session, Vm};
 use mlua::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// The living half of a mounted mod: what the frame loop drives.
 ///
@@ -286,19 +287,69 @@ pub fn load(
     };
 
     // 4 ── the capability table, from the granted permissions ONLY.
-    let dew = capabilities::build(vm.lua(), &manifest.permissions, state)
+    let requested: Requested = Arc::new(Mutex::new(None));
+    let grant = capabilities::SurfaceGrant {
+        requested: Arc::clone(&requested),
+        root: match &ceremony {
+            //  THE HANDLE, NOT THE NODE ID. `root` is an index into the DOM and
+            //  handing that over parents instances into an integer; the applet
+            //  wants the same userdata `mount` was always given.
+            Ceremony::DataModel { root } => Some(
+                datamodel::handle(vm.lua(), &dom, *root)
+                    .map_err(|e| format!("{}: {e}", manifest.id))?
+                    .into_lua(vm.lua())
+                    .map_err(|e| format!("{}: {e}", manifest.id))?,
+            ),
+            //  AN AETHER APPLET IS HANDED NO ROOT, because its tree is built
+            //  inside a reactive scope `Desktop.Mount` opens, and nothing exists
+            //  to parent into until that scope does. It can still ask for a
+            //  surface; it just gets nil back and keeps its `mount`.
+            Ceremony::Aether(_) => None,
+        },
+        title: manifest.display_name().to_string(),
+    };
+    let dew = capabilities::build(vm.lua(), &manifest.permissions, state, &grant)
         .map_err(|e| format!("{}: {e}", manifest.id))?;
 
-    // 5 ── the mod's own module. It returns a declaration; it performs nothing.
-    let declaration: LuaTable = modules::load_entry(&vm, &entry)
-        .and_then(|f| f.call(()))
+    // 5 ── the applet's own module. It asks for a surface, or it returns a
+    //      declaration describing one. Both arrive from running it.
+    //  `dew` ARRIVES AS THE CHUNK'S VARARG, so a module can reach it before it
+    //  returns anything. It was only ever handed to `mount`, which is why the
+    //  old contract had to return one: there was no other way to be given a
+    //  capability table. `local dew = ...` is the whole of the new way in, and
+    //  it keeps the property the argument was for, which is that `dew` is never
+    //  a global and what an applet was given is visible at its own call site.
+    let returned: LuaValue = modules::load_entry(&vm, &entry)
+        .and_then(|f| f.call(dew.clone()))
         .map_err(|e| format!("{}: {e}", manifest.id))?;
+    let declaration = match returned {
+        LuaValue::Table(table) => table,
+        //  NOTHING RETURNED IS THE SHAPE THIS IS MOVING TO. An applet that asked
+        //  for a surface has already said everything the host needed, so an
+        //  empty table stands in and every read below finds nothing in it.
+        _ => vm
+            .lua()
+            .create_table()
+            .map_err(|e| format!("{}: {e}", manifest.id))?,
+    };
 
-    let (width, height) = size_from(&declaration);
+    let asked = requested.lock().expect("requested").clone();
+
+    //  WHAT THE APPLET ASKED FOR WINS over what it returned. An applet doing
+    //  both is mid-migration rather than in conflict, and the call is the newer
+    //  of the two statements.
+    //
     // The window caption a mod gets when it declares no `title` of its own is its
     // manifest `name`, falling back to the id. An applet called "Time Tracker &
     // Pomodoro HUD" in its manifest should not present itself as `timetracker`.
-    let surface = Declared::from_declaration(&declaration, manifest.display_name());
+    let surface = match &asked {
+        Some(request) => request.surface.clone(),
+        None => Declared::from_declaration(&declaration, manifest.display_name()),
+    };
+    let (width, height) = match asked.as_ref().and_then(|r| r.size) {
+        Some(size) => size,
+        None => size_from(&declaration),
+    };
 
     // A SURFACE IS A GRANT (ADR-012), and this is where the asking is checked.
     //
@@ -322,13 +373,20 @@ pub fn load(
         Runtime::Aether => "mount = function(dew) … end",
         Runtime::DataModel => "mount = function(dew, root) … end",
     };
-    let mount: LuaFunction = declaration.get("mount").map_err(|_| {
-        format!(
-            "{}: the module returned no `mount` — a Dew applet returns \
-             {{ id = …, size = …, {signature} }}. See docs/applet_contract.md",
-            manifest.id
-        )
-    })?;
+    //  AN APPLET THAT ASKED FOR ITS SURFACE HAS ALREADY BUILT ITS TREE. It was
+    //  handed the root by `dew.widget{}` while it ran, so there is nothing left
+    //  for the host to call and no declaration to read. That is the shape this
+    //  is moving to; the returned table is what it is moving from.
+    let mount: Option<LuaFunction> = match declaration.get::<LuaFunction>("mount") {
+        Ok(function) => Some(function),
+        Err(_) if asked.is_some() => None,
+        Err(_) => {
+            return Err(format!(
+                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
+                manifest.id
+            ))
+        }
+    };
 
     // 6 ── build the tree, ONCE.
     let mounted = match ceremony {
@@ -417,11 +475,17 @@ pub fn load(
         //      back. Handing a root over and then reading a returned tree would
         //      be two answers to the same question.
         Ceremony::DataModel { root } => {
-            let handle = datamodel::handle(vm.lua(), &dom, root)
-                .map_err(|e| format!("{}: {e}", manifest.id))?;
-            mount
-                .call::<()>((dew, handle))
-                .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
+            //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
+            //      `dew.widget{}` handed it this same root while it ran, so the
+            //      instances are under there already and calling a second
+            //      entry point would ask it to build them twice.
+            if let Some(mount) = mount {
+                let handle = datamodel::handle(vm.lua(), &dom, root)
+                    .map_err(|e| format!("{}: {e}", manifest.id))?;
+                mount
+                    .call::<()>((dew, handle))
+                    .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
+            }
             Mounted::DataModel {
                 dom: dom.clone(),
                 root,
@@ -457,7 +521,7 @@ pub fn load(
 /// capability table and all — because a test that called the DataModel arm
 /// directly would pass on the day the manifest stopped selecting it.
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
@@ -466,10 +530,10 @@ mod tests {
     /// The loader reads `dew.toml` and an entry module from a real directory,
     /// which is the behaviour under test; faking the filesystem here would test
     /// a different loader.
-    struct Fixture(PathBuf);
+    pub struct Fixture(PathBuf);
 
     impl Fixture {
-        fn new(name: &str, manifest: &str, entry: &str) -> Fixture {
+        pub fn new(name: &str, manifest: &str, entry: &str) -> Fixture {
             let dir = std::env::temp_dir().join(format!("dew-mods-test-{name}"));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("temp dir");
@@ -478,7 +542,7 @@ mod tests {
             Fixture(dir)
         }
 
-        fn load(&self) -> Result<Applet, String> {
+        pub fn load(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
             // A DataModel mod never reads Aether's source; the path is still a
             // require root, and pointing it at the mod's own directory keeps this
@@ -1166,5 +1230,90 @@ runtime = \"datamodel\"
         assert_eq!(node_image.uri, "rbxassetid://12345");
         // Refusal means bitmap is None: draws missing placeholder marker, property keeps value
         assert!(node_image.bitmap.is_none());
+    }
+}
+
+#[cfg(test)]
+mod asking_for_a_surface {
+    use super::tests::Fixture;
+
+    const ASKS: &str = r#"
+local dew = ...
+local root = dew.widget({ width = 120, height = 60 })
+local frame = Instance.new("Frame")
+frame.Name = "Asked"
+frame.Size = UDim2.new(1, 0, 1, 0)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+frame.Parent = root
+"#;
+
+    /// The shape this is all moving to: nothing returned at all.
+    ///
+    /// AN APPLET USED TO HAVE TO RETURN A TABLE to be given anything, because
+    /// `dew` only ever reached it through `mount`. It arrives as the chunk's
+    /// vararg now, so asking is possible before there is anything to return.
+    #[test]
+    fn an_applet_that_asks_returns_nothing() {
+        let fixture = Fixture::new(
+            "asks",
+            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            ASKS,
+        );
+        let applet = fixture.load().expect("an applet that asks should load");
+        assert_eq!((applet.width, applet.height), (120, 60));
+    }
+
+    /// An ungranted surface is absent, not refused.
+    ///
+    /// THE DIFFERENCE IS WHERE THE ERROR POINTS. A permission check somewhere
+    /// else says the applet was turned away; a nil index says which line asked
+    /// for what it did not declare.
+    #[test]
+    fn an_ungranted_surface_is_not_on_the_table() {
+        let fixture = Fixture::new(
+            "asks-ungranted",
+            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "local dew = ...\nassert(dew.widget ~= nil, \"widget was granted\")\n\
+             assert(dew.overlay == nil, \"overlay was not granted and must be absent\")\n\
+             local root = dew.widget({ width = 10, height = 10 })\n",
+        );
+        fixture
+            .load()
+            .expect("the applet asserts about its own table");
+    }
+
+    /// Neither asking nor returning a `mount` is the one real mistake.
+    #[test]
+    fn an_applet_that_does_neither_is_told_both_ways_out() {
+        let fixture = Fixture::new(
+            "asks-neither",
+            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "return { size = { width = 10, height = 10 } }\n",
+        );
+        let error = match fixture.load() {
+            Err(error) => error,
+            Ok(_) => panic!("an applet with no surface and no mount should not load"),
+        };
+        assert!(
+            error.contains("dew.widget") && error.contains("mount"),
+            "the message should name both ways out, got: {error}"
+        );
+    }
+
+    /// What was asked for beats what was returned.
+    #[test]
+    fn asking_wins_over_a_stale_declaration() {
+        let fixture = Fixture::new(
+            "asks-both",
+            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "local dew = ...\nlocal root = dew.widget({ width = 33, height = 44 })\n\
+             return { size = { width = 999, height = 999 }, mount = function() end }\n",
+        );
+        let applet = fixture.load().expect("loads");
+        assert_eq!(
+            (applet.width, applet.height),
+            (33, 44),
+            "the call is the newer of the two statements"
+        );
     }
 }

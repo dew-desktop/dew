@@ -11,6 +11,7 @@
 //! its own call site rather than a permission check somewhere far away.
 
 use crate::manifest::Permission;
+use crate::surface::{Request, Requested};
 use mlua::prelude::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -25,12 +26,29 @@ pub struct HostState {
 
 pub type Shared = Arc<Mutex<HostState>>;
 
+/// What `dew.widget{ ... }` needs to answer an applet.
+///
+/// THE ROOT IS MADE BEFORE THE APPLET RUNS, so asking for a surface hands back
+/// something that already exists rather than creating a window from inside a
+/// Luau call. That distinction is what keeps this step small: the applet chooses
+/// its surface, and the host still decides when a window appears.
+pub struct SurfaceGrant {
+    pub requested: Requested,
+    pub root: Option<LuaValue>,
+    pub title: String,
+}
+
 /// Build the capability table for one mod.
 ///
 /// `time` is ungated on purpose. Reading a clock discloses nothing a mod could
 /// not obtain by counting frames, and gating it would put a permission in every
 /// manifest that exists to say "this mod is allowed to know what time it is".
-pub fn build(lua: &Lua, granted: &[Permission], state: &Shared) -> LuaResult<LuaTable> {
+pub fn build(
+    lua: &Lua,
+    granted: &[Permission],
+    state: &Shared,
+    surface: &SurfaceGrant,
+) -> LuaResult<LuaTable> {
     let dew = lua.create_table()?;
 
     let time = lua.create_table()?;
@@ -54,6 +72,28 @@ pub fn build(lua: &Lua, granted: &[Permission], state: &Shared) -> LuaResult<Lua
         // a permission still fails to compile until somebody decides what it
         // hands over.
         if permission.is_surface() {
+            //  A GRANTED SURFACE IS A FUNCTION ON `dew`, and an ungranted one is
+            //  absent. An applet calling `dew.overlay{}` without the word in its
+            //  manifest indexes nil at its own call site, which says where the
+            //  mistake is; a permission check somewhere else would not.
+            let name = permission.name();
+            let kind = *permission;
+            let cell = Arc::clone(&surface.requested);
+            let root = surface.root.clone();
+            let title = surface.title.clone();
+
+            dew.set(
+                name,
+                lua.create_function(move |_, options: Option<LuaTable>| {
+                    //  LAST CALL WINS, and there is no error for a second one.
+                    //  An applet asking twice has changed its mind while
+                    //  starting up, which is not worth refusing; asking for two
+                    //  surfaces at once is, and that arrives with popovers.
+                    *cell.lock().expect("requested") =
+                        Some(Request::from_options(kind, options, &title));
+                    Ok(root.clone())
+                })?,
+            )?;
             continue;
         }
         match permission {
