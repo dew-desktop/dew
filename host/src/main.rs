@@ -242,6 +242,10 @@ impl Renderer {
     /// pointer, which is a hit test.
     #[cfg(windows)]
     fn moved(&mut self, x: f32, y: f32) -> Result<(), String> {
+        // THE HOST ANSWERS WHERE THE POINTER IS (ADR-010), so it has to know. A
+        // guest deciding hover by geometry polls this on frames with no input at
+        // all, which is why it is recorded here rather than only delivered.
+        crate::services::pointer_moved(x, y);
         match self {
             Renderer::Aether { driver, .. } => driver
                 .pointer(dew_runtime::Pointer::Move, x, y)
@@ -279,6 +283,8 @@ impl Renderer {
     /// the framework's own limitation and not one to paper over here.
     #[cfg(windows)]
     fn down(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
+        crate::services::pointer_moved(x, y);
+        crate::services::pointer_button(button as usize, true);
         match self {
             Renderer::Aether { driver, .. } => {
                 if button != Button::Left {
@@ -315,6 +321,8 @@ impl Renderer {
     /// A button came up.
     #[cfg(windows)]
     fn up(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
+        crate::services::pointer_moved(x, y);
+        crate::services::pointer_button(button as usize, false);
         match self {
             Renderer::Aether { driver, .. } => {
                 if button != Button::Left {

@@ -278,6 +278,13 @@ fn run_demo(entry: &Path) -> Result<Demo, String> {
             "up" => Pointer::Up,
             other => return Err(format!("{name}: unknown pointer '{other}'")),
         };
+        // RECORDED AS WELL AS DELIVERED, so a demo that polls the host sees the
+        // same pointer the tree was told about. Without this a guest reading
+        // `DewHost.Pointer` headlessly gets nothing while the tree gets events.
+        services::pointer_moved(x, y);
+        if matches!(pointer, Pointer::Down | Pointer::Up) {
+            services::pointer_button(0, matches!(pointer, Pointer::Down));
+        }
         session
             .pointer(pointer, x, y)
             .map_err(|e| format!("{name}: pointer: {e}"))?;

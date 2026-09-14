@@ -254,6 +254,112 @@ pub struct Clock {
 
 pub type SharedClock = Arc<Mutex<Clock>>;
 
+/// Where the pointer is, so a guest can ask instead of being told.
+///
+/// WHY A HOST-OWNED CELL (ADR-010). A guest that decides hover by geometry rather
+/// than by events needs to ask where the pointer is on any frame, including frames
+/// with no input at all: a list can scroll or a window can open under a stationary
+/// cursor, and the element beneath it changes with nothing to announce it.
+///
+/// The host used to push pointer events into a session it obtained by performing
+/// the guest's mount ceremony. That is the inversion milestone 9 removes. The host
+/// answers the question now, and holds nothing.
+#[derive(Default)]
+pub struct PointerState {
+    /// None until the pointer has been seen over a surface at all. A guest that
+    /// reads this before then must not be handed `(0, 0)`, which is a corner.
+    at: Option<(f32, f32)>,
+    /// Left, right, middle.
+    held: [bool; 3],
+}
+
+pub type SharedPointer = Arc<Mutex<PointerState>>;
+
+/// The one the host feeds and guests read.
+///
+/// PROCESS LEVEL, LIKE THE FONT ABOVE. The alternative is threading a cell from
+/// the window loop through `Renderer`, the snapshot path and every test driver,
+/// and `crates/runtime` cannot hold it because the runtime does not depend on the
+/// host. One cursor exists, so one cell is the truthful shape.
+pub fn pointer() -> &'static SharedPointer {
+    static POINTER: OnceLock<SharedPointer> = OnceLock::new();
+    POINTER.get_or_init(|| Arc::new(Mutex::new(PointerState::default())))
+}
+
+/// Record where the pointer went. Called wherever input enters the host.
+pub fn pointer_moved(x: f32, y: f32) {
+    pointer().lock().expect("pointer").moved(x, y);
+}
+
+/// Record a button going down or up.
+pub fn pointer_button(button: usize, down: bool) {
+    pointer().lock().expect("pointer").set_button(button, down);
+}
+
+impl PointerState {
+    pub fn moved(&mut self, x: f32, y: f32) {
+        self.at = Some((x, y));
+    }
+
+    pub fn set_button(&mut self, button: usize, down: bool) {
+        if let Some(slot) = self.held.get_mut(button) {
+            *slot = down;
+        }
+    }
+
+    pub fn position(&self) -> Option<(f32, f32)> {
+        self.at
+    }
+
+    pub fn is_down(&self, button: usize) -> bool {
+        self.held.get(button).copied().unwrap_or(false)
+    }
+}
+
+/// Put the pointer on `DewHost` so a guest can poll it.
+///
+/// SEPARATE FROM `install` BECAUSE THE STATE HAS A DIFFERENT OWNER. The clock is
+/// the host's; the pointer belongs to whatever is feeding input, which is the
+/// window loop on Windows and a test driver everywhere else. Both call this with
+/// the cell they are updating.
+fn install_pointer(lua: &Lua, pointer: &SharedPointer) -> LuaResult<()> {
+    let host: LuaTable = match lua.globals().get("DewHost") {
+        Ok(existing) => existing,
+        Err(_) => {
+            let fresh = lua.create_table()?;
+            lua.globals().set("DewHost", fresh.clone())?;
+            fresh
+        }
+    };
+
+    let api = lua.create_table()?;
+
+    let reader = Arc::clone(pointer);
+    api.set(
+        "Position",
+        // TWO RETURNS OR NONE. A guest that has never seen the pointer gets
+        // nothing back rather than `(0, 0)`, which is a real corner of the screen
+        // and would read as the pointer being there.
+        lua.create_function(
+            move |_, ()| match reader.lock().expect("pointer").position() {
+                Some((x, y)) => Ok((Some(x), Some(y))),
+                None => Ok((None, None)),
+            },
+        )?,
+    )?;
+
+    let reader = Arc::clone(pointer);
+    api.set(
+        "IsDown",
+        lua.create_function(move |_, button: Option<usize>| {
+            Ok(reader.lock().expect("pointer").is_down(button.unwrap_or(0)))
+        })?,
+    )?;
+
+    host.set("Pointer", api)?;
+    Ok(())
+}
+
 impl Clock {
     /// Is anyone listening?
     ///
@@ -435,6 +541,11 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     host.set("Clock", dew_clock)?;
 
     lua.globals().set("DewHost", host)?;
+
+    // THE POINTER COMES WITH THE HOST, not from a second call every caller has to
+    // remember. The cell is process level, so there is nothing to thread and
+    // nothing a caller can get wrong by forgetting.
+    install_pointer(lua, pointer())?;
     Ok(())
 }
 
@@ -461,6 +572,44 @@ fn note_once_font(name: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// THE HOST ANSWERS, AND SAYS NOTHING WHEN IT HAS NOTHING TO SAY.
+    ///
+    /// `(0, 0)` is a real corner of the screen, so a guest that has never seen the
+    /// pointer must not be handed it. Two returns or none.
+    #[test]
+    fn the_pointer_is_unknown_until_it_moves() {
+        let lua = Lua::new();
+        let clock: SharedClock = Arc::new(Mutex::new(Clock::default()));
+        install(&lua, &clock).expect("install");
+
+        let before: Option<f32> = lua
+            .load("local x, y = DewHost.Pointer.Position(); return x")
+            .eval()
+            .expect("read");
+        assert!(
+            before.is_none(),
+            "unknown should read as nothing, got {before:?}"
+        );
+
+        pointer_moved(12.0, 34.0);
+        let (x, y): (f32, f32) = lua
+            .load("local x, y = DewHost.Pointer.Position(); return x, y")
+            .eval()
+            .expect("read");
+        assert_eq!((x, y), (12.0, 34.0));
+
+        assert!(!lua
+            .load("return DewHost.Pointer.IsDown(0)")
+            .eval::<bool>()
+            .unwrap());
+        pointer_button(0, true);
+        assert!(lua
+            .load("return DewHost.Pointer.IsDown(0)")
+            .eval::<bool>()
+            .unwrap());
+        pointer_button(0, false);
+    }
 
     fn vm() -> (Lua, SharedClock) {
         let lua = Lua::new();
