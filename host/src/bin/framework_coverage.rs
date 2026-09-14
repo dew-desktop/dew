@@ -389,6 +389,24 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     }))
 }
 
+/// The Aether revision a manifest pins, as text.
+///
+/// READ RATHER THAN RESOLVED, because the question is what was ASKED FOR. Two
+/// manifests naming different revisions are a divergence whether or not both
+/// happen to be installed.
+fn pinned_aether(manifest: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(manifest).ok()?;
+    for line in text.lines() {
+        let line = line.trim();
+        if !line.starts_with("aether") {
+            continue;
+        }
+        let rev = line.split("rev = \"").nth(1)?;
+        return Some(rev.split('"').next()?.to_string());
+    }
+    None
+}
+
 fn main() {
     let root = match dew_runtime::installed_package("aether") {
         Some(p) => p,
@@ -418,6 +436,19 @@ fn main() {
     exported.sort();
 
     let scope = framework::in_scope(&exported);
+
+    //  WHICH AETHER THE DENOMINATOR CAME FROM, SAID OUT LOUD.
+    //
+    //  The scope is read from the framework this repository pins, and each
+    //  example is measured against the one IT pins. Those are two different
+    //  installs and nothing made them agree: an example on a newer revision can
+    //  touch a symbol this scope has never heard of, and `retain` below drops it
+    //  silently. The number then looks like a feature that is not demonstrated.
+    let reference = pinned_aether(Path::new("pesde.toml"));
+    match &reference {
+        Some(rev) => println!("scope read from aether {}", &rev[..rev.len().min(12)]),
+        None => println!("scope read from an aether this repository does not pin"),
+    }
 
     let self_test = std::env::args().any(|a| a == "--self-test");
     let mut touched: Vec<String> = Vec::new();
@@ -455,8 +486,32 @@ fn main() {
     let mut demos: Vec<Demo> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
     let mut considered = 0usize;
+    let mut diverged: Vec<String> = Vec::new();
     for entry in demo_entries(&demos_root) {
         considered += 1;
+
+        //  AN EXAMPLE PINNING A DIFFERENT FRAMEWORK IS NOT MEASURABLE AGAINST
+        //  THIS SCOPE, and saying so beats reporting a number that quietly
+        //  excluded whatever it touched.
+        if let (Some(theirs), Some(ours)) = (
+            entry
+                .parent()
+                .and_then(|d| pinned_aether(&d.join("pesde.toml"))),
+            reference.clone(),
+        ) {
+            if theirs != ours {
+                let name = entry
+                    .parent()
+                    .and_then(|d| d.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("an example")
+                    .to_string();
+                diverged.push(format!(
+                    "{name} pins aether {}",
+                    &theirs[..theirs.len().min(12)]
+                ));
+            }
+        }
         match run_demo(&entry) {
             Ok(Some(d)) => demos.push(d),
             Ok(None) => {}
@@ -472,6 +527,9 @@ fn main() {
         demos_root.display(),
         demos.len()
     );
+    for note in &diverged {
+        println!("  measured against a different framework: {note}");
+    }
 
     for d in &demos {
         for u in &d.used {
