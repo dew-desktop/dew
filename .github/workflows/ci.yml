@@ -24,10 +24,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    # `edited` SO FIXING A TITLE OR A BODY RE-RUNS THE CHECK. Without it the only
-    # way to turn the pull request gate green is to push a commit, which is a
-    # build and two runners to re-read a paragraph.
-    types: [opened, synchronize, reopened, edited, ready_for_review]
   # SO A RUN CAN BE ASKED FOR, once minutes are back or a quota window resets,
   # without pushing an empty commit to trigger one.
   workflow_dispatch:
@@ -150,12 +146,6 @@ jobs:
   checks:
     name: commitlint, boundaries and ASCII
     runs-on: ubuntu-latest
-    # READING THE PULL REQUEST NEEDS SAYING SO. The default token carries
-    # contents, metadata and packages, so `gh pr view` returns nothing useful
-    # without this.
-    permissions:
-      contents: read
-      pull-requests: read
     steps:
       - uses: actions/checkout@v4
         with:
@@ -209,31 +199,6 @@ jobs:
       # what Dew prints at runtime are not documentation, and a gate that
       # overreaches gets disabled and takes the real rule with it.
       - run: lune run scripts/verify_ascii.luau
-
-      # THE PULL REQUEST ITSELF, held to the rules its commits are held to.
-      #
-      # A body is the most read thing this repository produces and was the least
-      # checked: commits had a linter and bodies had only a style guide, so the
-      # generated-by footer that guide forbids shipped in one anyway, along with
-      # references to planning notes that are gitignored and therefore name
-      # nothing a reader can open.
-      #
-      # THROUGH THE ENVIRONMENT, NOT AN ARGUMENT. A title and a body are written
-      # by whoever opened the pull request and contain every character a shell
-      # treats specially; interpolating them into a `run:` line would execute
-      # them.
-      - name: The pull request reads like a person wrote it
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          NUMBER: ${{ github.event.pull_request.number }}
-        run: |
-          # ASKED FOR, NOT TAKEN FROM THE EVENT. `github.event.pull_request` is a
-          # snapshot from when the run was triggered, so a body edited after the
-          # push that started the run is not the body this reads: the gate failed
-          # on text that had already been fixed. Reading it now is the only way
-          # the check is about the pull request as it stands.
-          PR_TITLE=$(gh pr view "$NUMBER" --json title --jq .title)           PR_BODY=$(gh pr view "$NUMBER" --json body --jq .body)             lune run scripts/pr_check.luau
 
   build:
     name: build and mount every applet

@@ -10,6 +10,11 @@
 #     an invalid commit scope        0.7s here, a full round trip there
 #     a tool attribution trailer     caught here; it cannot be removed later
 #                                      without rewriting published history
+#
+# ONLY WHAT THE PROJECT ENFORCES. Whether a subject reads as an instruction and
+# how long a body runs are a maintainer's preferences, not this repository's
+# rules, and they are checked from a global hook on that maintainer's machine
+# rather than from here.
 #     a manifest the scaffolder      1.8s here, and it gated nothing, so the
 #       wrote in the wrong format      failure said nothing about the code
 #     a shell glob that pwsh does    now impossible: discovery moved into Luau

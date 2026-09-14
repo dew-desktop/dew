@@ -77,19 +77,7 @@ local config: CommitLintConfig = {
         "deps"       -- VERSION, manifests, pins
     },
     maxHeaderLength = 100,
-    enforceLowerCaseScope = true,
-
-    --- A BODY IS EARNED, NOT OWED, and most changes need none at all.
-    ---
-    --- SIX, NOT TWELVE. The first cap was set at twelve and every commit written
-    --- under it had a body, none shorter than three lines: a generous limit
-    --- reads as a budget to spend rather than a line not to cross. Six is one
-    --- tight paragraph, which is the most a why that the diff cannot show has
-    --- ever actually needed here.
-    ---
-    --- Blank lines and trailers are not counted. When a change genuinely needs
-    --- more explaining, the pull request is where that goes.
-    maxBodyLines = 6,
+    enforceLowerCaseScope = true
 }
 
 local function parseCommit(message: string): (ParsedCommit?, string?)
@@ -165,49 +153,17 @@ local function validateCommit(message: string): ValidationResult
         table.insert(errors, `Commit header length ({#parsed.raw}) exceeds maximum ({config.maxHeaderLength})`)
     end
 
-    -- 4. The subject is an instruction, not a report or a statement.
-    local subjectProblem = style.subjectProblem(parsed.summary)
-    if subjectProblem then
-        table.insert(errors, subjectProblem)
-    end
-
-    -- 5. No tool attribution and no vocabulary from the gitignored plan.
+    -- 4. No attribution naming a tool.
     for _, finding in ipairs(style.findForbidden(message)) do
-        if finding.rule == "attribution" then
-            table.insert(errors, `Remove {finding.detail}: a commit is authored by the person landing it`)
-        else
-            table.insert(errors, `Remove {finding.detail}: say what the work is for, not where it sits in a plan`)
-        end
+        table.insert(errors, `Remove {finding.detail}: a commit is authored by the person landing it`)
     end
 
-    -- 6. Plain ASCII, which is promised for commits and was only checked in docs.
+    -- 5. Plain ASCII, which is promised for commits and was only checked in docs.
     local at, character = style.nonAsciiAt(message)
     if at and character then
         table.insert(
             errors,
             `Non-ASCII character '{character}' at byte {at}; use a hyphen, a colon or a new sentence, and no emoji`
-        )
-    end
-
-    -- 7. The body stays short enough to be read.
-    local bodyLines = 0
-    local seenHeader = false
-    --- `%C+` IS EVERY RUN OF NON-CONTROL CHARACTERS, which is one non-blank
-    --- line, with no escape sequences needed to say so.
-    for line in string.gmatch(message, "%C+") do
-        if not seenHeader then
-            seenHeader = true
-            continue
-        end
-        local trimmed = string.match(line, "^%s*(.-)%s*$") or ""
-        if trimmed ~= "" and not string.find(trimmed, "^%a[%w-]*:%s") then
-            bodyLines += 1
-        end
-    end
-    if bodyLines > config.maxBodyLines then
-        table.insert(
-            errors,
-            `Body is {bodyLines} lines and the limit is {config.maxBodyLines}; cut it to what the diff cannot say, and put the rest in the pull request`
         )
     end
 

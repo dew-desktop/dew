@@ -30,6 +30,10 @@ Emoji in a running program's output is fine. It is product, not prose.
 
 ## Commits
 
+Everything below the ASCII rule is preference rather than policy. Two things are
+checked: plain ASCII, and no attribution naming a tool. The rest is how this
+repository reads when it reads well, and nothing is held up over it.
+
 ```
 <type>(<scope>): <subject>
 
@@ -62,8 +66,7 @@ conversation, because in two years the reader has `git show` and nothing else.
 commits need no body, and one added out of habit buries the few that matter.
 
 Before writing a body, say what it tells a reader that the subject and the diff
-do not. If the answer takes a moment to find, there is no body to write. Six
-lines is the cap when there is one; a long body is usually the diff restated.
+do not. If the answer takes a moment to find, there is no body to write.
 
 ### Do not name the planning notes
 
@@ -141,9 +144,8 @@ removed later without rewriting published history, so the default is to leave it
 out. A generated-by footer does worse than the trailer: it invites a reader to
 judge the prose above it by the tool named under it.
 
-`scripts/pr_check.luau` holds a pull request title and body to the rules on this
-page, and `scripts/commitlint_check.luau` holds every commit to them. Both read
-`scripts/house_style.luau`, so the two cannot drift.
+This one is checked. `scripts/commitlint_check.luau` refuses a trailer or a
+footer naming a tool, and refuses any byte above 127 while it is there.
 
 ---
 
@@ -183,23 +185,6 @@ When a pull request is genuinely large, these are the useful sections:
   expensive. Reviewers want this and almost nobody writes it.
 - **Not done**, which sets the boundary of the claim so a known gap is not
   reported as a finding.
-
-### What to leave out
-
-**No lesson at the end of an observation.** State what happened. A reader who
-wants the moral can draw it; one who does not is being lectured.
-
-**No aphorisms.** A line that sounds quotable is a line doing less work than it
-appears to. The same is true of a closing sentence that exists to land rather
-than to inform.
-
-**Nothing about the process.** Not the number of commits, not how long it took,
-not how the work felt, not what comes next unless a reader is about to trip over
-the gap.
-
-**Do not narrate.** A pull request is a note, not an argument with a thesis and
-a build. If the paragraphs have a rhythm, that is a sign of shaping rather than
-reporting.
 
 ### Run-in headings
 
