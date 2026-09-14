@@ -310,10 +310,8 @@ jobs:
           Expand-Archive -Path pesde.zip -DestinationPath "$env:RUNNER_TEMP/pesde" -Force
           "$env:RUNNER_TEMP/pesde" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
-      # Aether declares vide and a pinned checkout does not carry it, so the host
-      # supplies it. Without this every applet fails to mount with "no installed
-      # vide reachable".
-      - run: pesde install
+      # NO ROOT INSTALL. This repository declares no framework: every example
+      # brings the one it requires, and the loop below installs each.
 
       # THE INTERFACE SURFACE IS GENERATED, NOT COMMITTED.
       #

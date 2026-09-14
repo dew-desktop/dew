@@ -22,21 +22,10 @@ use dew_host::datamodel::{self, SharedDom};
 use dew_host::framework;
 use dew_host::gallery;
 use dew_host::services::{self, Clock, SharedClock};
-use dew_runtime::{modules, Application, Capabilities, Pointer, Vm};
+use dew_runtime::{Application, Capabilities, Pointer, Vm};
 use mlua::{Lua, Table as LuaTable, Value as LuaValue};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-
-fn install_host(vm: &Vm) -> mlua::Result<()> {
-    let dom: SharedDom = Arc::new(Mutex::new(Default::default()));
-    datamodel::install(vm.lua(), &dom)?;
-    let clock: SharedClock = Arc::new(Mutex::new(Clock::default()));
-    services::install(vm.lua(), &clock)?;
-    datamodel::install_vocabulary(vm.lua())?;
-    std::mem::forget(dom);
-    std::mem::forget(clock);
-    Ok(())
-}
 
 /// A table that answers like `real` and remembers what was asked for.
 ///
@@ -58,13 +47,6 @@ fn recording_proxy(lua: &Lua, real: LuaTable, seen: LuaTable) -> mlua::Result<Lu
     Ok(proxy)
 }
 
-/// Load Aether's public table under a real host.
-fn load_aether(vm: &Vm, caps: &Capabilities, root: &Path) -> mlua::Result<LuaTable> {
-    modules::install(vm, caps)?;
-    let chunk = modules::load_entry(vm, &root.join("src/api.luau"))?;
-    chunk.call(())
-}
-
 /// One demo's verdict.
 struct Demo {
     name: String,
@@ -79,6 +61,11 @@ struct Demo {
     used: Vec<String>,
     /// Pixels that changed between the first paint and the last.
     moved: usize,
+    /// What the framework THIS example required exports, which is what its usage
+    /// is a fraction of.
+    scope: Vec<String>,
+    /// Keys on that framework before namespaces are excluded.
+    exported: usize,
 }
 
 /// Every directory under `examples/` that carries a manifest and an entry named
@@ -175,7 +162,14 @@ fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
     lua.globals().set("dew", dew)
 }
 
-fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Vec<String>>, String> {
+/// What one example touched, and the framework it touched it in.
+struct Measured {
+    used: Vec<String>,
+    scope: Vec<String>,
+    exported: usize,
+}
+
+fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Measured>, String> {
     let mut caps = Capabilities::cli(dir.to_path_buf());
     caps.require_roots = vec![dir.to_path_buf()];
     caps.aliases.clear();
@@ -219,7 +213,7 @@ fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Vec<Strin
         .map_err(|e| format!("{name}: a demo must export Measure: {e}"))?;
 
     let seen = lua.create_table().map_err(|e| e.to_string())?;
-    let proxy = recording_proxy(lua, real, seen.clone()).map_err(|e| e.to_string())?;
+    let proxy = recording_proxy(lua, real.clone(), seen.clone()).map_err(|e| e.to_string())?;
     measure
         .call::<LuaValue>(proxy)
         .map_err(|e| format!("{name}: Measure failed: {e}"))?;
@@ -230,7 +224,22 @@ fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Vec<Strin
         .map(|(k, _)| k)
         .collect();
     used.sort();
-    Ok(Some(used))
+    //  Every key the example's own framework exports, which is the denominator
+    //  its usage should be read against.
+    let mut exported: Vec<String> = Vec::new();
+    for pair in real.clone().pairs::<LuaValue, LuaValue>() {
+        if let Ok((LuaValue::String(k), _)) = pair {
+            exported.push(k.to_str().map_err(|e| e.to_string())?.to_string());
+        }
+    }
+    exported.sort();
+    let scope = framework::in_scope(&exported);
+
+    Ok(Some(Measured {
+        used,
+        scope,
+        exported: exported.len(),
+    }))
 }
 
 fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
@@ -247,9 +256,10 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     // Measured first, in a VM of its own, for the reason in this function's
     // header: two live trees behind one router is a press that goes to the wrong
     // one.
-    let Some(used) = measure_demo(entry, &dir, &name)? else {
+    let Some(measured) = measure_demo(entry, &dir, &name)? else {
         return Ok(None);
     };
+    let used = measured.used.clone();
 
     // THE DEMO'S OWN PACKAGES ARE ITS ONLY REQUIRE ROOT, and it gets no aliases.
     // A demo that only loads because the host handed it a framework would prove
@@ -386,96 +396,19 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
         painted,
         used,
         moved,
+        scope: measured.scope,
+        exported: measured.exported,
     }))
 }
 
-/// The Aether revision a manifest pins, as text.
-///
-/// READ RATHER THAN RESOLVED, because the question is what was ASKED FOR. Two
-/// manifests naming different revisions are a divergence whether or not both
-/// happen to be installed.
-fn pinned_aether(manifest: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(manifest).ok()?;
-    for line in text.lines() {
-        let line = line.trim();
-        if !line.starts_with("aether") {
-            continue;
-        }
-        let rev = line.split("rev = \"").nth(1)?;
-        return Some(rev.split('"').next()?.to_string());
-    }
-    None
-}
-
 fn main() {
-    let root = match dew_runtime::installed_package("aether") {
-        Some(p) => p,
-        None => {
-            eprintln!("no installed aether -- run `pesde install`");
-            std::process::exit(2);
-        }
-    };
-
-    let mut caps = Capabilities::cli(root.clone());
-    caps.print = false;
-    caps.aliases.insert("aether".to_string(), root.join("src"));
-    if let Some(vide) = dew_runtime::installed_package("vide") {
-        caps.aliases.insert("vide".to_string(), vide.join("src"));
-    }
-
-    let vm = Vm::new(caps.clone()).expect("a vm");
-    install_host(&vm).expect("a host");
-    let aether = load_aether(&vm, &caps, &root).expect("aether should load under a Dew host");
-
-    let mut exported: Vec<String> = Vec::new();
-    for pair in aether.clone().pairs::<LuaValue, LuaValue>() {
-        if let Ok((LuaValue::String(k), _)) = pair {
-            exported.push(k.to_str().expect("utf8").to_string());
-        }
-    }
-    exported.sort();
-
-    let scope = framework::in_scope(&exported);
-
-    //  WHICH AETHER THE DENOMINATOR CAME FROM, SAID OUT LOUD.
-    //
-    //  The scope is read from the framework this repository pins, and each
-    //  example is measured against the one IT pins. Those are two different
-    //  installs and nothing made them agree: an example on a newer revision can
-    //  touch a symbol this scope has never heard of, and `retain` below drops it
-    //  silently. The number then looks like a feature that is not demonstrated.
-    let reference = pinned_aether(Path::new("pesde.toml"));
-    match &reference {
-        Some(rev) => println!("scope read from aether {}", &rev[..rev.len().min(12)]),
-        None => println!("scope read from an aether this repository does not pin"),
-    }
-
+    //  NO FRAMEWORK OF THIS REPOSITORY'S OWN. Every example installs the one it
+    //  requires, and the scope each is measured against now comes from that same
+    //  table, so there is nothing left for a root install to answer.
     let self_test = std::env::args().any(|a| a == "--self-test");
-    let mut touched: Vec<String> = Vec::new();
 
-    if self_test {
-        let seen = vm.lua().create_table().expect("seen");
-        let proxy = recording_proxy(vm.lua(), aether.clone(), seen.clone()).expect("proxy");
-        let probe: mlua::Function = vm
-            .lua()
-            .load(
-                r#"
-                return function(A)
-                    local _ = A.create
-                    local _ = A.source
-                    local _ = A.Presence
-                end
-                "#,
-            )
-            .eval()
-            .expect("probe chunk");
-        probe.call::<()>(proxy).expect("probe runs");
-
-        for (k, _) in seen.pairs::<String, bool>().flatten() {
-            touched.push(k);
-        }
-        touched.sort();
-    }
+    let mut caps = Capabilities::cli(PathBuf::from("."));
+    caps.print = false;
 
     // ---- the demos
     //
@@ -486,32 +419,8 @@ fn main() {
     let mut demos: Vec<Demo> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
     let mut considered = 0usize;
-    let mut diverged: Vec<String> = Vec::new();
     for entry in demo_entries(&demos_root) {
         considered += 1;
-
-        //  AN EXAMPLE PINNING A DIFFERENT FRAMEWORK IS NOT MEASURABLE AGAINST
-        //  THIS SCOPE, and saying so beats reporting a number that quietly
-        //  excluded whatever it touched.
-        if let (Some(theirs), Some(ours)) = (
-            entry
-                .parent()
-                .and_then(|d| pinned_aether(&d.join("pesde.toml"))),
-            reference.clone(),
-        ) {
-            if theirs != ours {
-                let name = entry
-                    .parent()
-                    .and_then(|d| d.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("an example")
-                    .to_string();
-                diverged.push(format!(
-                    "{name} pins aether {}",
-                    &theirs[..theirs.len().min(12)]
-                ));
-            }
-        }
         match run_demo(&entry) {
             Ok(Some(d)) => demos.push(d),
             Ok(None) => {}
@@ -527,30 +436,59 @@ fn main() {
         demos_root.display(),
         demos.len()
     );
-    for note in &diverged {
-        println!("  measured against a different framework: {note}");
+
+    //  ONE FRACTION PER EXAMPLE, because each brought its own framework and a
+    //  single total would need them to be the same one. Reporting a headline
+    //  over a scope that only some of the numerators came from is what this
+    //  measured before, and it was wrong whenever two examples disagreed.
+    println!();
+    for d in &demos {
+        let mut used = d.used.clone();
+        used.retain(|u| d.scope.contains(u));
+        used.sort();
+        println!(
+            "FRAMEWORK: {} of {} demonstrated by {}",
+            used.len(),
+            d.scope.len(),
+            d.name
+        );
+        println!(
+            "  {} exported, {} excluded as namespaces",
+            d.exported,
+            d.exported - d.scope.len()
+        );
     }
 
-    for d in &demos {
-        for u in &d.used {
-            if !touched.contains(u) {
-                touched.push(u.clone());
+    //  A UNION ONLY WHERE THERE IS ONE SCOPE TO TAKE IT OVER. Examples pinning
+    //  the same framework can be added up; examples pinning different ones
+    //  cannot, and saying so is the honest answer rather than a number.
+    let shared = demos.first().map(|d| d.scope.clone());
+    let agreed = match &shared {
+        Some(first) => demos.iter().all(|d| &d.scope == first),
+        None => false,
+    };
+    if agreed && demos.len() > 1 {
+        let scope = shared.expect("checked");
+        let mut touched: Vec<String> = Vec::new();
+        for d in &demos {
+            for u in &d.used {
+                if !touched.contains(u) {
+                    touched.push(u.clone());
+                }
             }
         }
+        touched.retain(|t| scope.contains(t));
+        touched.sort();
+        println!();
+        println!(
+            "FRAMEWORK: {} of {} demonstrated in total",
+            touched.len(),
+            scope.len()
+        );
+    } else if demos.len() > 1 {
+        println!();
+        println!("No total: these examples do not all require the same framework.");
     }
-    touched.retain(|t| scope.contains(t));
-    touched.sort();
-
-    println!(
-        "FRAMEWORK: {} of {} demonstrated",
-        touched.len(),
-        scope.len()
-    );
-    println!(
-        "  {} exported, {} excluded as namespaces",
-        exported.len(),
-        exported.len() - scope.len()
-    );
     for (name, why) in framework::NAMESPACES {
         println!("    not a feature  {name:<12} {why}");
     }
@@ -582,7 +520,7 @@ fn main() {
         let probe = ["Presence", "create", "source"];
         let hits = probe
             .iter()
-            .filter(|s| touched.contains(&s.to_string()))
+            .filter(|s| demos.iter().any(|d| d.used.contains(&s.to_string())))
             .count();
         println!("  SELF TEST: a chunk touching three symbols recorded {hits} of them");
         if hits != probe.len() {

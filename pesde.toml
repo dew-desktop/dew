@@ -49,19 +49,19 @@ lib = "scripts/init.luau"
 # `.artifacts/project/upstream/vide-gates-on-game.md`.
 
 [dev_dependencies]
-# NOT DEPENDENCIES ANY MORE, AND THE DISTINCTION IS THE POINT OF MILESTONE 6.
+# EMPTY, AND THAT IS THE WHOLE POINT. Dew declared a framework here so its own
+# tests and tools had one to read: the conformance runner needed cases, the
+# coverage tool needed a scope, and a fixture needed something to point an alias
+# at.
 #
-# The host used to install Aether and vide and hand them to every applet through
-# injected aliases. An applet now declares its own, so nothing Dew ships needs a
-# framework: `mods.rs` grants an applet one require root -- its own directory -- and
-# injects no alias at all.
+# An applet brings the framework it requires, so every one of those questions has
+# a better answer now. A test names an applet and borrows from its install; the
+# coverage tool reads its scope from the very table the applet required, which
+# also fixed a measurement taking a numerator from one framework and a
+# denominator from another.
 #
-# They stay here because Dew's own tests need something to test against, and
-# because `dew test` and the conformance runner look for a framework checkout to
-# read suites and cases out of. Both fall back through `find_dir` first, so a
-# sibling checkout wins over this pin.
-aether = { repo = "project-aether-ui/aether", rev = "5c44eb469601bda06e0b366e41c938f718b1cd32" }
-vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+# `installed_package_in` is the seam: it resolves from a directory you name
+# rather than from wherever the process happens to be standing.
 
 [indices]
 default = "https://github.com/pesde-pkg/index"

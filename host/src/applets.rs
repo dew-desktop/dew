@@ -555,6 +555,24 @@ pub mod tests {
             Fixture(dir)
         }
 
+        /// A framework to test against, taken from an example that installs one.
+        ///
+        /// NOT A PIN OF THIS REPOSITORY'S. Dew declares no framework: an applet
+        /// brings its own, so a test wanting one names an applet. `pressable` is the
+        /// one the coverage tool already measures, which makes it the copy most
+        /// likely to be installed.
+        pub fn reference_aether() -> PathBuf {
+            for example in ["examples/aether/pressable", "examples/aether/calculator"] {
+                for prefix in ["", "../"] {
+                    let dir = PathBuf::from(format!("{prefix}{example}"));
+                    if let Some(found) = dew_runtime::installed_package_in(&dir, "aether") {
+                        return found;
+                    }
+                }
+            }
+            panic!("no example has aether installed -- run `pesde install` in examples/aether/pressable")
+        }
+
         /// A second file beside the entry, for an applet that is not one file.
         pub fn write(&self, name: &str, source: &str) {
             std::fs::write(self.0.join(name), source).expect("extra module");
@@ -583,8 +601,11 @@ pub mod tests {
         /// shape a real mod loads through.
         fn load_aether(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-            let root = dew_runtime::installed_package("aether")
-                .expect("no installed aether -- run `pesde install` at the repository root");
+            //  AN EXAMPLE'S INSTALL, because this repository has none of its own.
+            //  Each applet brings the framework it declared, so a fixture that
+            //  wants one borrows from an applet rather than from a pin Dew keeps
+            //  for the purpose.
+            let root = Self::reference_aether();
 
             let packages = self.0.join("roblox_packages");
             std::fs::create_dir_all(&packages).expect("fixture roblox_packages");
