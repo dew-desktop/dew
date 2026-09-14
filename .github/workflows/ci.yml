@@ -200,6 +200,25 @@ jobs:
       # overreaches gets disabled and takes the real rule with it.
       - run: lune run scripts/verify_ascii.luau
 
+      # THE PULL REQUEST ITSELF, held to the rules its commits are held to.
+      #
+      # A body is the most read thing this repository produces and was the least
+      # checked: commits had a linter and bodies had only a style guide, so the
+      # generated-by footer that guide forbids shipped in one anyway, along with
+      # references to planning notes that are gitignored and therefore name
+      # nothing a reader can open.
+      #
+      # THROUGH THE ENVIRONMENT, NOT AN ARGUMENT. A title and a body are written
+      # by whoever opened the pull request and contain every character a shell
+      # treats specially; interpolating them into a `run:` line would execute
+      # them.
+      - name: The pull request reads like a person wrote it
+        if: github.event_name == 'pull_request'
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: lune run scripts/pr_check.luau
+
   build:
     name: build and mount every applet
     runs-on: windows-latest

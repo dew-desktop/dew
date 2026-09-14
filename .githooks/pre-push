@@ -8,6 +8,8 @@
 # something this hook catches:
 #
 #     an invalid commit scope        0.7s here, a full round trip there
+#     a tool attribution trailer     caught here; it cannot be removed later
+#                                      without rewriting published history
 #     a manifest the scaffolder      1.8s here, and it gated nothing, so the
 #       wrote in the wrong format      failure said nothing about the code
 #     a shell glob that pwsh does    now impossible: discovery moved into Luau

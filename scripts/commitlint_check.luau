@@ -18,10 +18,19 @@
 local process = require("@lune/process")
 local commitlint = require("./commitlint")
 
+--- THE WHOLE MESSAGE, NOT THE SUBJECT. This read `--format=%s` and so checked
+--- subjects alone, which meant the body rules could not fire: a tool attribution
+--- trailer and a reference to the gitignored plan both sat in bodies this script
+--- reported as valid.
+---
+--- A NUL SEPARATES COMMITS, because a body contains blank lines and a separator
+--- made of them cannot say where one message ends.
+local SEPARATOR = string.char(0)
+
 local range = process.args[1]
 local args = if range
-	then { "log", "--format=%s", range }
-	else { "log", "--format=%s", "-1" }
+	then { "log", "--format=%B%x00", range }
+	else { "log", "--format=%B%x00", "-1" }
 
 local result = process.exec("git", args)
 if not result.ok then
@@ -35,17 +44,23 @@ end
 local failed = 0
 local checked = 0
 
-for line in string.gmatch(result.stdout, "[^\r\n]+") do
+for _, message in ipairs(string.split(result.stdout, SEPARATOR)) do
+	local trimmed = string.match(message, "^%s*(.-)%s*$") or ""
+	if trimmed == "" then
+		continue
+	end
+	local subject = string.match(trimmed, "^%C+") or trimmed
+
 	--- Merge commits are exempt. Their subject is written by the forge and is
 	--- "Title (#1)" or "Merge pull request #...", which no conventional-commit rule describes.
-	if string.match(line, "^Merge ") or string.match(line, "%(#%d+%)$") then
+	if string.match(subject, "^Merge ") or string.match(subject, "%(#%d+%)$") then
 		continue
 	end
 	checked += 1
-	local verdict = commitlint.validate(line)
+	local verdict = commitlint.validate(trimmed)
 	if not verdict.valid then
 		failed += 1
-		print(`REJECTED  {line}`)
+		print(`REJECTED  {subject}`)
 		for _, err in ipairs(verdict.errors) do
 			print(`          {err}`)
 		end

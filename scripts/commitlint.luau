@@ -2,6 +2,8 @@
 -- Dew Luau Commitlint Configuration & Validator (@dew/commitlint)
 -- Strictly mapped to directories that physically exist in the repository
 
+local style = require("./house_style")
+
 export type CommitLintConfig = {
     types: {string},
     allowedScopes: {string},
@@ -75,16 +77,28 @@ local config: CommitLintConfig = {
         "deps"       -- VERSION, manifests, pins
     },
     maxHeaderLength = 100,
-    enforceLowerCaseScope = true
+    enforceLowerCaseScope = true,
+
+    --- A BODY IS EARNED, NOT OWED. Most changes need no body at all, and a long
+    --- one is usually the diff restated rather than the reasoning that is
+    --- missing from it. Blank lines and trailers are not counted; when a change
+    --- genuinely needs more than this, the pull request body is where it goes.
+    maxBodyLines = 12,
 }
 
 local function parseCommit(message: string): (ParsedCommit?, string?)
+    --- THE HEADER IS THE FIRST LINE, and it has to be cut out before matching.
+    --- A Lua `.` matches a newline, so `(.+)$` against a whole message swallowed
+    --- the body into the summary: the length rule then reported 756 for a
+    --- 66-character subject, and the imperative rule read the wrong words.
+    local header = string.match(message, "^%C+") or message
+
     local pattern = "^([%w_]+)%(([%w%-_/]+)%):%s+(.+)$"
-    local ctype, scope, summary = string.match(message, pattern)
+    local ctype, scope, summary = string.match(header, pattern)
 
     if not ctype then
         local noScopePattern = "^([%w_]+):%s+(.+)$"
-        ctype, summary = string.match(message, noScopePattern)
+        ctype, summary = string.match(header, noScopePattern)
         if not ctype then
             return nil, "Message must follow format: <type>(<scope>): <summary>"
         end
@@ -92,7 +106,7 @@ local function parseCommit(message: string): (ParsedCommit?, string?)
     end
 
     return {
-        raw = message,
+        raw = header,
         type = ctype,
         scope = scope,
         summary = summary
@@ -143,6 +157,43 @@ local function validateCommit(message: string): ValidationResult
     -- 3. Header Length
     if #parsed.raw > config.maxHeaderLength then
         table.insert(errors, `Commit header length ({#parsed.raw}) exceeds maximum ({config.maxHeaderLength})`)
+    end
+
+    -- 4. The subject is an instruction, not a report or a statement.
+    local subjectProblem = style.subjectProblem(parsed.summary)
+    if subjectProblem then
+        table.insert(errors, subjectProblem)
+    end
+
+    -- 5. No tool attribution and no vocabulary from the gitignored plan.
+    for _, finding in ipairs(style.findForbidden(message)) do
+        if finding.rule == "attribution" then
+            table.insert(errors, `Remove {finding.detail}: a commit is authored by the person landing it`)
+        else
+            table.insert(errors, `Remove {finding.detail}: say what the work is for, not where it sits in a plan`)
+        end
+    end
+
+    -- 6. The body stays short enough to be read.
+    local bodyLines = 0
+    local seenHeader = false
+    --- `%C+` IS EVERY RUN OF NON-CONTROL CHARACTERS, which is one non-blank
+    --- line, with no escape sequences needed to say so.
+    for line in string.gmatch(message, "%C+") do
+        if not seenHeader then
+            seenHeader = true
+            continue
+        end
+        local trimmed = string.match(line, "^%s*(.-)%s*$") or ""
+        if trimmed ~= "" and not string.find(trimmed, "^%a[%w-]*:%s") then
+            bodyLines += 1
+        end
+    end
+    if bodyLines > config.maxBodyLines then
+        table.insert(
+            errors,
+            `Body is {bodyLines} lines and the limit is {config.maxBodyLines}; cut it to what the diff cannot say, and put the rest in the pull request`
+        )
     end
 
     return {
