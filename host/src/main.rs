@@ -624,7 +624,15 @@ pub fn parse_args<I: Iterator<Item = String>>(
             subcommand: args_vec.get(1).cloned(),
         }),
         _ if first.starts_with("--") => parse_legacy_flags(&args_vec, is_windows),
-        _ => Err(format!("unrecognised argument '{first}'")),
+        // A BARE PATH RUNS IT. `dew applets/timetracker` is the shortest true
+        // thing to type, and it is what the README documents; requiring `run`
+        // in front of it would make the subcommand the only way to do the most
+        // common thing.
+        //
+        // A mistyped subcommand lands here too and reports that there is no such
+        // directory, which names the mistake as well as `unrecognised argument`
+        // did and better than it did for a path.
+        _ => parse_run(&args_vec, is_windows),
     }
 }
 
@@ -1817,25 +1825,28 @@ fn execute_help(subcommand: Option<String>) {
             println!("  --run-unsupported     Execute cases marked with unsupported requirements");
         }
         _ => {
-            println!("Dew -- desktop applet platform over a native DataModel");
+            println!("Dew, a desktop applet platform over a native DataModel");
             println!();
-            println!("Usage: dew <COMMAND> [OPTIONS]");
+            println!("Usage: dew <PATH>            run the applet in that directory");
+            println!("       dew <COMMAND> [ARGS]");
+            println!();
+            println!("An applet is any directory holding a dew.toml. There is no id.");
             println!();
             println!("Commands:");
-            println!("  run          Run a mod interactively in a desktop window (Windows only)");
-            println!("  snapshot     Render a mod or script headlessly to a PNG image");
-            println!("  check        Validate mod manifest, entrypoint, and Luau syntax");
-            println!("  init         Scaffold a new mod with manifest and entrypoint");
-            println!("  test         Run Luau test suites against Dew's DataModel");
-            println!("  conformance  Run layout conformance suite against Dew's DataModel");
-            println!("  help         Show help for a command");
+            println!("  run <PATH>       Run an applet in a desktop window (Windows only)");
+            println!("  snapshot <PATH>  Render an applet or a script to a PNG, no window needed");
+            println!("  check [PATH...]  Validate manifests and entry points, or this directory");
+            println!("  init <NAME>      Scaffold a new applet");
+            println!("  test             Run Luau test suites against Dew's DataModel");
+            println!("  conformance      Run the layout conformance suite");
+            println!("  help [COMMAND]   Show help for a command");
             println!();
-            println!("Legacy Flags:");
-            println!("  --snapshot <PATH>     Render default or --applet to PNG");
-            println!("  --applet <ID>            Select mod for run or snapshot");
-            println!("  --script <PATH>       Run standalone script");
-            println!("  --size <WxH>          Dimensions for standalone script");
-            println!("  --stats, --bench      Performance monitoring (Windows only)");
+            println!("Options:");
+            println!("  -o <PATH>        Where snapshot writes its image");
+            println!("  --script <PATH>  Render a standalone script rather than an applet");
+            println!("  --size <WxH>     Dimensions for a standalone script");
+            println!("  --stats          Report where frame time goes (Windows only)");
+            println!("  --bench          Repaint every frame (Windows only)");
         }
     }
 }
@@ -2148,6 +2159,34 @@ mod tests {
                 assert!(!bench);
             }
             _ => panic!("expected Run command"),
+        }
+    }
+
+    /// THE SHORTEST FORM, AND THE ONE THE README DOCUMENTS.
+    ///
+    /// `dew applets/timetracker` with no subcommand. This was documented and not
+    /// tested, so it shipped reporting `unrecognised argument` for the exact
+    /// command the README gave. Tested now.
+    #[test]
+    fn a_bare_path_runs_it() {
+        let args = ["applets/timetracker"].iter().map(|s| s.to_string());
+        match parse_args(args, true).unwrap() {
+            Command::Run { applets, .. } => {
+                assert_eq!(applets, vec![PathBuf::from("applets/timetracker")]);
+            }
+            other => panic!("expected Run, got {other:?}"),
+        }
+    }
+
+    /// A MISTYPED SUBCOMMAND IS A PATH, and that is the better error of the two.
+    #[test]
+    fn a_mistyped_subcommand_reads_as_a_path() {
+        let args = ["chek", "applets/timetracker"]
+            .iter()
+            .map(|s| s.to_string());
+        match parse_args(args, true).unwrap() {
+            Command::Run { applets, .. } => assert_eq!(applets.len(), 2),
+            other => panic!("expected Run, got {other:?}"),
         }
     }
 
