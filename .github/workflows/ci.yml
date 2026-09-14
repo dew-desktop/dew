@@ -365,11 +365,17 @@ jobs:
             exit 1
           }
 
-      # EVERY MOD, not the first one. An applet that fails to load is skipped with a
-      # message and the host carries on, which is right at runtime and would hide
-      # a broken mod here.
-      # Validate all applet manifests and syntax
-      - run: cargo run --quiet --manifest-path host/Cargo.toml -- check applets/*/ demos/*/
+      # EVERY APPLET, not the first one. An applet that fails to load is skipped
+      # with a message and the host carries on, which is right at runtime and
+      # would hide a broken applet here.
+      #
+      # `shell: bash` IS LOAD-BEARING. The default shell on windows-latest is
+      # pwsh, which does not expand a glob before handing it to a native
+      # executable, so `applets/*/` arrived at `dew check` as that literal string
+      # and it went looking for a directory named `*`.
+      - name: Validate every applet manifest and its syntax
+        shell: bash
+        run: cargo run --quiet --manifest-path host/Cargo.toml -- check applets/*/ demos/*/
 
       # EVERY MOD, not the first one. An applet that fails to load is skipped with a
       # message and the host carries on, which is right at runtime and would hide
@@ -527,7 +533,7 @@ jobs:
         shell: bash
         run: |
           cargo run --quiet --manifest-path host/Cargo.toml -- \
-            snapshot --script examples/standalone/app.luau --size 360x220 /tmp/standalone.png
+            snapshot --script examples/standalone/app.luau --size 360x220 -o /tmp/standalone.png
           test -s /tmp/standalone.png || { echo "standalone.png was not created or is empty"; exit 1; }
           echo "Rendered /tmp/standalone.png successfully"
 
@@ -543,13 +549,6 @@ jobs:
           }
           test -s /tmp/nameplate.png || { echo "nameplate.png was not created or is empty"; exit 1; }
           echo "Rendered /tmp/nameplate.png successfully"
-
-      - name: Render default mod snapshot
-        shell: bash
-        run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot /tmp/mod.png
-          test -s /tmp/mod.png || { echo "mod.png was not created or is empty"; exit 1; }
-          echo "Rendered /tmp/mod.png successfully"
 
       # MOD SCAFFOLDING WORKFLOW: init, check, and snapshot
       - name: Exercise mod scaffolding
@@ -584,10 +583,8 @@ jobs:
           test "$count" -gt 0 || { echo "the gallery rendered no images"; exit 1; }
           echo "gallery rendered $count image(s)"
 
-      # BACKWARD COMPATIBILITY: legacy flags without subcommands still work
-      - name: Verify legacy flag compatibility
-        shell: bash
-        run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- --snapshot /tmp/legacy.png
-          test -s /tmp/legacy.png || { echo "legacy.png was not created or is empty"; exit 1; }
-          echo "Rendered legacy snapshot successfully"
+      # NO STEP FOR `--snapshot` WITHOUT A TARGET, and none for a default applet.
+      # Both used to work because the host picked an applet for you. Selecting an
+      # applet by path removed the thing they were selecting, so the commands are
+      # not broken, they are gone. `snapshot applets/nameplate` above covers what
+      # they were really testing, which is that a named applet renders headlessly.
