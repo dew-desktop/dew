@@ -147,35 +147,66 @@ page, and `scripts/commitlint_check.luau` holds every commit to them. Both read
 
 ## Pull requests
 
+**Most pull requests are a paragraph.** Say what was wrong, say what you did,
+stop. If a list of changes helps, use a list. Nothing else is owed.
+
 ```
-<one paragraph: what this is and why it exists>
+Window events had no idea which window they came from, which is fine with
+one window and useless with two. Needed before an applet can ask for a
+popover, since a tooltip creates and destroys a surface constantly.
 
-## What changed
-## What to look at
-## Not done
+- events are tagged with a surface id
+- WM_DESTROY no longer posts WM_QUIT; the first window to close was
+  killing the process
+- poll moved off Window onto a Pump, since PeekMessage drains the whole
+  thread anyway
+
+Tests for both, checked they fail without the fix.
 ```
 
-**The opening paragraph is the whole PR to most readers.**
-Write it as though it is the only part that gets read, because it usually is.
+That is a complete pull request for a real change to the event loop. It is not
+a summary of a longer one that was cut down.
 
-**What changed** is grouped by area rather than being a commit list, since the
-commits are one click away.
+### When sections earn their place
 
-**What to look at** is the section reviewers want and almost nobody writes.
-Point at the two or three places where a mistake would be expensive, or where
-the reasoning is not obvious. This is the difference between a review and a
-skim.
+Add headings only when a reader has to navigate rather than read: several
+independent areas in one branch, or a reviewer who was not in the work and needs
+orienting. Two or three hundred words do not need signposting, and a heading over
+a single paragraph is decoration.
 
-**Not done** is not an apology. It sets the boundary of the claim, so a reviewer
-does not report a known gap as a finding and a user does not meet it as a
-surprise.
+When a pull request is genuinely large, these are the useful sections:
 
-Do not describe the review process, the number of commits, or how long it took.
+- **What changed**, grouped by area rather than listing commits.
+- **What to look at**, naming the two or three places where a mistake would be
+  expensive. Reviewers want this and almost nobody writes it.
+- **Not done**, which sets the boundary of the claim so a known gap is not
+  reported as a finding.
+
+### What to leave out
+
+**No lesson at the end of an observation.** State what happened. A reader who
+wants the moral can draw it; one who does not is being lectured.
+
+**No aphorisms.** A line that sounds quotable is a line doing less work than it
+appears to. The same is true of a closing sentence that exists to land rather
+than to inform.
+
+**Nothing about the process.** Not the number of commits, not how long it took,
+not how the work felt, not what comes next unless a reader is about to trip over
+the gap.
+
+**Do not narrate.** A pull request is a note, not an argument with a thesis and
+a build. If the paragraphs have a rhythm, that is a sign of shaping rather than
+reporting.
 
 ### Run-in headings
 
-A section is usually a short series of entries, each opening with a bolded
-run-in heading. Three shapes, chosen by what follows:
+Inside a section that is already earning its place, an entry may open with a
+bolded run-in heading. This is for a list of distinct items, not a default: when
+every paragraph on a page opens in bold, the bold has stopped meaning anything
+and the page reads as though it was generated rather than written.
+
+Three shapes, chosen by what follows:
 
 **A full stop, then a new line.**
 When the description runs to a sentence or more, break the line after the

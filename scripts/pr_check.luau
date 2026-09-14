@@ -49,6 +49,27 @@ for _, finding in ipairs(style.findForbidden(`{title}\n{body}`)) do
 	end
 end
 
+--- HEADINGS ARE FOR NAVIGATING, and a body a reader gets through in one pass has
+--- nothing to navigate. Sections applied by default are the clearest tell that a
+--- description was shaped rather than written, and they make a small change look
+--- like a large one.
+---
+--- LENGTH IS THE PROXY, not a judgement about content, because nothing here can
+--- tell a section that earns its place from one that does not. A pull request
+--- long enough to need signposting passes this without trying.
+local SECTIONS_NEED = 1200
+
+local headings = 0
+for _ in string.gmatch(body, "##+ ") do
+	headings += 1
+end
+if headings > 0 and #body < SECTIONS_NEED then
+	table.insert(
+		problems,
+		`This body is {#body} characters and has {headings} heading(s). Under {SECTIONS_NEED} a reader gets through it in one pass, so say it plainly and drop the sections.`
+	)
+end
+
 --- CONCATENATED, NOT JOINED. The scan only asks whether a byte is above
 --- 127, so a separator between the two would add nothing to look at.
 local at, character = style.nonAsciiAt(title .. body)
