@@ -13,6 +13,7 @@
 
 [tools]
 lune = "lune-org/lune@0.10.4"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.69.0"
 
 # PESDE IS NOT HERE, and cannot be. Its releases are tagged
 # `v0.7.3+registry.0.2.3`, and rokit cannot resolve a version carrying build

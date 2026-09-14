@@ -11,7 +11,7 @@ written standard.
 ## Running it
 
 ```sh
-cargo run -p dew-host -- applets/timetracker
+cargo run -p dew-host -- examples/aether/timetracker
 ```
 
 An applet is named by its directory. There is no registry and no id.

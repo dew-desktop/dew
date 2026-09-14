@@ -81,13 +81,14 @@ struct Demo {
     moved: usize,
 }
 
-/// Every directory under `demos/` that carries a manifest and an entry named
-/// after itself, which is the shape `applets/` already uses.
-/// WALKED RATHER THAN LISTED, because demos are grouped by runtime --
-/// `demos/applets/aether/pressable`, `demos/applets/datamodel/...` (ADR-009).
-/// Scanning one level found nothing after that move and printed an
-/// honest-looking `0 of 56`, which is the failure a generated number is supposed
-/// to prevent rather than produce.
+/// Every directory under `examples/` that carries a manifest and an entry named
+/// after itself.
+///
+/// WALKED RATHER THAN LISTED, because examples are grouped by what they show:
+/// `examples/aether/pressable` sits one level deeper than a flat scan expects.
+/// A one-level scan finds nothing the moment an example sits a directory deeper,
+/// and prints an honest-looking `0 of 56`, which is the failure a generated
+/// number is supposed to prevent rather than produce.
 fn demo_entries(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];
@@ -137,7 +138,44 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// ITS OWN VM IS THE POINT. See `run_demo`: sharing one with the differential pass
 /// puts two live trees behind one module-level `PointerRouter`, and the press goes
 /// to whichever it resolves first.
-fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Vec<String>, String> {
+/// A `dew` global for a VM that is measuring rather than running.
+///
+/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.widget`, so a VM without one
+/// cannot load it at all: the call is at module scope and there is nothing to
+/// index. This is the same answer the host gives, narrowed to what a measurement
+/// needs, which is a root to parent into.
+///
+/// EVERY SURFACE IS PRESENT HERE, unlike in the host, where the table carries
+/// only what the manifest granted. Nothing is being protected in a measuring
+/// VM, and refusing one would make the measurement depend on a manifest it does
+/// not otherwise read.
+fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
+    let dew = lua.create_table()?;
+
+    let time = lua.create_table()?;
+    time.set(
+        "now",
+        lua.create_function(|_, ()| {
+            Ok(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0))
+        })?,
+    )?;
+    dew.set("time", time)?;
+
+    for surface in ["widget", "window", "overlay", "popover"] {
+        let handed = root.clone();
+        dew.set(
+            surface,
+            lua.create_function(move |_, _options: Option<mlua::Table>| Ok(handed.clone()))?,
+        )?;
+    }
+
+    lua.globals().set("dew", dew)
+}
+
+fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Vec<String>>, String> {
     let mut caps = Capabilities::cli(dir.to_path_buf());
     caps.require_roots = vec![dir.to_path_buf()];
     caps.aliases.clear();
@@ -157,15 +195,25 @@ fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Vec<String>, Str
         services::install(vm.lua(), &installer_clock)?;
         datamodel::install_vocabulary(vm.lua())?;
         let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
-        vm.lua().globals().set("DewRoot", root_handle)?;
+        vm.lua().globals().set("DewRoot", root_handle.clone())?;
+        install_dew(vm.lua(), root_handle)?;
         Ok(())
     })
     .map_err(|e| format!("{name}: the demo did not load for measurement: {e}"))?;
 
     let lua = app.vm().lua();
-    let real: LuaTable = app
-        .get("Aether")
-        .map_err(|e| format!("{name}: a demo must export the Aether it required: {e}"))?;
+    //  A DEMO DECLARES ITSELF BY EXPORTING `Measure`, and an applet that does not
+    //  is not a broken demo. They were separate trees, so every directory this
+    //  walked was instrumented by construction; one tree means an ordinary Aether
+    //  applet now sits beside the demos, and calling that a failure would report
+    //  three every run and teach everyone to ignore the number.
+    if app.get::<mlua::Function>("Measure").is_err() {
+        return Ok(None);
+    }
+
+    let real: LuaTable = app.get("Aether").map_err(|e| {
+        format!("{name}: a demo exporting Measure must export the Aether it required: {e}")
+    })?;
     let measure: mlua::Function = app
         .get("Measure")
         .map_err(|e| format!("{name}: a demo must export Measure: {e}"))?;
@@ -182,10 +230,10 @@ fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Vec<String>, Str
         .map(|(k, _)| k)
         .collect();
     used.sort();
-    Ok(used)
+    Ok(Some(used))
 }
 
-fn run_demo(entry: &Path) -> Result<Demo, String> {
+fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     let dir = entry
         .parent()
         .ok_or("a demo has no directory")?
@@ -199,7 +247,9 @@ fn run_demo(entry: &Path) -> Result<Demo, String> {
     // Measured first, in a VM of its own, for the reason in this function's
     // header: two live trees behind one router is a press that goes to the wrong
     // one.
-    let used = measure_demo(entry, &dir, &name)?;
+    let Some(used) = measure_demo(entry, &dir, &name)? else {
+        return Ok(None);
+    };
 
     // THE DEMO'S OWN PACKAGES ARE ITS ONLY REQUIRE ROOT, and it gets no aliases.
     // A demo that only loads because the host handed it a framework would prove
@@ -230,7 +280,8 @@ fn run_demo(entry: &Path) -> Result<Demo, String> {
         services::install(vm.lua(), &installer_clock)?;
         datamodel::install_vocabulary(vm.lua())?;
         let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
-        vm.lua().globals().set("DewRoot", root_handle)?;
+        vm.lua().globals().set("DewRoot", root_handle.clone())?;
+        install_dew(vm.lua(), root_handle)?;
         Ok(())
     })
     .map_err(|e| format!("{name}: the demo did not load: {e}"))?;
@@ -330,12 +381,12 @@ fn run_demo(entry: &Path) -> Result<Demo, String> {
     let moved = gallery::pixels_differing(&before, &after);
     let painted = before.rgba.chunks(4).filter(|px| px[3] != 0).count();
 
-    Ok(Demo {
+    Ok(Some(Demo {
         name,
         painted,
         used,
         moved,
-    })
+    }))
 }
 
 fn main() {
@@ -396,15 +447,31 @@ fn main() {
     }
 
     // ---- the demos
-    let demos_root = PathBuf::from("demos");
+    //
+    // `examples/aether` RATHER THAN EVERY EXAMPLE. This measures how much of the
+    // framework something actually drives, and an example that brings no
+    // framework has nothing to report.
+    let demos_root = PathBuf::from("examples/aether");
     let mut demos: Vec<Demo> = Vec::new();
     let mut failures: Vec<String> = Vec::new();
+    let mut considered = 0usize;
     for entry in demo_entries(&demos_root) {
+        considered += 1;
         match run_demo(&entry) {
-            Ok(d) => demos.push(d),
+            Ok(Some(d)) => demos.push(d),
+            Ok(None) => {}
             Err(e) => failures.push(e),
         }
     }
+
+    //  SAID OUT LOUD, because "not a demo" and "a demo that failed to load" look
+    //  identical in a total, and the first is fine while the second is not.
+    println!(
+        "{} example(s) under {}, {} instrumented",
+        considered,
+        demos_root.display(),
+        demos.len()
+    );
 
     for d in &demos {
         for u in &d.used {

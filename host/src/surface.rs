@@ -23,6 +23,7 @@ use crate::manifest::Permission;
 #[cfg(windows)]
 use dew_window::Surface;
 use mlua::prelude::*;
+use std::sync::{Arc, Mutex};
 
 /// Which corner a widget measures its offset from.
 ///
@@ -217,5 +218,81 @@ impl Declared {
                 }
             ),
         }
+    }
+}
+
+/// What an applet asked the host for, and how big.
+///
+/// SEPARATE FROM `Declared` BECAUSE IT CARRIES A SIZE. A declaration was read
+/// from a returned table alongside a `size` field, so the two travelled together
+/// without either naming the other. A request arrives as one call, and the size
+/// is part of what was asked for.
+#[derive(Debug, Clone)]
+pub struct Request {
+    pub surface: Declared,
+    pub size: Option<(u32, u32)>,
+}
+
+/// Where a surface request lands between the applet asking and the host reading.
+///
+/// THE APPLET ASKS WHILE IT RUNS, and the host wants the answer after. A cell
+/// rather than a return value because `dew.widget` has to hand the applet its
+/// root, which is what it is really for; the host reads what was asked out of
+/// here once the module has finished.
+pub type Requested = Arc<Mutex<Option<Request>>>;
+
+impl Request {
+    /// Read `dew.widget{ ... }` and friends, which take one options table.
+    ///
+    /// EVERY FIELD IS OPTIONAL. An applet that calls `dew.widget{}` with nothing
+    /// in it has said the only thing that matters, which is that it wants a
+    /// widget, and the defaults are the ones a declaration got.
+    pub fn from_options(
+        kind: Permission,
+        options: Option<LuaTable>,
+        fallback_title: &str,
+    ) -> Request {
+        let size = options.as_ref().and_then(|o| {
+            let width: u32 = o.get("width").ok()?;
+            let height: u32 = o.get("height").ok()?;
+            Some((width.max(1), height.max(1)))
+        });
+
+        let surface = match kind {
+            Permission::Window => Declared::Window {
+                title: options
+                    .as_ref()
+                    .and_then(|o| o.get::<String>("title").ok())
+                    .unwrap_or_else(|| fallback_title.to_string()),
+            },
+            Permission::Overlay => Declared::Overlay {
+                topmost: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("topmost").ok())
+                    .unwrap_or(true),
+                click_through: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("clickThrough").ok())
+                    .unwrap_or(false),
+            },
+            _ => Declared::Widget {
+                anchor: options
+                    .as_ref()
+                    .and_then(|o| o.get::<String>("anchor").ok())
+                    .and_then(|a| Anchor::parse(&a))
+                    .unwrap_or(Anchor::TopRight),
+                offset: options
+                    .as_ref()
+                    .and_then(|o| o.get::<LuaTable>("offset").ok())
+                    .map(|o| (o.get("x").unwrap_or(24), o.get("y").unwrap_or(24)))
+                    .unwrap_or((24, 24)),
+                click_through: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("clickThrough").ok())
+                    .unwrap_or(false),
+            },
+        };
+
+        Request { surface, size }
     }
 }

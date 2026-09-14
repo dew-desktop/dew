@@ -25,10 +25,11 @@ use crate::capabilities::{self, Shared};
 use crate::datamodel;
 use crate::manifest::{Manifest, Runtime};
 use crate::services::{self, Clock, SharedClock};
-use crate::surface::Declared;
+use crate::surface::{Declared, Requested};
 use dew_runtime::{modules, Session, Vm};
 use mlua::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 /// The living half of a mounted mod: what the frame loop drives.
 ///
@@ -271,7 +272,7 @@ pub fn load(
         //       in both places -- which is a property of the TREE rather than of
         //       anything named `game`.
         //
-        //       HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/standalone`
+        //       HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/host/standalone`
         //       reaches for a `DewRoot` global because a bare script has no
         //       function to receive one; a mod has `mount`, and a parameter is
         //       the same argument that keeps `dew` off the globals table — what a
@@ -286,19 +287,82 @@ pub fn load(
     };
 
     // 4 ── the capability table, from the granted permissions ONLY.
-    let dew = capabilities::build(vm.lua(), &manifest.permissions, state)
+    let requested: Requested = Arc::new(Mutex::new(None));
+    let grant = capabilities::SurfaceGrant {
+        requested: Arc::clone(&requested),
+        root: match &ceremony {
+            //  THE HANDLE, NOT THE NODE ID. `root` is an index into the DOM and
+            //  handing that over parents instances into an integer; the applet
+            //  wants the same userdata `mount` was always given.
+            Ceremony::DataModel { root } => Some(
+                datamodel::handle(vm.lua(), &dom, *root)
+                    .map_err(|e| format!("{}: {e}", manifest.id))?
+                    .into_lua(vm.lua())
+                    .map_err(|e| format!("{}: {e}", manifest.id))?,
+            ),
+            //  AN AETHER APPLET IS HANDED NO ROOT, because its tree is built
+            //  inside a reactive scope `Desktop.Mount` opens, and nothing exists
+            //  to parent into until that scope does. It can still ask for a
+            //  surface; it just gets nil back and keeps its `mount`.
+            Ceremony::Aether(_) => None,
+        },
+        title: manifest.display_name().to_string(),
+    };
+    let dew = capabilities::build(vm.lua(), &manifest.permissions, state, &grant)
         .map_err(|e| format!("{}: {e}", manifest.id))?;
 
-    // 5 ── the mod's own module. It returns a declaration; it performs nothing.
-    let declaration: LuaTable = modules::load_entry(&vm, &entry)
+    // 5 ── the applet's own module. It asks for a surface, or it returns a
+    //      declaration describing one. Both arrive from running it.
+    //  `dew` IS A GLOBAL, the way `game` is one in the engine this host is shaped
+    //  after. It was handed to `mount` as an argument, which is why the old
+    //  contract had to return a table: there was no other way to be given a
+    //  capability table.
+    //
+    //  NOT THE CHUNK'S VARARG. A chunk's `...` reaches the entry module and stops
+    //  there, so an applet split across two files could not see `dew` from the
+    //  second one without threading it through every call that needed it. It is
+    //  also not an idiom an applet author has met: a ModuleScript's chunk
+    //  receives nothing, so `local dew = ...` means nothing in the engine.
+    //
+    //  AN UNGRANTED CAPABILITY IS STILL ABSENT RATHER THAN GUARDED. That comes
+    //  from which keys this table has, which `capabilities::build` decides from
+    //  the manifest, and not from how the table is delivered.
+    vm.lua()
+        .globals()
+        .set("dew", dew.clone())
+        .map_err(|e| format!("{}: {e}", manifest.id))?;
+
+    let returned: LuaValue = modules::load_entry(&vm, &entry)
         .and_then(|f| f.call(()))
         .map_err(|e| format!("{}: {e}", manifest.id))?;
+    let declaration = match returned {
+        LuaValue::Table(table) => table,
+        //  NOTHING RETURNED IS THE SHAPE THIS IS MOVING TO. An applet that asked
+        //  for a surface has already said everything the host needed, so an
+        //  empty table stands in and every read below finds nothing in it.
+        _ => vm
+            .lua()
+            .create_table()
+            .map_err(|e| format!("{}: {e}", manifest.id))?,
+    };
 
-    let (width, height) = size_from(&declaration);
+    let asked = requested.lock().expect("requested").clone();
+
+    //  WHAT THE APPLET ASKED FOR WINS over what it returned. An applet doing
+    //  both is mid-migration rather than in conflict, and the call is the newer
+    //  of the two statements.
+    //
     // The window caption a mod gets when it declares no `title` of its own is its
     // manifest `name`, falling back to the id. An applet called "Time Tracker &
     // Pomodoro HUD" in its manifest should not present itself as `timetracker`.
-    let surface = Declared::from_declaration(&declaration, manifest.display_name());
+    let surface = match &asked {
+        Some(request) => request.surface.clone(),
+        None => Declared::from_declaration(&declaration, manifest.display_name()),
+    };
+    let (width, height) = match asked.as_ref().and_then(|r| r.size) {
+        Some(size) => size,
+        None => size_from(&declaration),
+    };
 
     // A SURFACE IS A GRANT (ADR-012), and this is where the asking is checked.
     //
@@ -322,13 +386,20 @@ pub fn load(
         Runtime::Aether => "mount = function(dew) … end",
         Runtime::DataModel => "mount = function(dew, root) … end",
     };
-    let mount: LuaFunction = declaration.get("mount").map_err(|_| {
-        format!(
-            "{}: the module returned no `mount` — a Dew applet returns \
-             {{ id = …, size = …, {signature} }}. See docs/applet_contract.md",
-            manifest.id
-        )
-    })?;
+    //  AN APPLET THAT ASKED FOR ITS SURFACE HAS ALREADY BUILT ITS TREE. It was
+    //  handed the root by `dew.widget{}` while it ran, so there is nothing left
+    //  for the host to call and no declaration to read. That is the shape this
+    //  is moving to; the returned table is what it is moving from.
+    let mount: Option<LuaFunction> = match declaration.get::<LuaFunction>("mount") {
+        Ok(function) => Some(function),
+        Err(_) if asked.is_some() => None,
+        Err(_) => {
+            return Err(format!(
+                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
+                manifest.id
+            ))
+        }
+    };
 
     // 6 ── build the tree, ONCE.
     let mounted = match ceremony {
@@ -417,11 +488,17 @@ pub fn load(
         //      back. Handing a root over and then reading a returned tree would
         //      be two answers to the same question.
         Ceremony::DataModel { root } => {
-            let handle = datamodel::handle(vm.lua(), &dom, root)
-                .map_err(|e| format!("{}: {e}", manifest.id))?;
-            mount
-                .call::<()>((dew, handle))
-                .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
+            //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
+            //      `dew.widget{}` handed it this same root while it ran, so the
+            //      instances are under there already and calling a second
+            //      entry point would ask it to build them twice.
+            if let Some(mount) = mount {
+                let handle = datamodel::handle(vm.lua(), &dom, root)
+                    .map_err(|e| format!("{}: {e}", manifest.id))?;
+                mount
+                    .call::<()>((dew, handle))
+                    .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
+            }
             Mounted::DataModel {
                 dom: dom.clone(),
                 root,
@@ -457,7 +534,7 @@ pub fn load(
 /// capability table and all — because a test that called the DataModel arm
 /// directly would pass on the day the manifest stopped selecting it.
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
@@ -466,10 +543,10 @@ mod tests {
     /// The loader reads `dew.toml` and an entry module from a real directory,
     /// which is the behaviour under test; faking the filesystem here would test
     /// a different loader.
-    struct Fixture(PathBuf);
+    pub struct Fixture(PathBuf);
 
     impl Fixture {
-        fn new(name: &str, manifest: &str, entry: &str) -> Fixture {
+        pub fn new(name: &str, manifest: &str, entry: &str) -> Fixture {
             let dir = std::env::temp_dir().join(format!("dew-mods-test-{name}"));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).expect("temp dir");
@@ -478,7 +555,12 @@ mod tests {
             Fixture(dir)
         }
 
-        fn load(&self) -> Result<Applet, String> {
+        /// A second file beside the entry, for an applet that is not one file.
+        pub fn write(&self, name: &str, source: &str) {
+            std::fs::write(self.0.join(name), source).expect("extra module");
+        }
+
+        pub fn load(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
             // A DataModel mod never reads Aether's source; the path is still a
             // require root, and pointing it at the mod's own directory keeps this
@@ -971,7 +1053,7 @@ runtime = \"datamodel\"
         // reports the solved rectangle through `Host.SetBounds`. That used to
         // write it into `Position` and `Size` -- the properties the solver READS
         // -- so every frame it added the parent's offset to an offset it had
-        // already made absolute. On `applets/timetracker` a label walked 286 pixels
+        // already made absolute. On `examples/aether/timetracker` a label walked 286 pixels
         // right per frame and the widget repainted 305 times a second doing
         // nothing. It passed every test in both repositories, because nothing
         // off-engine had ever driven that host before.
@@ -1166,5 +1248,231 @@ runtime = \"datamodel\"
         assert_eq!(node_image.uri, "rbxassetid://12345");
         // Refusal means bitmap is None: draws missing placeholder marker, property keeps value
         assert!(node_image.bitmap.is_none());
+    }
+}
+
+#[cfg(test)]
+mod asking_for_a_surface {
+    use super::tests::Fixture;
+
+    const ASKS: &str = r#"
+local root = dew.widget({ width = 120, height = 60 })
+local frame = Instance.new("Frame")
+frame.Name = "Asked"
+frame.Size = UDim2.new(1, 0, 1, 0)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+frame.Parent = root
+"#;
+
+    /// The shape this is all moving to: nothing returned at all.
+    ///
+    /// AN APPLET USED TO HAVE TO RETURN A TABLE to be given anything, because
+    /// `dew` only ever reached it through `mount`. It arrives as the chunk's
+    /// vararg now, so asking is possible before there is anything to return.
+    #[test]
+    fn an_applet_that_asks_returns_nothing() {
+        let fixture = Fixture::new(
+            "asks",
+            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            ASKS,
+        );
+        let applet = fixture.load().expect("an applet that asks should load");
+        assert_eq!((applet.width, applet.height), (120, 60));
+    }
+
+    /// An ungranted surface is absent, not refused.
+    ///
+    /// THE DIFFERENCE IS WHERE THE ERROR POINTS. A permission check somewhere
+    /// else says the applet was turned away; a nil index says which line asked
+    /// for what it did not declare.
+    #[test]
+    fn an_ungranted_surface_is_not_on_the_table() {
+        let fixture = Fixture::new(
+            "asks-ungranted",
+            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "assert(dew.widget ~= nil, \"widget was granted\")\n\
+             assert(dew.overlay == nil, \"overlay was not granted and must be absent\")\n\
+             local root = dew.widget({ width = 10, height = 10 })\n",
+        );
+        fixture
+            .load()
+            .expect("the applet asserts about its own table");
+    }
+
+    /// Neither asking nor returning a `mount` is the one real mistake.
+    #[test]
+    fn an_applet_that_does_neither_is_told_both_ways_out() {
+        let fixture = Fixture::new(
+            "asks-neither",
+            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "return { size = { width = 10, height = 10 } }\n",
+        );
+        let error = match fixture.load() {
+            Err(error) => error,
+            Ok(_) => panic!("an applet with no surface and no mount should not load"),
+        };
+        assert!(
+            error.contains("dew.widget") && error.contains("mount"),
+            "the message should name both ways out, got: {error}"
+        );
+    }
+
+    /// A second file in the applet can reach `dew` without being handed it.
+    ///
+    /// THE REASON IT IS A GLOBAL RATHER THAN THE CHUNK'S VARARG. `...` reaches
+    /// the entry module and stops there, so an applet split across two files
+    /// would see nothing from the second one, and `dew` would have to be
+    /// threaded through every call that wanted it.
+    #[test]
+    fn a_required_module_can_reach_dew() {
+        let fixture = Fixture::new(
+            "asks-submodule",
+            "id = \"sub\"
+runtime = \"datamodel\"
+permissions = [\"widget\"]
+",
+            "local helper = require(\"./helper\")
+helper()
+",
+        );
+        fixture.write(
+            "helper.luau",
+            "return function()
+  assert(dew ~= nil, \"a required module should see dew\")
+             local root = dew.widget({ width = 12, height = 12 })
+             assert(root ~= nil, \"and should be answered by it\")
+end
+",
+        );
+        fixture
+            .load()
+            .expect("a submodule should be able to ask for the surface");
+    }
+
+    /// What was asked for beats what was returned.
+    #[test]
+    fn asking_wins_over_a_stale_declaration() {
+        let fixture = Fixture::new(
+            "asks-both",
+            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "local root = dew.widget({ width = 33, height = 44 })\n\
+             return { size = { width = 999, height = 999 }, mount = function() end }\n",
+        );
+        let applet = fixture.load().expect("loads");
+        assert_eq!(
+            (applet.width, applet.height),
+            (33, 44),
+            "the call is the newer of the two statements"
+        );
+    }
+}
+
+#[cfg(test)]
+mod a_pressable_responds {
+    use super::*;
+    use std::sync::{Arc, Mutex};
+
+    /// Aether's `Pressable` responds when the host drives the tree.
+    ///
+    /// IGNORED, AND IT FAILS. It is the reproduction for a gap rather than a
+    /// regression guard: an applet that performs its own `Desktop.Mount` keeps
+    /// the framework's session, and nothing then steps it, so the framework's own
+    /// hit testing never sees a press the host delivered to the tree.
+    ///
+    /// `framework-coverage` does not cover this. It drives `session.pointer` and
+    /// `session.step` directly, which is the path the host used to take and not
+    /// the one an applet runs on, so its green number says nothing about either.
+    ///
+    /// Remove the `ignore` when an applet that mounts itself is driven. Until
+    /// then `calculator` and `timetracker` keep their returned declaration, and
+    /// the host keeps mounting them.
+    ///
+    /// THE APPLET IS THE REAL ONE, not a fixture. What is under test is whether a
+    /// framework's own hit testing survives being rendered through this host's
+    /// DataModel rather than through the framework's session, and a fixture that
+    /// built its own pressable would be testing something simpler.
+    #[test]
+    #[ignore = "an applet that mounts itself keeps the session, and nothing steps it"]
+    fn timetracker_toggles_when_its_button_is_pressed() {
+        let dir = PathBuf::from("../examples/aether/timetracker");
+        let dir = if dir.is_dir() {
+            dir
+        } else {
+            PathBuf::from("examples/aether/timetracker")
+        };
+        if !dir.join("roblox_packages/aether.luau").is_file() {
+            //  A MISSING INSTALL IS NOT A FAILING TEST, and it is not a silent
+            //  pass either: this says which command is missing.
+            panic!(
+                "no installed aether at {} -- run `pesde install` in that directory",
+                dir.display()
+            );
+        }
+
+        let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+        let aether_root = dew_runtime::installed_package("aether")
+            .expect("no installed aether at the repository root");
+        let loaded =
+            load(&dir, &aether_root, &Default::default(), &state).expect("timetracker should load");
+
+        let Mounted::DataModel { dom, root } = &loaded.mounted else {
+            panic!(
+                "this reproduction wants an applet that mounts itself;                  timetracker is back on the host's ceremony until the gap is closed"
+            );
+        };
+
+        let label_before = button_label(dom, *root);
+
+        let surface = datamodel::input::Surface {
+            lua: loaded.vm.lua(),
+            dom,
+            root: *root,
+            size: (loaded.width as f32, loaded.height as f32),
+        };
+        let mut pointer = datamodel::input::Pointer::default();
+        let button = datamodel::input::Button::Left;
+
+        //  THE CENTRE OF THE TOGGLE, which sits at (286, 16) and is 74 by 24.
+        let (x, y) = (286.0 + 37.0, 16.0 + 12.0);
+
+        //  A FRAME BETWEEN EACH STEP, because the framework polls the pointer on
+        //  a heartbeat rather than being pushed at. Without one it never sees the
+        //  press it is being asked about.
+        //  RECORDED BEFORE DISPATCHED, which is the order the renderer uses. A
+        //  framework polls `services` for where the pointer is and whether a
+        //  button is down; dispatching without recording delivers the event to
+        //  an instance and leaves the poller reading a pointer that never moved.
+        services::pointer_moved(x, y);
+        pointer.moved(&surface, x, y).expect("moved");
+        services::tick(&loaded.clock, 1.0 / 60.0);
+
+        services::pointer_button(button as usize, true);
+        pointer.down(&surface, button, x, y).expect("down");
+        services::tick(&loaded.clock, 1.0 / 60.0);
+
+        services::pointer_button(button as usize, false);
+        pointer.up(&surface, button, x, y).expect("up");
+        services::tick(&loaded.clock, 1.0 / 60.0);
+
+        let label_after = button_label(dom, *root);
+        assert_ne!(
+            label_before, label_after,
+            "pressing the toggle should change its label, was {label_before:?} and still is"
+        );
+    }
+
+    /// The toggle's caption, read out of the tree by name.
+    fn button_label(dom: &datamodel::SharedDom, root: usize) -> String {
+        let guard = dom.lock().expect("dom");
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if guard.name_of(id).as_deref() == Some("Label") {
+                if let Some(rbx_types::Variant::String(text)) = guard.property(id, "Text") {
+                    return text;
+                }
+            }
+            stack.extend(guard.children(id));
+        }
+        String::new()
     }
 }

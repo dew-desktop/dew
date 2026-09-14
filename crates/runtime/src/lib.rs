@@ -190,7 +190,15 @@ impl Application {
         prepare(&vm)?;
         modules::install(&vm, &caps)?;
         let chunk = modules::load_entry(&vm, entry)?;
-        let entry: LuaTable = chunk.call(())?;
+
+        //  A MODULE THAT RETURNS NOTHING IS NOT AN ERROR. An entry point that
+        //  opens its own surface and builds its own tree has nothing left to
+        //  hand back, and requiring a table here refused it at load with a type
+        //  error rather than letting a caller ask for a field and find none.
+        let entry: LuaTable = match chunk.call::<LuaValue>(())? {
+            LuaValue::Table(table) => table,
+            _ => vm.lua().create_table()?,
+        };
         Ok(Application { vm, entry })
     }
 

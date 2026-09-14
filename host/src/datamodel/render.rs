@@ -51,6 +51,7 @@ use dew_runtime::frame::{
     Align, AlphaStop, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale, Stop, Stroke,
 };
 use rbx_types::{Variant, Vector2};
+use std::collections::HashMap;
 
 use super::{Dom, SharedDom};
 
@@ -1171,15 +1172,48 @@ pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
     out
 }
 
+/// Where each node falls in paint order, back to front.
+///
+/// A CHILD ALWAYS DRAWS ABOVE ITS PARENT, and `ZIndex` orders SIBLINGS. That is
+/// `ZIndexBehavior.Sibling`, which is what a `ScreenGui` defaults to.
+///
+/// A single global sort by `ZIndex` is the other behaviour, `Global`, and it is
+/// wrong in a way that only shows up on a tree that uses both: a frame carrying
+/// `ZIndex = 3` painted after its own children, which carry the default 1, so a
+/// window's titlebar and text vanished under the window.
+///
+/// COMPUTED OVER THE TREE RATHER THAN BY REORDERING THE WALK, because the walk
+/// also decides layout: a `UIListLayout` positions children in declaration
+/// order, and `ZIndex` must not move anything. This ranks nodes separately and
+/// the solve is sorted by the rank afterwards.
+fn paint_rank(dom: &Dom, root: usize) -> HashMap<usize, usize> {
+    fn z_of(dom: &Dom, id: usize) -> i32 {
+        number(dom, id, "ZIndex").unwrap_or(1.0) as i32
+    }
+
+    fn walk(dom: &Dom, id: usize, next: &mut usize, out: &mut HashMap<usize, usize>) {
+        out.insert(id, *next);
+        *next += 1;
+
+        // STABLE, so siblings sharing a `ZIndex` keep declaration order, which is
+        // the rest of the engine's rule.
+        let mut kids = dom.children(id);
+        kids.sort_by_key(|child| z_of(dom, *child));
+        for child in kids {
+            walk(dom, child, next, out);
+        }
+    }
+
+    let mut out = HashMap::new();
+    let mut next = 0usize;
+    walk(dom, root, &mut next, &mut out);
+    out
+}
+
 /// Resolve everything under `root` into paint order, back to front.
 ///
 /// `root` itself is the surface and is not placed; its children are laid out
 /// against the box the surface offers, which is how a `ScreenGui` behaves.
-///
-/// PAINT ORDER IS ZINDEX, THEN DEPTH, THEN DECLARATION, per LAYOUT.md section 6.
-/// A STABLE sort on ZIndex alone gives the other two for free, because the walk
-/// is already depth-first in declaration order -- and `sort_by_key` on a `Vec`
-/// is stable, which is load bearing rather than incidental here.
 pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Placed> {
     let surface = Box2 {
         x: 0.0,
@@ -1188,12 +1222,13 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
         h: height,
     };
     let solved = solve_layout(dom, root, surface);
-    let mut collected: Vec<(i32, Placed)> = solved
+    let rank = paint_rank(dom, root);
+    let mut collected: Vec<(usize, Placed)> = solved
         .into_iter()
         .filter(|item| item.rect.w > 0.0 && item.rect.h > 0.0)
         .map(|item| {
             (
-                item.z_index,
+                rank.get(&item.id).copied().unwrap_or(usize::MAX),
                 Placed {
                     id: item.id,
                     rect: item.rect,
@@ -1203,7 +1238,7 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
             )
         })
         .collect();
-    collected.sort_by_key(|(z, _)| *z);
+    collected.sort_by_key(|(rank, _)| *rank);
     collected.into_iter().map(|(_, placed)| placed).collect()
 }
 
@@ -2289,5 +2324,151 @@ mod tests {
         let item = f.nodes.iter().find(|n| n.name == "Item").expect("item");
         // item y is 80 - 50 = 30.
         assert_eq!(item.rect.y, 30.0);
+    }
+}
+
+#[cfg(test)]
+mod paint_order {
+    use super::*;
+    use crate::datamodel::{install, install_vocabulary, SharedDom};
+    use mlua::prelude::*;
+
+    /// The ids a tree paints, back to front.
+    fn order(src: &str) -> Vec<String> {
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        lua.load(src).exec().expect("guest");
+
+        let guard = dom.lock().expect("dom");
+        display_list(&guard, root, 200.0, 100.0)
+            .into_iter()
+            .filter_map(|placed| guard.name_of(placed.id))
+            .collect()
+    }
+
+    /// A child draws above its parent, whatever the parent's `ZIndex`.
+    ///
+    /// THE BUG THIS PINS: paint order was one global sort by `ZIndex`, so a frame
+    /// carrying `ZIndex = 3` painted after its own children, which carry the
+    /// default 1. A window's titlebar and body text vanished underneath the
+    /// window that contained them.
+    ///
+    /// The suite did not catch it because the case that covers `ZIndex` uses
+    /// three siblings, and siblings order the same way under either rule.
+    #[test]
+    fn a_child_draws_above_its_parent() {
+        let painted = order(
+            r#"
+            local card = Instance.new("Frame")
+            card.Name = "Card"
+            card.Size = UDim2.new(0, 100, 0, 100)
+            card.ZIndex = 3
+            card.Parent = root
+
+            local label = Instance.new("Frame")
+            label.Name = "Label"
+            label.Size = UDim2.new(1, 0, 0, 20)
+            label.Parent = card
+            "#,
+        );
+        assert_eq!(
+            painted,
+            vec!["Card".to_string(), "Label".to_string()],
+            "a child paints after the parent that contains it"
+        );
+    }
+
+    /// `ZIndex` still orders siblings.
+    #[test]
+    fn zindex_orders_siblings() {
+        let painted = order(
+            r#"
+            for _, spec in ipairs({ { "Front", 3 }, { "Behind", 1 }, { "Middle", 2 } }) do
+                local f = Instance.new("Frame")
+                f.Name = spec[1]
+                f.Size = UDim2.new(0, 50, 0, 50)
+                f.ZIndex = spec[2]
+                f.Parent = root
+            end
+            "#,
+        );
+        assert_eq!(
+            painted,
+            vec![
+                "Behind".to_string(),
+                "Middle".to_string(),
+                "Front".to_string()
+            ]
+        );
+    }
+
+    /// Siblings sharing a `ZIndex` keep declaration order.
+    #[test]
+    fn equal_siblings_keep_declaration_order() {
+        let painted = order(
+            r#"
+            for _, name in ipairs({ "First", "Second", "Third" }) do
+                local f = Instance.new("Frame")
+                f.Name = name
+                f.Size = UDim2.new(0, 50, 0, 50)
+                f.Parent = root
+            end
+            "#,
+        );
+        assert_eq!(
+            painted,
+            vec![
+                "First".to_string(),
+                "Second".to_string(),
+                "Third".to_string()
+            ]
+        );
+    }
+
+    /// A high-`ZIndex` sibling does not jump above another sibling's children.
+    ///
+    /// The distinction between the two behaviours, in one tree: under a global
+    /// sort `Loud` outranks `Quiet`'s child and covers it. Under sibling order
+    /// the child belongs to `Quiet` and paints with it.
+    #[test]
+    fn a_branch_paints_together() {
+        let painted = order(
+            r#"
+            local quiet = Instance.new("Frame")
+            quiet.Name = "Quiet"
+            quiet.Size = UDim2.new(0, 100, 0, 100)
+            quiet.ZIndex = 5
+            quiet.Parent = root
+
+            local inner = Instance.new("Frame")
+            inner.Name = "Inner"
+            inner.Size = UDim2.new(0, 50, 0, 50)
+            inner.ZIndex = 1
+            inner.Parent = quiet
+
+            local loud = Instance.new("Frame")
+            loud.Name = "Loud"
+            loud.Size = UDim2.new(0, 100, 0, 100)
+            loud.ZIndex = 2
+            loud.Parent = root
+            "#,
+        );
+        assert_eq!(
+            painted,
+            vec!["Loud".to_string(), "Quiet".to_string(), "Inner".to_string()],
+            "Quiet outranks Loud as a sibling, and Inner belongs to Quiet"
+        );
     }
 }
