@@ -16,7 +16,14 @@
 
 --- `dew` IS A GLOBAL, the way `game` is one in the engine Dew is shaped after,
 --- and it carries exactly the capabilities `dew.toml` granted.
-local root = dew.widget({
+---
+--- `assert` RATHER THAN A BARE CALL, because `dew.widget` is nil when the
+--- manifest did not ask for a widget, and that is the capability model rather
+--- than an oversight. Naming the missing word here turns a nil call into a
+--- sentence that says what to add.
+local widget = assert(dew.widget, "dew.toml must grant `widget`")
+
+local root = widget({
 	width = 260,
 	height = 120,
 	anchor = "topRight",
