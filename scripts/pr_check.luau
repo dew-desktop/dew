@@ -49,6 +49,16 @@ for _, finding in ipairs(style.findForbidden(`{title}\n{body}`)) do
 	end
 end
 
+--- CONCATENATED, NOT JOINED. The scan only asks whether a byte is above
+--- 127, so a separator between the two would add nothing to look at.
+local at, character = style.nonAsciiAt(title .. body)
+if at and character then
+	table.insert(
+		problems,
+		`Remove the non-ASCII character '{character}'. Use a hyphen, a colon or a new sentence, and no emoji.`
+	)
+end
+
 if #problems > 0 then
 	print("pr_check: the pull request needs an edit before it can land")
 	print("")

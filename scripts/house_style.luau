@@ -110,6 +110,36 @@ end
 
 local style = {}
 
+--- Plain ASCII, which CONTRIBUTING promises for three places and had for one.
+---
+--- `verify_ascii` walks Markdown, so documentation was covered and commits and
+--- pull requests were not. A bare emoji in a subject passed every gate; the
+--- generated-by footer was refused for its words rather than for the robot in
+--- front of them.
+---
+--- BYTE ABOVE 127, not a character allowlist. An em dash, a curly quote, an
+--- arrow and an emoji are one rule, and naming them individually is how the next
+--- one gets in.
+function style.nonAsciiAt(text: string): (number?, string?)
+	for index = 1, #text do
+		local byte = string.byte(text, index)
+		if byte and byte > 127 then
+			--- Report the whole character, not the first byte of it, so the
+			--- message shows what to delete rather than a number.
+			local width = 1
+			if byte >= 240 then
+				width = 4
+			elseif byte >= 224 then
+				width = 3
+			elseif byte >= 192 then
+				width = 2
+			end
+			return index, string.sub(text, index, index + width - 1)
+		end
+	end
+	return nil, nil
+end
+
 --- Attribution and planning vocabulary, anywhere in a piece of text.
 function style.findForbidden(text: string): { Finding }
 	local found: { Finding } = {}

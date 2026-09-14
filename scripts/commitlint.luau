@@ -174,7 +174,16 @@ local function validateCommit(message: string): ValidationResult
         end
     end
 
-    -- 6. The body stays short enough to be read.
+    -- 6. Plain ASCII, which is promised for commits and was only checked in docs.
+    local at, character = style.nonAsciiAt(message)
+    if at and character then
+        table.insert(
+            errors,
+            `Non-ASCII character '{character}' at byte {at}; use a hyphen, a colon or a new sentence, and no emoji`
+        )
+    end
+
+    -- 7. The body stays short enough to be read.
     local bodyLines = 0
     local seenHeader = false
     --- `%C+` IS EVERY RUN OF NON-CONTROL CHARACTERS, which is one non-blank
