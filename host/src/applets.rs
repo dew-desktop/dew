@@ -300,6 +300,21 @@ pub fn load(
     // Pomodoro HUD" in its manifest should not present itself as `timetracker`.
     let surface = Declared::from_declaration(&declaration, manifest.display_name());
 
+    // A SURFACE IS A GRANT (ADR-012), and this is where the asking is checked.
+    //
+    // Every applet used to get one without saying so. Refusing here rather than
+    // at paint time means an applet that wants a screen-covering overlay is
+    // turned away before it has run, and the message names the word to add.
+    let needed = surface.permission();
+    if !manifest.permissions.contains(&needed) {
+        return Err(format!(
+            "{}: this applet uses a {} surface and dew.toml does not grant it; add {:?} to `permissions`.",
+            manifest.id,
+            needed.name(),
+            needed.name()
+        ));
+    }
+
     // THE SIGNATURE IS THE RUNTIME'S, and so is the message when it is missing.
     // An author who wrote a DataModel mod and forgot `mount` should not be shown
     // an Aether component's shape to copy.
@@ -508,6 +523,38 @@ mod tests {
         }
     }
 
+    /// A SURFACE IS A GRANT, AND THE REFUSAL NAMES THE WORD TO ADD.
+    ///
+    /// Every applet used to get a surface without asking. An author who has just
+    /// learned that surfaces are permissions should be told which one, not that
+    /// something was denied.
+    #[test]
+    fn an_applet_may_not_use_a_surface_it_did_not_declare() {
+        let fixture = Fixture::new(
+            "ungranted",
+            "id = \"plain\"
+runtime = \"datamodel\"
+", // no surface on purpose
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 10, height = 10 },
+                    mount = function(_dew, _root) end,
+                }
+            "#,
+        );
+
+        let err = match fixture.load() {
+            Err(e) => e,
+            Ok(_) => panic!("an applet with no surface permission must not load"),
+        };
+
+        assert!(
+            err.contains("widget") && err.contains("permissions"),
+            "the refusal should name the permission to add, got: {err}"
+        );
+    }
+
     /// THE ISOLATION IS ASSERTED, NOT ASSUMED.
     ///
     /// Before milestone 6 the host granted every mod Aether's source directory
@@ -522,7 +569,7 @@ mod tests {
     fn a_mod_cannot_reach_a_framework_it_did_not_declare() {
         let fixture = Fixture::new(
             "undeclared",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 local Aether = require("@aether/api")
                 return { id = "plain", size = { width = 10, height = 10 } }
@@ -562,7 +609,11 @@ mod tests {
 
     #[test]
     fn a_datamodel_mod_mounts_and_the_renderer_finds_what_it_parented() {
-        let fixture = Fixture::new("mounts", "id = \"plain\"\nruntime = \"datamodel\"\n", PLAIN);
+        let fixture = Fixture::new(
+            "mounts",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            PLAIN,
+        );
         let loaded = fixture.load().expect("the mod loads");
 
         assert_eq!(loaded.mounted.runtime(), Runtime::DataModel);
@@ -585,7 +636,7 @@ mod tests {
         // the root the host made, and the VM a mod is actually given.
         let fixture = Fixture::new(
             "clickable",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -643,7 +694,7 @@ mod tests {
         // it is a GLOBAL, since a mod is handed `dew` and `root` and nothing else.
         let fixture = Fixture::new(
             "services",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -672,7 +723,7 @@ mod tests {
         // sees it as `take_dirty` answering true for a mod that changed nothing.
         let fixture = Fixture::new(
             "idleclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 ticks = 0
                 return {
@@ -717,7 +768,7 @@ mod tests {
         // listener must repaint -- the paint follows the change, not the tick.
         let fixture = Fixture::new(
             "animclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -813,7 +864,7 @@ mod tests {
         // it built is in this host's own arena.
         let fixture = Fixture::new(
             "aetherhost",
-            "id = \"plain\"\nruntime = \"aether\"\n",
+            "id = \"plain\"\nruntime = \"aether\"\npermissions = [\"widget\"]\n",
             AETHER_MOD,
         );
         let loaded = fixture.load_aether().expect("the mod loads");
@@ -885,7 +936,7 @@ mod tests {
         // test noticed, because none read one back.
         let fixture = Fixture::new(
             "aethervalues",
-            "id = \"plain\"\nruntime = \"aether\"\n",
+            "id = \"plain\"\nruntime = \"aether\"\npermissions = [\"widget\"]\n",
             AETHER_MOD,
         );
         let loaded = fixture.load_aether().expect("the mod loads");
@@ -959,7 +1010,7 @@ mod tests {
         // count being wrong.
         let fixture = Fixture::new(
             "vocabulary",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             PLAIN,
         );
         assert!(fixture.load().is_ok());
@@ -989,7 +1040,7 @@ mod tests {
         // manifest granted.
         let fixture = Fixture::new(
             "caps",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"storage\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1008,7 +1059,7 @@ mod tests {
     fn a_datamodel_mod_without_mount_is_told_the_signature_it_needed() {
         let fixture = Fixture::new(
             "nomount",
-            "id = \"plain\"\nruntime = \"datamodel\"\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"return { id = "plain" }"#,
         );
         let Err(message) = fixture.load() else {
@@ -1033,7 +1084,7 @@ mod tests {
     fn a_mod_resolves_an_image_through_rbxassetid_with_grant() {
         let fixture = Fixture::new(
             "rbxgrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"rbxassetid\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"rbxassetid\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1081,7 +1132,7 @@ mod tests {
     fn a_mod_is_refused_an_image_through_rbxassetid_without_grant() {
         let fixture = Fixture::new(
             "rbxnogrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"storage\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",

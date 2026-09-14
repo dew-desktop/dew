@@ -24,6 +24,19 @@ pub enum Permission {
     Clipboard,
     #[serde(rename = "rbxassetid")]
     RbxAssetId,
+
+    // SURFACES ARE CAPABILITIES (ADR-012), and they are separate ones because
+    // they differ in weight. A widget draws in a corner. An overlay that is
+    // topmost and click-through can draw over everything on screen while the
+    // user does not know it is there. Granting those with one word would be
+    // saying they are the same request.
+    //
+    // Every applet gets a surface today without asking. These make the asking
+    // explicit, which is the honest version of what was always happening.
+    Widget,
+    Window,
+    Overlay,
+    Popover,
 }
 
 impl Permission {
@@ -34,7 +47,23 @@ impl Permission {
             Permission::Notifications => "notifications",
             Permission::Clipboard => "clipboard",
             Permission::RbxAssetId => "rbxassetid",
+            Permission::Widget => "widget",
+            Permission::Window => "window",
+            Permission::Overlay => "overlay",
+            Permission::Popover => "popover",
         }
+    }
+
+    /// Is this permission a surface, meaning something Dew renders a tree into?
+    ///
+    /// THE RULE FROM ADR-012, in code. `notifications` and a future `tray` are
+    /// capabilities the operating system draws, so they are not surfaces however
+    /// visible they are.
+    pub fn is_surface(self) -> bool {
+        matches!(
+            self,
+            Permission::Widget | Permission::Window | Permission::Overlay | Permission::Popover
+        )
     }
 }
 
