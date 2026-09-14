@@ -10,7 +10,7 @@ environment = "roblox"
 lib = "pressable.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "9198c821e7eb0869676b4891f35384feacd4d3af" }
+aether = { repo = "project-aether-ui/aether", rev = "829654aea753d1761f026aa8f41d0ae445ffc066" }
 vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
 
 [indices]
