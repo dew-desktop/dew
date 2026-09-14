@@ -79,11 +79,17 @@ local config: CommitLintConfig = {
     maxHeaderLength = 100,
     enforceLowerCaseScope = true,
 
-    --- A BODY IS EARNED, NOT OWED. Most changes need no body at all, and a long
-    --- one is usually the diff restated rather than the reasoning that is
-    --- missing from it. Blank lines and trailers are not counted; when a change
-    --- genuinely needs more than this, the pull request body is where it goes.
-    maxBodyLines = 12,
+    --- A BODY IS EARNED, NOT OWED, and most changes need none at all.
+    ---
+    --- SIX, NOT TWELVE. The first cap was set at twelve and every commit written
+    --- under it had a body, none shorter than three lines: a generous limit
+    --- reads as a budget to spend rather than a line not to cross. Six is one
+    --- tight paragraph, which is the most a why that the diff cannot show has
+    --- ever actually needed here.
+    ---
+    --- Blank lines and trailers are not counted. When a change genuinely needs
+    --- more explaining, the pull request is where that goes.
+    maxBodyLines = 6,
 }
 
 local function parseCommit(message: string): (ParsedCommit?, string?)

@@ -58,10 +58,12 @@ cannot say is what was wrong, what else was tried, and what this now costs.
 A commit is self-contained. It cannot lean on a PR description, an issue, or a
 conversation, because in two years the reader has `git show` and nothing else.
 
-**Twelve lines is the cap, and most changes need none.**
-A long body is usually the diff restated rather than the reasoning missing from
-it. When a change genuinely needs more explaining, the pull request body is where
-that goes.
+**Write the subject and stop.** That is the default, not a terse option. Most
+commits need no body, and one added out of habit buries the few that matter.
+
+Before writing a body, say what it tells a reader that the subject and the diff
+do not. If the answer takes a moment to find, there is no body to write. Six
+lines is the cap when there is one; a long body is usually the diff restated.
 
 ### Do not name the planning notes
 
