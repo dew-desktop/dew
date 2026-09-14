@@ -7,4 +7,4 @@ name = "Calculator"
 description = "Quick math widget"
 
 # DECLARES NO PERMISSIONS, and gets none. Deny by default, working.
-permissions = []
+permissions = ["widget"]

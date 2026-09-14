@@ -8,7 +8,7 @@ description = "Minimalist active time tracker, Pomodoro focus cycles, and task l
 
 # WHAT THIS APPLET MAY REACH. Absent means nothing, which is the correct default:
 # an applet that renders and cannot touch the machine fails loudly and locally.
-permissions = ["storage", "audio", "notifications"]
+permissions = ["widget", "storage", "audio", "notifications"]
 
 # KEYS DEW DOES NOT READ YET, AND THEY STAY.
 #

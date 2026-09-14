@@ -19,6 +19,7 @@
 //! exactly how `dew.toml`'s permissions were decoration before they were
 //! enforced.
 
+use crate::manifest::Permission;
 #[cfg(windows)]
 use dew_window::Surface;
 use mlua::prelude::*;
@@ -87,6 +88,19 @@ impl Declared {
     /// A mod that declares none gets a WIDGET, because that is what Dew is for.
     /// A desktop applet platform whose default is an ordinary window would be
     /// making every author opt in to the thing they came for.
+    /// Which permission this surface needs.
+    ///
+    /// ONE PER KIND (ADR-012), because they differ in weight. A widget draws in a
+    /// corner; an overlay that is topmost and click-through can draw over
+    /// everything on screen while the user does not know it is there.
+    pub fn permission(&self) -> Permission {
+        match self {
+            Declared::Widget { .. } => Permission::Widget,
+            Declared::Window { .. } => Permission::Window,
+            Declared::Overlay { .. } => Permission::Overlay,
+        }
+    }
+
     pub fn from_declaration(declaration: &LuaTable, fallback_title: &str) -> Declared {
         let Ok(surface) = declaration.get::<LuaTable>("surface") else {
             return Declared::default_widget();

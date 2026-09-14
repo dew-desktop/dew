@@ -24,6 +24,19 @@ pub enum Permission {
     Clipboard,
     #[serde(rename = "rbxassetid")]
     RbxAssetId,
+
+    // SURFACES ARE CAPABILITIES (ADR-012), and they are separate ones because
+    // they differ in weight. A widget draws in a corner. An overlay that is
+    // topmost and click-through can draw over everything on screen while the
+    // user does not know it is there. Granting those with one word would be
+    // saying they are the same request.
+    //
+    // Every applet gets a surface today without asking. These make the asking
+    // explicit, which is the honest version of what was always happening.
+    Widget,
+    Window,
+    Overlay,
+    Popover,
 }
 
 impl Permission {
@@ -34,7 +47,39 @@ impl Permission {
             Permission::Notifications => "notifications",
             Permission::Clipboard => "clipboard",
             Permission::RbxAssetId => "rbxassetid",
+            Permission::Widget => "widget",
+            Permission::Window => "window",
+            Permission::Overlay => "overlay",
+            Permission::Popover => "popover",
         }
+    }
+
+    /// The surface permission named by a word, for `dew init --surface`.
+    ///
+    /// SURFACES ONLY, not every permission. The scaffolder's job is to grant the
+    /// applet somewhere to draw; handing it `--surface storage` should be refused
+    /// rather than written into the manifest as though it meant something.
+    pub fn surface_from_name(word: &str) -> Option<Permission> {
+        let found = match word {
+            "widget" => Permission::Widget,
+            "window" => Permission::Window,
+            "overlay" => Permission::Overlay,
+            "popover" => Permission::Popover,
+            _ => return None,
+        };
+        Some(found)
+    }
+
+    /// Is this permission a surface, meaning something Dew renders a tree into?
+    ///
+    /// THE RULE FROM ADR-012, in code. `notifications` and a future `tray` are
+    /// capabilities the operating system draws, so they are not surfaces however
+    /// visible they are.
+    pub fn is_surface(self) -> bool {
+        matches!(
+            self,
+            Permission::Widget | Permission::Window | Permission::Overlay | Permission::Popover
+        )
     }
 }
 
@@ -163,7 +208,7 @@ impl Manifest {
     /// Split out for the tests rather than for the callers: what is worth
     /// checking is which keys survive and which get reported, and routing that
     /// through a temporary directory would test the filesystem instead.
-    fn parse(raw: &str, label: &str) -> Result<Manifest, String> {
+    pub fn parse(raw: &str, label: &str) -> Result<Manifest, String> {
         // A BOM survives `read_to_string` and a parser rejects it as a value.
         let raw = raw.strip_prefix('\u{feff}').unwrap_or(raw);
 

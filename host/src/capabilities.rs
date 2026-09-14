@@ -46,7 +46,20 @@ pub fn build(lua: &Lua, granted: &[Permission], state: &Shared) -> LuaResult<Lua
     dew.set("time", time)?;
 
     for permission in granted {
+        // A SURFACE PERMISSION PUTS NOTHING ON `dew` YET.
+        //
+        // It is a grant the host checks when the applet asks for a surface, and
+        // the asking arrives in the next branch (ADR-012). Skipping here rather
+        // than falling through a catch-all keeps the match exhaustive, so adding
+        // a permission still fails to compile until somebody decides what it
+        // hands over.
+        if permission.is_surface() {
+            continue;
+        }
         match permission {
+            Permission::Widget | Permission::Window | Permission::Overlay | Permission::Popover => {
+                unreachable!("surfaces are skipped above")
+            }
             Permission::Storage => {
                 let storage = lua.create_table()?;
 
