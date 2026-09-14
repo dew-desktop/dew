@@ -138,6 +138,43 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// ITS OWN VM IS THE POINT. See `run_demo`: sharing one with the differential pass
 /// puts two live trees behind one module-level `PointerRouter`, and the press goes
 /// to whichever it resolves first.
+/// A `dew` global for a VM that is measuring rather than running.
+///
+/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.widget`, so a VM without one
+/// cannot load it at all: the call is at module scope and there is nothing to
+/// index. This is the same answer the host gives, narrowed to what a measurement
+/// needs, which is a root to parent into.
+///
+/// EVERY SURFACE IS PRESENT HERE, unlike in the host, where the table carries
+/// only what the manifest granted. Nothing is being protected in a measuring
+/// VM, and refusing one would make the measurement depend on a manifest it does
+/// not otherwise read.
+fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
+    let dew = lua.create_table()?;
+
+    let time = lua.create_table()?;
+    time.set(
+        "now",
+        lua.create_function(|_, ()| {
+            Ok(std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0))
+        })?,
+    )?;
+    dew.set("time", time)?;
+
+    for surface in ["widget", "window", "overlay", "popover"] {
+        let handed = root.clone();
+        dew.set(
+            surface,
+            lua.create_function(move |_, _options: Option<mlua::Table>| Ok(handed.clone()))?,
+        )?;
+    }
+
+    lua.globals().set("dew", dew)
+}
+
 fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Vec<String>>, String> {
     let mut caps = Capabilities::cli(dir.to_path_buf());
     caps.require_roots = vec![dir.to_path_buf()];
@@ -158,7 +195,8 @@ fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Vec<Strin
         services::install(vm.lua(), &installer_clock)?;
         datamodel::install_vocabulary(vm.lua())?;
         let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
-        vm.lua().globals().set("DewRoot", root_handle)?;
+        vm.lua().globals().set("DewRoot", root_handle.clone())?;
+        install_dew(vm.lua(), root_handle)?;
         Ok(())
     })
     .map_err(|e| format!("{name}: the demo did not load for measurement: {e}"))?;
@@ -242,7 +280,8 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
         services::install(vm.lua(), &installer_clock)?;
         datamodel::install_vocabulary(vm.lua())?;
         let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
-        vm.lua().globals().set("DewRoot", root_handle)?;
+        vm.lua().globals().set("DewRoot", root_handle.clone())?;
+        install_dew(vm.lua(), root_handle)?;
         Ok(())
     })
     .map_err(|e| format!("{name}: the demo did not load: {e}"))?;

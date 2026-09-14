@@ -46,6 +46,10 @@ type WindowOptions = {
 --- `BackgroundTransparency = 1` or the overlay becomes a screen-sized sheet of
 --- glass that swallows every click on the machine.
 type OverlayOptions = {
+	--- The screen supplies the size when this runs in a window. These are the
+	--- size it was designed against, and what a headless render uses.
+	width: number?,
+	height: number?,
 	--- Above every other window. Defaults to true.
 	topmost: boolean?,
 	clickThrough: boolean?,
