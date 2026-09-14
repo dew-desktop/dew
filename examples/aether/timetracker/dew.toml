@@ -6,6 +6,10 @@ id = "timetracker"
 name = "Time Tracker & Pomodoro HUD"
 description = "Minimalist active time tracker, Pomodoro focus cycles, and task logger"
 
+# This applet mounts its own framework, so the host hands it a root and stays out
+# of the way.
+runtime = "datamodel"
+
 # WHAT THIS APPLET MAY REACH. Absent means nothing, which is the correct default:
 # an applet that renders and cannot touch the machine fails loudly and locally.
 permissions = ["widget", "storage", "audio", "notifications"]
