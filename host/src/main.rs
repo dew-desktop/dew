@@ -1340,7 +1340,7 @@ fn execute_init(
     let mod_json = serde_json::json!({
         "id": name,
         "name": display_name,
-        "description": format!("A Dew mod ({})", runtime.name()),
+        "description": format!("A Dew applet ({})", runtime.name()),
         "runtime": runtime.name(),
         "permissions": []
     });
@@ -1354,7 +1354,7 @@ fn execute_init(
         manifest::Runtime::DataModel => format!(
             r#"--!strict
 --[[
-	{display_name} -- a Dew mod written against the native DataModel.
+	{display_name} -- a Dew applet written against the native DataModel.
 ]]
 
 local function mount(_dew: any, root: Instance)
@@ -1386,7 +1386,7 @@ return {{
         manifest::Runtime::Aether => format!(
             r#"--!strict
 --[[
-	{display_name} -- a Dew mod written against Aether.
+	{display_name} -- a Dew applet written against Aether.
 ]]
 
 local aether = require("@aether/api")
@@ -1781,7 +1781,7 @@ fn execute_help(subcommand: Option<String>) {
         Some("init") | Some("scaffold") => {
             println!("Usage: dew init <NAME> [OPTIONS]");
             println!();
-            println!("Scaffold a new Dew mod with a valid manifest and working entrypoint.");
+            println!("Scaffold a new Dew applet with a valid manifest and working entrypoint.");
             println!();
             println!("Arguments:");
             println!("  <NAME>                Mod identifier and directory name");

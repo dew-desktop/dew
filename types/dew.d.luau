@@ -1,6 +1,6 @@
 --!strict
 --[[
-	Type declarations for what a Dew mod is handed.
+	Type declarations for what a Dew applet is handed.
 
 	Kept beside the host that produces it: `host/src/capabilities.rs` builds the
 	table this describes, and `host/src/applets.rs` reads the declaration. If those

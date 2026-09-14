@@ -1,6 +1,6 @@
 --!strict
 --[[
-	Nameplate — a Dew mod written against no framework at all.
+	Nameplate — a Dew applet written against no framework at all.
 
 	    cargo run --manifest-path host/Cargo.toml -- snapshot applets/nameplate -o out.png
 

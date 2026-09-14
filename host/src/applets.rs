@@ -309,8 +309,8 @@ pub fn load(
     };
     let mount: LuaFunction = declaration.get("mount").map_err(|_| {
         format!(
-            "{}: the module returned no `mount` — a Dew mod returns \
-             {{ id = …, size = …, {signature} }}. See docs/mod_contract.md",
+            "{}: the module returned no `mount` — a Dew applet returns \
+             {{ id = …, size = …, {signature} }}. See docs/applet_contract.md",
             manifest.id
         )
     })?;

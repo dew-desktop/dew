@@ -70,12 +70,34 @@ local mounted = Aether.Desktop.Mount(function()
 	return build(Aether)
 end, WIDTH, HEIGHT)
 
-;(mounted.Tree :: any).Parent = (DewRoot :: any)
+--- PARENTED HERE ONLY IF A ROOT IS ALREADY IN SCOPE.
+---
+--- `framework-coverage` installs a `DewRoot` global and never calls `mount`, so
+--- the tree has to reach the surface at load for it. `dew` calls `mount` and
+--- hands the root in, which is the branch below.
+if (DewRoot :: any) ~= nil then
+	(mounted.Tree :: any).Parent = (DewRoot :: any)
+end
 
 return {
+	id = "pressable",
+
+	--- `size` FOR THE HOST, `Width`/`Height` FOR THE TOOL. Two consumers reading
+	--- the same two numbers under different names; without `size` the host
+	--- rendered this at a default and the image was the wrong shape.
+	size = { width = WIDTH, height = HEIGHT },
+
 	Session = mounted.Session,
 	Width = WIDTH,
 	Height = HEIGHT,
+
+	--- WHAT `dew` CALLS. The tree is already built, so this only parents it into
+	--- the root the host made. An applet that mounts its own framework needs
+	--- nothing else from the host.
+	mount = function(_dew: any, root: any)
+		(mounted.Tree :: any).Parent = root
+		return mounted.Tree
+	end,
 
 	--- DOWN AND HELD. The press is left down so the last paint differs from the
 	--- first: releasing would restore the colour and the differential would read
