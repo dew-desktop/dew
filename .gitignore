@@ -55,3 +55,14 @@ gallery/renders/
 # rather than redistributed by this repository -- see NOTICE. Anything that needs it says so and degrades when it is
 # absent.
 host/datamodel/api_surface.json
+
+# Agent instructions are local, not repository policy.
+#
+# What a contributor has to follow lives in docs/contributing/ and is enforced by
+# scripts/ -- those are the same for everyone. A file addressed to a particular
+# assistant is a private working note, and publishing one invites a reader to
+# judge the work by the tooling that produced it rather than by the work.
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.claude/settings.local.json

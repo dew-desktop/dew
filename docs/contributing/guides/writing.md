@@ -43,6 +43,10 @@ Type and scope follow the conventional-commit scopes, mapped to directories.
 `scripts/commitlint_check.luau` runs it. The subject is imperative and
 lowercase: "fix the layer root", not "fixed" or "Fixes".
 
+A subject that opens with an article or a quantifier is a statement rather than
+an instruction, however true it is. "a surface is a permission" and "one pump for
+the thread" both describe the result; say what applying the commit does.
+
 Scope is required, except for `docs` and `chore`. Those routinely span the whole
 repository, and `docs(docs)` is not information; a `feat` or a `fix` always
 happened somewhere, so it always says where.
@@ -53,6 +57,21 @@ cannot say is what was wrong, what else was tried, and what this now costs.
 
 A commit is self-contained. It cannot lean on a PR description, an issue, or a
 conversation, because in two years the reader has `git show` and nothing else.
+
+**Twelve lines is the cap, and most changes need none.**
+A long body is usually the diff restated rather than the reasoning missing from
+it. When a change genuinely needs more explaining, the pull request body is where
+that goes.
+
+### Do not name the planning notes
+
+`.artifacts/` is not published. A commit or a pull request that says "milestone 9
+step B", "ADR-012" or "the sprint plan" names something the reader cannot open,
+and it dates the moment the plan moves on.
+
+Say what the work is FOR. Not "milestone 9 step B", but "an applet asks the host
+for the surface it draws into". The theme stays true after the numbering has been
+forgotten, and it is the part a reader needed anyway.
 
 ### What makes a body worth reading
 
@@ -117,7 +136,12 @@ request body.
 
 The trailer means "a person to contact", which a tool is not. It also cannot be
 removed later without rewriting published history, so the default is to leave it
-out.
+out. A generated-by footer does worse than the trailer: it invites a reader to
+judge the prose above it by the tool named under it.
+
+`scripts/pr_check.luau` holds a pull request title and body to the rules on this
+page, and `scripts/commitlint_check.luau` holds every commit to them. Both read
+`scripts/house_style.luau`, so the two cannot drift.
 
 ---
 
