@@ -86,9 +86,9 @@ struct Demo {
 ///
 /// WALKED RATHER THAN LISTED, because examples are grouped by what they show:
 /// `examples/aether/pressable` sits one level deeper than a flat scan expects.
-/// Scanning one level found nothing after an earlier regrouping and printed an
-/// honest-looking `0 of 56`, which is the failure a generated number is supposed
-/// to prevent rather than produce.
+/// A one-level scan finds nothing the moment an example sits a directory deeper,
+/// and prints an honest-looking `0 of 56`, which is the failure a generated
+/// number is supposed to prevent rather than produce.
 fn demo_entries(root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.to_path_buf()];

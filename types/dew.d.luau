@@ -11,13 +11,11 @@
 	table this describes and `host/src/applets.rs` installs it. If those two and
 	this file disagree, they are wrong and this is stale.
 
-	A SURFACE RETURNS `any` AND SHOULD RETURN `Instance`. Definition files are
+	A surface returns `any` and should return `Instance`. Definition files are
 	parsed one at a time and share no types with each other, so naming `Instance`
 	here makes the whole file fail to load wherever the DataModel types are not in
-	this same file, and an applet gets no `dew` at all rather than a loosely typed
-	root. `declare class` would let this file define `Instance` itself and
-	luau-lsp 1.69 does not accept it. This tightens when Dew ships type
-	definitions for its own DataModel, which is the thing that should own them.
+	it, and an applet then gets no `dew` at all. This tightens when Dew ships type
+	definitions for its own DataModel.
 ]]
 
 type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center"

@@ -318,12 +318,11 @@ pub fn load(
     //  contract had to return a table: there was no other way to be given a
     //  capability table.
     //
-    //  NOT A VARARG, WHICH WAS THE FIRST ATTEMPT. A chunk's `...` reaches the
-    //  entry module and stops there, so an applet split across two files could
-    //  not see `dew` from the second one without threading it through every call
-    //  that needed it. It is also not an idiom an applet author has met: a
-    //  ModuleScript's chunk receives nothing, so `local dew = ...` is a line
-    //  that means nothing in the engine.
+    //  NOT THE CHUNK'S VARARG. A chunk's `...` reaches the entry module and stops
+    //  there, so an applet split across two files could not see `dew` from the
+    //  second one without threading it through every call that needed it. It is
+    //  also not an idiom an applet author has met: a ModuleScript's chunk
+    //  receives nothing, so `local dew = ...` means nothing in the engine.
     //
     //  AN UNGRANTED CAPABILITY IS STILL ABSENT RATHER THAN GUARDED. That comes
     //  from which keys this table has, which `capabilities::build` decides from
@@ -1320,10 +1319,10 @@ frame.Parent = root
 
     /// A second file in the applet can reach `dew` without being handed it.
     ///
-    /// THE REASON IT IS A GLOBAL. The first attempt passed it as the entry
-    /// chunk's vararg, which reaches the entry module and stops there: an applet
-    /// split across two files saw nothing from the second one, and `dew` would
-    /// have had to be threaded through every call that wanted it.
+    /// THE REASON IT IS A GLOBAL RATHER THAN THE CHUNK'S VARARG. `...` reaches
+    /// the entry module and stops there, so an applet split across two files
+    /// would see nothing from the second one, and `dew` would have to be
+    /// threaded through every call that wanted it.
     #[test]
     fn a_required_module_can_reach_dew() {
         let fixture = Fixture::new(
