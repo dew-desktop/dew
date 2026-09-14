@@ -272,7 +272,7 @@ pub fn load(
         //       in both places -- which is a property of the TREE rather than of
         //       anything named `game`.
         //
-        //       HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/standalone`
+        //       HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/host/standalone`
         //       reaches for a `DewRoot` global because a bare script has no
         //       function to receive one; a mod has `mount`, and a parameter is
         //       the same argument that keeps `dew` off the globals table — what a
@@ -1054,7 +1054,7 @@ runtime = \"datamodel\"
         // reports the solved rectangle through `Host.SetBounds`. That used to
         // write it into `Position` and `Size` -- the properties the solver READS
         // -- so every frame it added the parent's offset to an offset it had
-        // already made absolute. On `applets/timetracker` a label walked 286 pixels
+        // already made absolute. On `examples/aether/timetracker` a label walked 286 pixels
         // right per frame and the widget repainted 305 times a second doing
         // nothing. It passed every test in both repositories, because nothing
         // off-engine had ever driven that host before.

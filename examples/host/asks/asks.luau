@@ -2,7 +2,7 @@
 --[[
 	Asks -- an applet that asks the host for a surface and returns nothing.
 
-	    cargo run -- demos/asks
+	    cargo run -- examples/host/asks
 
 	The older shape returns a table the host reads: a `size`, a `surface` block
 	and a `mount` for the host to call back into. That made the applet describe

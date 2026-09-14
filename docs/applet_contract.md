@@ -155,7 +155,7 @@ Dew's own additions are capabilities and lifecycle, not construction.
 
 The same argument is why a `"datamodel"` applet authors in the engine's idiom rather
 than a host one: `Instance.new`, property assignment and `Parent` are what a
-an engine developer already knows, and `applets/nameplate` would build the identical
+an engine developer already knows, and `examples/widgets/nameplate` would build the identical
 tree inside a place. Neither flavour is a Dew dialect; they are the two idioms
 that already exist.
 
@@ -306,7 +306,7 @@ the difference out loud at load.
 
 `hotkeys` is the one field Dew accepts and does not act on. Nothing in the host
 registers a global hotkey, so a declared binding has never fired.
-`applets/timetracker` ships three. Rather than delete the field, which would make
+`examples/aether/timetracker` ships three. Rather than delete the field, which would make
 the format quietly narrower without deciding anything, the host reports each one
 by name at load:
 

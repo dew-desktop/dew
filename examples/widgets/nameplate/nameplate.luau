@@ -2,7 +2,7 @@
 --[[
 	Nameplate — a Dew applet written against no framework at all.
 
-	    cargo run --manifest-path host/Cargo.toml -- snapshot applets/nameplate -o out.png
+	    cargo run --manifest-path host/Cargo.toml -- snapshot examples/widgets/nameplate -o out.png
 
 	THE THIRD MOD, AND THE FIRST THAT IMPORTS NOTHING. `calculator`, `timetracker`
 	and `workspace` are Aether components: they `require("./roblox_packages/aether")`, return a
@@ -12,7 +12,7 @@
 	would do inside the engine.
 
 	IT IS A MOD, NOT A SCRIPT, and that is the whole point of this sprint.
-	`examples/standalone/app.luau` already proved the DataModel reaches a pixel,
+	`examples/host/standalone/app.luau` already proved the DataModel reaches a pixel,
 	but it was run with `--script`: no `dew.toml`, no capability table, no surface
 	placement, and not discovered from `applets/`. This one arrives through the
 	ordinary loader with all four.
@@ -171,7 +171,7 @@ return {
 		--- pass prefers `ImageContent` only when both are set, because that is the
 		--- one the engine's own migration keeps.
 		---
-		--- `mod://` RESOLVES BESIDE THIS FILE, which is `applets/nameplate/`. It is
+		--- `mod://` RESOLVES BESIDE THIS FILE, which is `examples/widgets/nameplate/`. It is
 		--- the only scheme this host resolves today: `rbxassetid://` needs the
 		--- scheme registry, the permission and the fetch that are Sprint 5, and
 		--- until then it reports itself by name and draws as a missing box rather

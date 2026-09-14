@@ -1,4 +1,4 @@
-name = "dew_applets/workspace"
+name = "dew_examples/timetracker"
 version = "0.0.1"
 
 # A MOD DECLARES ITS OWN FRAMEWORK. The host used to hand every applet Aether and
@@ -6,7 +6,7 @@ version = "0.0.1"
 # Roblox place installs its packages and requires them by name; so does this.
 [target]
 environment = "roblox"
-lib = "workspace.luau"
+lib = "timetracker.luau"
 
 [dependencies]
 aether = { repo = "project-aether-ui/aether", rev = "5c44eb469601bda06e0b366e41c938f718b1cd32" }

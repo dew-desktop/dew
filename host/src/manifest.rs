@@ -164,7 +164,7 @@ pub struct Manifest {
     /// Named bindings the mod wants, e.g. `"togglePomodoro": "Alt+Shift+P"`.
     ///
     /// DECLARED, NOT YET BOUND. Nothing in the host registers a global hotkey,
-    /// so every one of these is inert -- `applets/timetracker` ships three that
+    /// so every one of these is inert -- `examples/aether/timetracker` ships three that
     /// have never once fired. The field stays because it is the contract Dew
     /// intends to honour, and `unhonoured()` says so at load rather than leaving
     /// an author to conclude from silence that the binding took.
@@ -287,7 +287,7 @@ mod tests {
 
     #[test]
     fn unknown_keys_are_captured_rather_than_dropped() {
-        // The three keys `applets/timetracker/dew.toml` really carries.
+        // The three keys `examples/aether/timetracker/dew.toml` really carries.
         let m = parse("id = \"t\"\nversion = \"1.0.0\"\nauthor = \"someone\"\n[settings]\na = 1\n");
         assert_eq!(m.unknown, vec!["author", "settings", "version"]);
     }

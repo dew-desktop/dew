@@ -159,12 +159,18 @@ if not fs.isFile(EXE) then
 	process.exit(1)
 end
 
---- EVERY APPLET, not the first one. A broken applet is skipped at runtime with a
---- message and the host carries on, which is right when a user has ten installed
---- and wrong here, where the skip is the thing being tested for.
-local targets = appletsIn("applets")
-for _, demo in ipairs(appletsIn("demos")) do
-	table.insert(targets, demo)
+--- EVERY EXAMPLE, not the first one. A broken applet is skipped at runtime with
+--- a message and the host carries on, which is right when a user has ten
+--- installed and wrong here, where the skip is the thing being tested for.
+---
+--- THE GROUPS ARE NAMED, not discovered. A walk would pick up whatever landed
+--- under `examples/` next, and a suite that silently grows is one nobody reads
+--- the output of.
+local targets: { string } = {}
+for _, group in ipairs({ "examples/aether", "examples/widgets", "examples/host" }) do
+	for _, found in ipairs(appletsIn(group)) do
+		table.insert(targets, found)
+	end
 end
 
 if #targets == 0 then
@@ -191,7 +197,7 @@ print("the standalone script path")
 ok("snapshot a bare script", {
 	"snapshot",
 	"--script",
-	"examples/standalone/app.luau",
+	"examples/host/standalone/app.luau",
 	"--size",
 	"360x220",
 	"-o",
@@ -201,24 +207,28 @@ ok("snapshot a bare script", {
 print("selecting an applet by path")
 ok(
 	"snapshot names the applet it rendered",
-	{ "snapshot", "applets/nameplate", "-o", `{TEMP}/smoke_nameplate.png` },
+	{ "snapshot", "examples/widgets/nameplate", "-o", `{TEMP}/smoke_nameplate.png` },
 	"for nameplate"
 )
 
 print("scaffolding")
-local SCAFFOLD = "applets/smoke_scaffold"
+local SCAFFOLD = "examples/host/smoke_scaffold"
 if fs.isDir(SCAFFOLD) then
 	fs.removeDir(SCAFFOLD)
 end
-ok("init scaffolds an applet", { "init", "smoke_scaffold", "--runtime", "datamodel" })
+ok("init scaffolds an applet", { "init", SCAFFOLD, "--runtime", "datamodel" })
 ok("the scaffold passes check", { "check", SCAFFOLD })
 ok("the scaffold renders", { "snapshot", SCAFFOLD, "-o", `{TEMP}/smoke_scaffold.png` })
 if fs.isDir(SCAFFOLD) then
 	fs.removeDir(SCAFFOLD)
 end
-refused("an unknown surface is refused", { "init", "smoke_bad", "--surface", "windwo" }, "unknown surface")
-if fs.isDir("applets/smoke_bad") then
-	fs.removeDir("applets/smoke_bad")
+refused(
+	"an unknown surface is refused",
+	{ "init", "examples/host/smoke_bad", "--surface", "windwo" },
+	"unknown surface"
+)
+if fs.isDir("examples/host/smoke_bad") then
+	fs.removeDir("examples/host/smoke_bad")
 end
 
 --- THE WINDOWED COMMANDS, WHERE THEY CANNOT RUN. Off Windows these drive a window

@@ -612,7 +612,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
             // blessed directory; there is no blessed directory any more, so an
             // empty invocation is a usage question rather than a default.
             return Err(
-                "nothing to run: pass an applet directory, e.g. `dew applets/timetracker`"
+                "nothing to run: pass an applet directory, e.g. `dew examples/aether/timetracker`"
                     .to_string(),
             );
         } else {
@@ -632,7 +632,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
             subcommand: args_vec.get(1).cloned(),
         }),
         _ if first.starts_with("--") => parse_legacy_flags(&args_vec, is_windows),
-        // A BARE PATH RUNS IT. `dew applets/timetracker` is the shortest true
+        // A BARE PATH RUNS IT. `dew examples/aether/timetracker` is the shortest true
         // thing to type, and it is what the README documents; requiring `run`
         // in front of it would make the subcommand the only way to do the most
         // common thing.
@@ -653,7 +653,7 @@ fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
         match arg.as_str() {
             "--applet" | "-a" => {
                 return Err(
-                    "`--applet` is gone: pass the applet's directory, e.g. `dew applets/timetracker`"
+                    "`--applet` is gone: pass the applet's directory, e.g. `dew examples/aether/timetracker`"
                         .to_string(),
                 );
             }
@@ -709,7 +709,7 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
             // removed.
             "--applet" | "-a" => {
                 return Err(
-                    "`--applet` is gone: pass the applet's directory, e.g. `dew snapshot applets/timetracker -o out.png`"
+                    "`--applet` is gone: pass the applet's directory, e.g. `dew snapshot examples/aether/timetracker -o out.png`"
                         .to_string(),
                 );
             }
@@ -782,7 +782,7 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
         }
     } else {
         let dir = applet.ok_or(
-            "nothing to snapshot: pass an applet directory or a script, e.g. `dew snapshot applets/timetracker -o out.png`",
+            "nothing to snapshot: pass an applet directory or a script, e.g. `dew snapshot examples/aether/timetracker -o out.png`",
         )?;
         SnapshotTarget::Applet(dir)
     };
@@ -962,7 +962,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
             }
             "--applet" => {
                 return Err(
-                    "`--applet` is gone: pass the applet's directory, e.g. `dew applets/timetracker`"
+                    "`--applet` is gone: pass the applet's directory, e.g. `dew examples/aether/timetracker`"
                         .to_string(),
                 );
             }
@@ -995,7 +995,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
             }
         } else {
             let dir = applets.first().cloned().ok_or(
-                "nothing to snapshot: pass an applet directory, e.g. `dew snapshot applets/timetracker -o out.png`",
+                "nothing to snapshot: pass an applet directory, e.g. `dew snapshot examples/aether/timetracker -o out.png`",
             )?;
             SnapshotTarget::Applet(dir)
         };
@@ -1034,7 +1034,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
 /// an id list, so a directory with a perfectly good manifest somewhere else was
 /// not an applet, and the same applet moved was a different applet. It also meant
 /// the CLI took a name that had to be looked up, which is why `--applet
-/// ./applets/nameplate/` failed with a message about ids.
+/// ./examples/widgets/nameplate/` failed with a message about ids.
 fn load_applet(dir: &Path) -> Result<applets::Applet, String> {
     if !dir.is_dir() {
         return Err(format!("{}: not a directory", dir.display()));
@@ -1271,7 +1271,7 @@ fn check_mod_dir(dir: &Path) -> Result<(manifest::Manifest, PathBuf, Vec<String>
 }
 
 fn execute_check(targets: Vec<PathBuf>) -> Result<(), String> {
-    // PATHS, AND NO SEARCHING. `check applets/timetracker` checks that directory.
+    // PATHS, AND NO SEARCHING. `check examples/aether/timetracker` checks that directory.
     // Bare `check` checks the working directory if it is an applet, which makes
     // `cd` into one and `dew check` the obvious thing.
     //
@@ -1376,22 +1376,32 @@ fn execute_init(
     let surface_grant = manifest::Permission::surface_from_name(&surface).ok_or_else(|| {
         format!("unknown surface '{surface}': use 'window', 'widget', 'overlay' or 'popover'")
     })?;
-    if !name
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    // A PATH OR A NAME, AND THE VALIDATION USED TO FORBID THE PATH. Every
+    // character was checked against an alphanumeric set and the next statement
+    // then branched on whether the name contained a separator, which it could
+    // never reach. `dew init examples/host/thing` was refused by a rule about
+    // names while the code below was written to accept it.
+    let target_dir = PathBuf::from(&name);
+    let leaf = target_dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+
+    if leaf.is_empty()
+        || !leaf
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
     {
         return Err(format!(
-            "invalid mod name '{name}': use alphanumeric characters, dashes, or underscores"
+            "invalid applet name '{leaf}': use alphanumeric characters, dashes, or underscores"
         ));
     }
 
-    let target_dir = if name.contains('/') || name.contains('\\') {
-        PathBuf::from(&name)
-    } else if let Some(mods_dir) = find_dir("applets") {
-        mods_dir.join(&name)
-    } else {
-        PathBuf::from(&name)
-    };
+    // NO BLESSED DIRECTORY. This resolved a bare name against `applets/`, which
+    // was the last place the host decided where an applet lives. An applet is a
+    // directory you name, here as everywhere else.
+    let name = leaf;
 
     if target_dir.exists() {
         return Err(format!(
@@ -1981,7 +1991,7 @@ fn run() -> Result<(), String> {
             bench,
         } => match applets.as_slice() {
             [] => Err(
-                "nothing to run: pass an applet directory, e.g. `dew applets/timetracker`"
+                "nothing to run: pass an applet directory, e.g. `dew examples/aether/timetracker`"
                     .to_string(),
             ),
             [one] => execute_run(one, stats, bench),
@@ -2283,7 +2293,9 @@ mod tests {
 
     #[test]
     fn subcommand_run_accepted_on_windows() {
-        let args = ["run", "applets/nameplate"].iter().map(|s| s.to_string());
+        let args = ["run", "examples/widgets/nameplate"]
+            .iter()
+            .map(|s| s.to_string());
         let cmd = parse_args(args, true).unwrap();
         match cmd {
             Command::Run {
@@ -2291,7 +2303,7 @@ mod tests {
                 stats,
                 bench,
             } => {
-                assert_eq!(applets, vec![PathBuf::from("applets/nameplate")]);
+                assert_eq!(applets, vec![PathBuf::from("examples/widgets/nameplate")]);
                 assert!(!stats);
                 assert!(!bench);
             }
@@ -2301,15 +2313,17 @@ mod tests {
 
     /// THE SHORTEST FORM, AND THE ONE THE README DOCUMENTS.
     ///
-    /// `dew applets/timetracker` with no subcommand. This was documented and not
+    /// `dew examples/aether/timetracker` with no subcommand. This was documented and not
     /// tested, so it shipped reporting `unrecognised argument` for the exact
     /// command the README gave. Tested now.
     #[test]
     fn a_bare_path_runs_it() {
-        let args = ["applets/timetracker"].iter().map(|s| s.to_string());
+        let args = ["examples/aether/timetracker"]
+            .iter()
+            .map(|s| s.to_string());
         match parse_args(args, true).unwrap() {
             Command::Run { applets, .. } => {
-                assert_eq!(applets, vec![PathBuf::from("applets/timetracker")]);
+                assert_eq!(applets, vec![PathBuf::from("examples/aether/timetracker")]);
             }
             other => panic!("expected Run, got {other:?}"),
         }
@@ -2318,7 +2332,7 @@ mod tests {
     /// A MISTYPED SUBCOMMAND IS A PATH, and that is the better error of the two.
     #[test]
     fn a_mistyped_subcommand_reads_as_a_path() {
-        let args = ["chek", "applets/timetracker"]
+        let args = ["chek", "examples/aether/timetracker"]
             .iter()
             .map(|s| s.to_string());
         match parse_args(args, true).unwrap() {
@@ -2329,11 +2343,13 @@ mod tests {
 
     #[test]
     fn subcommand_check() {
-        let args = ["check", "applets/nameplate"].iter().map(|s| s.to_string());
+        let args = ["check", "examples/widgets/nameplate"]
+            .iter()
+            .map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
             Command::Check { targets } => {
-                assert_eq!(targets, vec![PathBuf::from("applets/nameplate")])
+                assert_eq!(targets, vec![PathBuf::from("examples/widgets/nameplate")])
             }
             _ => panic!("expected Check command"),
         }
@@ -2387,17 +2403,23 @@ mod tests {
         }
     }
 
+    /// NOT SKIPPED WHEN THE DIRECTORY IS ABSENT. Both lookups here were `if let`
+    /// and `if`, so this passed by doing nothing the moment `applets/` moved, and
+    /// it would have gone on passing for as long as the path stayed wrong.
     #[test]
     fn check_mod_dir_nameplate() {
-        if let Some(mods_dir) = find_dir("applets") {
-            let nameplate = mods_dir.join("nameplate");
-            if nameplate.is_dir() {
-                let (manifest, entry, warnings) = check_mod_dir(&nameplate).unwrap();
-                assert_eq!(manifest.id, "nameplate");
-                assert!(entry.is_file());
-                assert!(warnings.is_empty());
-            }
-        }
+        let examples = find_dir("examples").expect("the examples tree should be findable");
+        let nameplate = examples.join("widgets").join("nameplate");
+        assert!(
+            nameplate.is_dir(),
+            "expected an applet at {}",
+            nameplate.display()
+        );
+
+        let (manifest, entry, warnings) = check_mod_dir(&nameplate).unwrap();
+        assert_eq!(manifest.id, "nameplate");
+        assert!(entry.is_file());
+        assert!(warnings.is_empty());
     }
 
     #[test]
