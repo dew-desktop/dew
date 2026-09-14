@@ -351,12 +351,11 @@ jobs:
       - name: Install each applet's own dependencies
         shell: bash
         run: |
-          # DEMOS TOO, not just applets. `demos/pressable` brings its own Aether
-          # exactly like an applet does, and it was left out of this loop while
-          # being `check`ed one step later, so it was validated and never
-          # mounted. The smoke script mounts everything it discovers, which is
-          # what turned this up.
-          for m in applets/*/pesde.toml demos/*/pesde.toml; do
+          # EVERY EXAMPLE THAT BRINGS A FRAMEWORK. This once looked only at
+          # `applets/*/`, so a demo was `check`ed one step later and never
+          # mounted, and the gap had nothing to report it. One tree means one
+          # glob now, and the depth is the same for all of them.
+          for m in examples/*/*/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
@@ -539,12 +538,11 @@ jobs:
       - name: Install each applet's own dependencies
         shell: bash
         run: |
-          # DEMOS TOO, not just applets. `demos/pressable` brings its own Aether
-          # exactly like an applet does, and it was left out of this loop while
-          # being `check`ed one step later, so it was validated and never
-          # mounted. The smoke script mounts everything it discovers, which is
-          # what turned this up.
-          for m in applets/*/pesde.toml demos/*/pesde.toml; do
+          # EVERY EXAMPLE THAT BRINGS A FRAMEWORK. This once looked only at
+          # `applets/*/`, so a demo was `check`ed one step later and never
+          # mounted, and the gap had nothing to report it. One tree means one
+          # glob now, and the depth is the same for all of them.
+          for m in examples/*/*/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)

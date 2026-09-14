@@ -1,31 +1,28 @@
 --!strict
 --[[
-	Asks -- an applet that asks the host for a surface and returns nothing.
+	Basic Widget -- the smallest applet that draws something.
 
-	    cargo run -- demos/asks
+	    cargo run -- examples/host/basic-widget
 
-	The older shape returns a table the host reads: a `size`, a `surface` block
-	and a `mount` for the host to call back into. That made the applet describe
-	itself to something that then acted on its behalf, and the description had to
-	carry every question the host might ask.
+	A widget is a borderless panel that floats above your other windows, which is
+	the shape most Dew applets take. This one opens one, fills it with a card, and
+	puts two lines of text on it.
 
-	Here the applet asks and is answered. `dew.widget` exists because `dew.toml`
-	grants `widget`, and it hands back the root to parent into, so there is
-	nothing left to return.
+	There is no framework here. `Instance.new`, property assignment and `Parent`
+	are the whole vocabulary, and every line would build the same tree on any host
+	implementing the DataModel.
 ]]
 
---- `dew` IS A GLOBAL, the way `game` is one in the engine Dew is shaped after,
---- and it carries exactly the capabilities `dew.toml` granted.
----
---- `assert` RATHER THAN A BARE CALL, because `dew.widget` is nil when the
---- manifest did not ask for a widget, and that is the capability model rather
---- than an oversight. Naming the missing word here turns a nil call into a
---- sentence that says what to add.
+--- `dew` is a global, and it carries exactly the capabilities `dew.toml`
+--- granted. `dew.widget` is nil unless the manifest asked for `widget`, so this
+--- line turns a missing permission into a sentence naming the word to add.
 local widget = assert(dew.widget, "dew.toml must grant `widget`")
 
+--- Opening the surface hands back the instance to build under.
 local root = widget({
 	width = 260,
 	height = 120,
+	--- Corner of the screen to sit in, and how far in from it.
 	anchor = "topRight",
 	offset = { x = 24, y = 24 },
 })
@@ -45,7 +42,7 @@ title.Name = "Title"
 title.Size = UDim2.new(1, -32, 0, 30)
 title.Position = UDim2.new(0, 16, 0, 18)
 title.BackgroundTransparency = 1
-title.Text = "I'm a widget!"
+title.Text = "Basic Widget"
 title.TextColor3 = Color3.fromRGB(233, 239, 249)
 title.TextSize = 20
 title.TextXAlignment = Enum.TextXAlignment.Left
@@ -56,7 +53,7 @@ note.Name = "Note"
 note.Size = UDim2.new(1, -32, 0, 40)
 note.Position = UDim2.new(0, 16, 0, 54)
 note.BackgroundTransparency = 1
-note.Text = "no size, no surface block, no mount"
+note.Text = "260 by 120, top right corner"
 note.TextColor3 = Color3.fromRGB(146, 162, 188)
 note.TextSize = 12
 note.TextXAlignment = Enum.TextXAlignment.Left

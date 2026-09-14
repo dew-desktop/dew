@@ -288,7 +288,7 @@ if deps then
 			fail(
 				`pesde.toml declares '{name}' under [dependencies]. The host ships no `
 					.. "framework: an application that needs one carries its own manifest, the "
-					.. "way applets/*/pesde.toml do. Move it to [dev_dependencies] if Dew's own "
+					.. "way examples/*/*/pesde.toml do. Move it to [dev_dependencies] if Dew's own "
 					.. "tests need it."
 			)
 		end

@@ -1,4 +1,4 @@
-name = "dew_applets/calculator"
+name = "dew_examples/calculator"
 version = "0.0.1"
 
 # A MOD DECLARES ITS OWN FRAMEWORK. The host used to hand every applet Aether and

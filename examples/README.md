@@ -1,27 +1,51 @@
 # Examples
 
-Not mods. An applet is discovered from `applets/`, carries a `dew.toml`, and is granted
-capabilities by its manifest. These are the smallest programs that demonstrate one
-thing each, run directly.
+Programs that run on Dew, each showing one thing.
 
-## `standalone/`
+## `host/`
 
-A Dew applet with no framework at all.
+What the host itself offers, with no framework involved.
+
+`basic-widget` is the smallest applet that draws: it opens a widget, builds a
+card out of instances, and puts text on it.
 
 ```sh
-cargo run --manifest-path host/Cargo.toml -- \
-    --script examples/standalone/app.luau --size 360x220 --snapshot out.png
+cargo run -- examples/host/basic-widget
 ```
 
-Every line of it would build the same tree on a conforming engine host: `Instance.new`,
-property assignment, `Parent`, and the vocabulary. Nothing is imported.
+`standalone` is a bare script rather than an applet. It has no `dew.toml` and no
+manifest, and runs with `--script`, so it is the shortest path from Luau to
+pixels: the reflection database, the vocabulary, the layout pass and the
+rasteriser, with nothing else in the way.
 
-It exercises the whole DataModel path end to end -- the reflection database
-refusing a class or property that does not exist, the vocabulary types, `Enum`
-resolved from that same database, the layout pass, and the rasteriser. **If it
-renders, the path from Luau to pixels is alive.**
+```sh
+cargo run -- snapshot --script examples/host/standalone/app.luau --size 360x220 -o out.png
+```
 
-It parents into `DewRoot` rather than `game`. `Host.detect()` in Aether keys on
-`typeof(game) == "Instance"`, so installing a `game` global before the services
-and the member surface are behind it would flip every Aether mod in the same
-binary onto its engine branch and break it.
+It parents into `DewRoot` rather than `game`. Aether keys on
+`typeof(game) == "Instance"` to decide which host it is running on, so a `game`
+global here would send every Aether applet in the same process down its engine
+branch.
+
+## `widgets/`
+
+Applets written against the DataModel directly: `Instance.new`, property
+assignment, `Parent`, and the vocabulary. Nothing is imported, and every line
+would build the same tree on any host implementing the DataModel.
+
+```sh
+cargo run -- examples/widgets/nameplate
+```
+
+## `aether/`
+
+Applets built with [Aether](https://github.com/project-aether-ui/aether), a UI
+framework that runs on any conforming host. An applet installs it with pesde like
+any other package; Dew supplies nothing.
+
+```sh
+cargo run -- examples/aether/timetracker
+```
+
+`framework-coverage` measures these to report how much of the framework is
+actually exercised rather than merely shipped.

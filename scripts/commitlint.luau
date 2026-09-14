@@ -61,19 +61,18 @@ local config: CommitLintConfig = {
         --- said the wrong thing: these are four packages now, not one with
         --- wiring.
         "crates",    -- crates/, the rendering stack
-        "applets",      -- applets/
+
         "types",     -- types/
         "docs",      -- docs/, CONTRIBUTING, README
         "scripts",   -- scripts/
         "assets",    -- host/assets/
-        "examples",  -- examples/, programs that are not mods
-        --- demos/ -- applications that exercise a guest framework so
-        --- `framework-coverage` can report how much of it is demonstrated rather
-        --- than merely shipped. Separate from `examples` because an example is
-        --- written to be read and a demo is written to be driven: it declares an
-        --- interaction script and fails the build when the pixels stop moving.
-        --- ADR-008 keeps them in this repository while the bootstrap lasts.
-        "demos",     -- demos/, applications driven to prove a framework responds
+        --- examples/ -- everything that runs ON Dew rather than being Dew:
+        --- `aether/` for what the framework demonstrates, `widgets/` for what an
+        --- applet looks like with no framework at all, and `host/` for the
+        --- smallest thing the contract accepts. They were three sibling trees
+        --- (`applets/`, `demos/`, `examples/`) whose difference nobody could
+        --- state, which made every new one a decision about where it went.
+        "examples",  -- examples/, everything that runs on Dew
         "deps"       -- VERSION, manifests, pins
     },
     maxHeaderLength = 100,
