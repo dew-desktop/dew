@@ -6,18 +6,25 @@
 //!
 //! ## Events, not callbacks
 //!
-//! [`Window::poll`] drains the queue into a `Vec<Event>` rather than dispatching
+//! [`Pump::poll`] drains the queue into a `Vec<Event>` rather than dispatching
 //! through a closure. A Win32 window procedure runs on the OS's stack, inside
 //! `DispatchMessage`, and calling into a Luau VM from there means the guest can
 //! re-enter the pump — which is how a nested modal loop ends up stepping the
 //! clock twice for one frame. Draining first keeps the guest on our stack, where
-//! the shell decides when it runs.
+//! the shell decides when it runs. It is also what lets a guest ask for a new
+//! surface mid-run: the call arrives on the shell's stack, not the OS's.
+//!
+//! ## One pump, many surfaces
+//!
+//! The pump belongs to the thread, not to a window. Every event it returns says
+//! which [`SurfaceId`] produced it, because a shell showing a widget and its
+//! popover has to know which tree a click was meant for.
 
 #![cfg(windows)]
 
 mod win32;
 
-pub use win32::{screen_size, Window};
+pub use win32::{screen_size, Pump, SurfaceId, Window};
 
 /// What kind of surface a window is.
 ///

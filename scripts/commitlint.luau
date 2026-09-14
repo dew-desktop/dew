@@ -2,6 +2,8 @@
 -- Dew Luau Commitlint Configuration & Validator (@dew/commitlint)
 -- Strictly mapped to directories that physically exist in the repository
 
+local style = require("./house_style")
+
 export type CommitLintConfig = {
     types: {string},
     allowedScopes: {string},
@@ -79,12 +81,18 @@ local config: CommitLintConfig = {
 }
 
 local function parseCommit(message: string): (ParsedCommit?, string?)
+    --- THE HEADER IS THE FIRST LINE, and it has to be cut out before matching.
+    --- A Lua `.` matches a newline, so `(.+)$` against a whole message swallowed
+    --- the body into the summary: the length rule then reported 756 for a
+    --- 66-character subject, and the imperative rule read the wrong words.
+    local header = string.match(message, "^%C+") or message
+
     local pattern = "^([%w_]+)%(([%w%-_/]+)%):%s+(.+)$"
-    local ctype, scope, summary = string.match(message, pattern)
+    local ctype, scope, summary = string.match(header, pattern)
 
     if not ctype then
         local noScopePattern = "^([%w_]+):%s+(.+)$"
-        ctype, summary = string.match(message, noScopePattern)
+        ctype, summary = string.match(header, noScopePattern)
         if not ctype then
             return nil, "Message must follow format: <type>(<scope>): <summary>"
         end
@@ -92,7 +100,7 @@ local function parseCommit(message: string): (ParsedCommit?, string?)
     end
 
     return {
-        raw = message,
+        raw = header,
         type = ctype,
         scope = scope,
         summary = summary
@@ -143,6 +151,20 @@ local function validateCommit(message: string): ValidationResult
     -- 3. Header Length
     if #parsed.raw > config.maxHeaderLength then
         table.insert(errors, `Commit header length ({#parsed.raw}) exceeds maximum ({config.maxHeaderLength})`)
+    end
+
+    -- 4. No attribution naming a tool.
+    for _, finding in ipairs(style.findForbidden(message)) do
+        table.insert(errors, `Remove {finding.detail}: a commit is authored by the person landing it`)
+    end
+
+    -- 5. Plain ASCII, which is promised for commits and was only checked in docs.
+    local at, character = style.nonAsciiAt(message)
+    if at and character then
+        table.insert(
+            errors,
+            `Non-ASCII character '{character}' at byte {at}; use a hyphen, a colon or a new sentence, and no emoji`
+        )
     end
 
     return {

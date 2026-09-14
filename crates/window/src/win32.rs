@@ -16,19 +16,36 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+/// Which surface an event came from.
+///
+/// THE HWND ITSELF, not an index into a table the shell keeps. An event is
+/// produced in the window procedure, where the only identity available is the
+/// handle, and anything else would need a lookup that can be stale exactly when
+/// it matters: during the teardown of the window that just sent the event.
+///
+/// Opaque on purpose. The shell compares these and nothing else, so the fact
+/// that it is a handle stays inside this crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SurfaceId(isize);
+
 thread_local! {
-    /// Events collected by the window procedure, drained by `poll`.
+    /// Events collected by the window procedure, drained by the pump.
     ///
     /// THREAD-LOCAL RATHER THAN A POINTER IN `GWLP_USERDATA`, because a Win32
     /// window is owned by the thread that created it and its procedure only ever
     /// runs there. A queue per thread is therefore exactly a queue per window
     /// set, with no lifetime to get wrong and no cast from an integer back to a
     /// reference that would be unsound if a message arrived after a drop.
-    static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
+    ///
+    /// EVERY ENTRY IS TAGGED. One queue for every window on the thread is the
+    /// right structure, and it was the right structure when there was one
+    /// window too, but without the tag a click on a widget and a click on its
+    /// popover were the same value and neither could be routed.
+    static EVENTS: RefCell<Vec<(SurfaceId, Event)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn push(event: Event) {
-    EVENTS.with(|e| e.borrow_mut().push(event));
+fn push(hwnd: HWND, event: Event) {
+    EVENTS.with(|e| e.borrow_mut().push((SurfaceId(hwnd.0 as isize), event)));
 }
 
 fn xy(lparam: LPARAM) -> (f32, f32) {
@@ -74,7 +91,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
     match msg {
         WM_MOUSEMOVE => {
             let (x, y) = xy(lp);
-            push(Event::PointerMove { x, y });
+            push(hwnd, Event::PointerMove { x, y });
             LRESULT(0)
         }
         WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN => {
@@ -87,7 +104,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // CAPTURE, so a drag that leaves the window still reports its release.
             // Without it a press-drag-out-release leaves the UI stuck held down.
             let _ = SetCapture(hwnd);
-            push(Event::PointerDown { x, y, button });
+            push(hwnd, Event::PointerDown { x, y, button });
             LRESULT(0)
         }
         WM_LBUTTONUP | WM_RBUTTONUP | WM_MBUTTONUP => {
@@ -98,7 +115,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 _ => Button::Left,
             };
             let _ = ReleaseCapture();
-            push(Event::PointerUp { x, y, button });
+            push(hwnd, Event::PointerUp { x, y, button });
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
@@ -113,11 +130,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             };
             let _ = ScreenToClient(hwnd, &mut point);
             let delta = ((wp.0 >> 16) as i16) as f32 / 120.0;
-            push(Event::Wheel {
-                x: point.x as f32,
-                y: point.y as f32,
-                delta,
-            });
+            push(
+                hwnd,
+                Event::Wheel {
+                    x: point.x as f32,
+                    y: point.y as f32,
+                    delta,
+                },
+            );
             LRESULT(0)
         }
         WM_CHAR => {
@@ -126,18 +146,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
                 // reported as named keys by WM_KEYDOWN, and passing them again as
                 // characters would apply each twice.
                 if !c.is_control() {
-                    push(Event::Char(c));
+                    push(hwnd, Event::Char(c));
                 }
             }
             LRESULT(0)
         }
         WM_KEYDOWN => {
             if let Some(name) = key_name(wp.0 as u32) {
-                push(Event::Key {
-                    name: name.to_string(),
-                    shift: modifier(VK_SHIFT),
-                    ctrl: modifier(VK_CONTROL),
-                });
+                push(
+                    hwnd,
+                    Event::Key {
+                        name: name.to_string(),
+                        shift: modifier(VK_SHIFT),
+                        ctrl: modifier(VK_CONTROL),
+                    },
+                );
             }
             LRESULT(0)
         }
@@ -146,7 +169,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let width = (raw & 0xFFFF) as u32;
             let height = ((raw >> 16) & 0xFFFF) as u32;
             if width > 0 && height > 0 {
-                push(Event::Resized { width, height });
+                push(hwnd, Event::Resized { width, height });
             }
             LRESULT(0)
         }
@@ -157,7 +180,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let mut ps = PAINTSTRUCT::default();
             let _ = BeginPaint(hwnd, &mut ps);
             let _ = EndPaint(hwnd, &ps);
-            push(Event::Exposed);
+            push(hwnd, Event::Exposed);
             LRESULT(0)
         }
         WM_ERASEBKGND => {
@@ -167,13 +190,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(1)
         }
         WM_CLOSE => {
-            push(Event::CloseRequested);
+            push(hwnd, Event::CloseRequested);
             LRESULT(0)
         }
-        WM_DESTROY => {
-            PostQuitMessage(0);
-            LRESULT(0)
-        }
+        // NO `PostQuitMessage` HERE. It posts `WM_QUIT`, which stops the pump for
+        // the whole thread, so with more than one surface open the first one to
+        // close took the process with it. A tooltip is a popover that closes
+        // every time the pointer leaves, which would have made this look like a
+        // random crash rather than a lifetime rule.
+        //
+        // Whether Dew should exit is the shell's call: "the last surface closed"
+        // and "this applet is finished" are different claims, and only the shell
+        // knows either.
+        WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
 }
@@ -195,6 +224,51 @@ pub fn screen_size() -> (i32, i32) {
             // beats a widget positioned at the origin of a screen of size zero.
             (1920, 1080)
         }
+    }
+}
+
+/// The thread's message queue, drained once for every window on it.
+///
+/// ONE PUMP, NOT ONE PER WINDOW. `PeekMessageW` with a null window takes
+/// messages for every window the thread owns, so a `poll` that hung off one
+/// window was already consuming the others': whichever was polled first ate the
+/// rest's input, and with a single window that could never be observed.
+///
+/// ## Events, not callbacks, still
+///
+/// The pump drains into a `Vec` and hands it back rather than dispatching
+/// through a closure, for the reason the crate docs give: the guest must not run
+/// inside `DispatchMessage`. That is also what makes a surface created from
+/// inside a guest call safe, because the guest is on the shell's stack and not
+/// on the OS's.
+#[derive(Default)]
+pub struct Pump {
+    _private: (),
+}
+
+impl Pump {
+    pub fn new() -> Pump {
+        Pump { _private: () }
+    }
+
+    /// Drain every event the thread's windows have seen since the last call.
+    ///
+    /// Each event says which surface produced it. Returns `None` only on
+    /// `WM_QUIT`, which nothing in this crate posts any more; it is left
+    /// honoured so an outside request to end the thread still ends it.
+    pub fn poll(&mut self) -> Option<Vec<(SurfaceId, Event)>> {
+        unsafe {
+            let mut msg = MSG::default();
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                if msg.message == WM_QUIT {
+                    return None;
+                }
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+        }
+
+        Some(EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut())))
     }
 }
 
@@ -331,29 +405,20 @@ impl Window {
         (self.width, self.height)
     }
 
-    /// Drain everything the window has seen since the last call.
-    ///
-    /// Returns `None` when the window has quit and the shell should stop.
-    pub fn poll(&mut self) -> Option<Vec<Event>> {
-        unsafe {
-            let mut msg = MSG::default();
-            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
-                if msg.message == WM_QUIT {
-                    return None;
-                }
-                let _ = TranslateMessage(&msg);
-                DispatchMessageW(&msg);
-            }
-        }
+    /// Which surface this is, for matching against a polled event.
+    pub fn id(&self) -> SurfaceId {
+        SurfaceId(self.hwnd.0 as isize)
+    }
 
-        let events = EVENTS.with(|e| std::mem::take(&mut *e.borrow_mut()));
-        for event in &events {
-            if let Event::Resized { width, height } = event {
-                self.width = *width;
-                self.height = *height;
-            }
-        }
-        Some(events)
+    /// Take a size this window was told it now has.
+    ///
+    /// THE SHELL APPLIES THIS, because the shell is what reads the event. The
+    /// window used to notice its own `Resized` while draining its own queue;
+    /// once draining belongs to the pump, a window that kept updating itself
+    /// would be reading another window's resize as its own.
+    pub fn resized(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
     }
 
     /// Put a BGRA buffer on screen, whichever kind of surface this is.
@@ -506,9 +571,118 @@ impl Window {
 }
 
 impl Drop for Window {
+    /// A SURFACE THAT GOES OUT OF SCOPE LEAVES THE SCREEN. This was here before
+    /// anything needed it, when the process exited with its only window. It
+    /// carries real weight now: a popover is dropped every time it closes, and
+    /// one that stayed on screen would be a leak the user can see.
     fn drop(&mut self) {
         unsafe {
             let _ = DestroyWindow(self.hwnd);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Surface;
+
+    /// A widget surface parked offscreen, so a test never flashes at the user.
+    fn offscreen() -> Surface {
+        Surface::Widget {
+            x: -4000,
+            y: -4000,
+            click_through: false,
+        }
+    }
+
+    /// Post a mouse move to a window without touching the real cursor.
+    ///
+    /// `PostMessageW` RATHER THAN `SendInput`, because the test is about routing
+    /// and not about the platform: a synthesised real click would go to whatever
+    /// is under the pointer on the developer's desktop.
+    fn post_move(window: &Window, x: i16, y: i16) {
+        let lparam = LPARAM(((y as u16 as u32) << 16 | (x as u16 as u32)) as isize);
+        unsafe {
+            let _ = PostMessageW(Some(window.hwnd), WM_MOUSEMOVE, WPARAM(0), lparam);
+        }
+    }
+
+    /// An event says which surface it came from.
+    ///
+    /// THE WHOLE POINT OF THE TAG. With one window this was unobservable, which
+    /// is why the queue went untagged for as long as it did; with two, an
+    /// untagged queue routes a click on a popover to the widget behind it.
+    #[test]
+    fn two_surfaces_do_not_share_their_events() {
+        let mut pump = Pump::new();
+        let first = Window::new(&offscreen(), 100, 100).expect("first window");
+        let second = Window::new(&offscreen(), 100, 100).expect("second window");
+        assert_ne!(first.id(), second.id(), "two windows, two ids");
+
+        // Anything the creation itself produced is not what is under test.
+        let _ = pump.poll();
+
+        post_move(&first, 11, 12);
+        post_move(&second, 21, 22);
+
+        let events = pump.poll().expect("the pump is still running");
+
+        let for_first: Vec<_> = events
+            .iter()
+            .filter(|(id, _)| *id == first.id())
+            .map(|(_, e)| e.clone())
+            .collect();
+        let for_second: Vec<_> = events
+            .iter()
+            .filter(|(id, _)| *id == second.id())
+            .map(|(_, e)| e.clone())
+            .collect();
+
+        assert!(
+            for_first.contains(&Event::PointerMove { x: 11.0, y: 12.0 }),
+            "the first surface should have seen its own move, saw {for_first:?}"
+        );
+        assert!(
+            for_second.contains(&Event::PointerMove { x: 21.0, y: 22.0 }),
+            "the second surface should have seen its own move, saw {for_second:?}"
+        );
+        assert!(
+            !for_first.contains(&Event::PointerMove { x: 21.0, y: 22.0 }),
+            "the first surface received an event meant for the second"
+        );
+    }
+
+    /// Closing one surface leaves the pump running and the others alive.
+    ///
+    /// THE BUG THIS PINS: `WM_DESTROY` posted `WM_QUIT`, which ends the thread's
+    /// message loop, so the first surface to close took every other surface with
+    /// it. A popover closes every time the pointer leaves it, so this would have
+    /// presented as Dew exiting when a tooltip went away.
+    #[test]
+    fn closing_one_surface_does_not_stop_the_pump() {
+        let mut pump = Pump::new();
+        let first = Window::new(&offscreen(), 100, 100).expect("first window");
+        let second = Window::new(&offscreen(), 100, 100).expect("second window");
+        let _ = pump.poll();
+
+        drop(first);
+
+        // The destroy has to be dispatched before its consequences are visible,
+        // and `WM_QUIT` (if one were posted) arrives in this same drain.
+        let after_close = pump.poll();
+        assert!(
+            after_close.is_some(),
+            "destroying one surface stopped the thread's pump"
+        );
+
+        post_move(&second, 33, 44);
+        let events = pump.poll().expect("the pump is still running");
+        assert!(
+            events
+                .iter()
+                .any(|(id, e)| *id == second.id() && *e == Event::PointerMove { x: 33.0, y: 44.0 }),
+            "the surviving surface stopped receiving input, saw {events:?}"
+        );
     }
 }

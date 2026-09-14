@@ -1,0 +1,82 @@
+#!/bin/sh
+#
+# pre-push -- run the gates that are cheap here and expensive on a runner.
+#
+# WHY THIS EXISTS
+#
+# On 2026-09-13 and 14, three pull request runs failed in a row. Every one was
+# something this hook catches:
+#
+#     an invalid commit scope        0.7s here, a full round trip there
+#     a tool attribution trailer     caught here; it cannot be removed later
+#                                      without rewriting published history
+#
+# ONLY WHAT THE PROJECT ENFORCES. Whether a subject reads as an instruction and
+# how long a body runs are a maintainer's preferences, not this repository's
+# rules, and they are checked from a global hook on that maintainer's machine
+# rather than from here.
+#     a manifest the scaffolder      1.8s here, and it gated nothing, so the
+#       wrote in the wrong format      failure said nothing about the code
+#     a shell glob that pwsh does    now impossible: discovery moved into Luau
+#       not expand
+#
+# The cheap job gates the expensive ones, so a bad scope word buys a round trip
+# that reports nothing about the change. That is the waste this removes.
+#
+# NOT A SUBSTITUTE FOR CI. CI runs on two platforms and builds from clean; this
+# runs what can be run in seconds on the machine that made the change.
+#
+# Install:
+#     git config core.hooksPath .githooks
+#
+# Skip, when you mean to:
+#     git push --no-verify
+
+set -e
+
+if ! command -v lune >/dev/null 2>&1; then
+	echo "pre-push: no lune on PATH, skipping the gates"
+	echo "          install it with rokit, or push with --no-verify"
+	exit 0
+fi
+
+# THE RANGE IS WHAT IS BEING PUSHED, not the last commit. A branch with four
+# commits where the third has a bad subject passes a `-1` check and fails CI,
+# which is the exact failure this is here to stop.
+range=""
+zero="0000000000000000000000000000000000000000"
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+	# A deletion pushes the zero sha and has no commits to check.
+	if [ "$local_sha" = "$zero" ]; then
+		continue
+	fi
+	if [ "$remote_sha" = "$zero" ]; then
+		# A branch the remote has never seen. Everything since main is new.
+		base=$(git merge-base origin/main "$local_sha" 2>/dev/null || echo "")
+		if [ -n "$base" ]; then
+			range="$base..$local_sha"
+		fi
+	else
+		range="$remote_sha..$local_sha"
+	fi
+done
+
+echo "pre-push: checking ${range:-HEAD}"
+
+if [ -n "$range" ]; then
+	lune run scripts/commitlint_check.luau "$range"
+else
+	lune run scripts/commitlint_check.luau
+fi
+
+lune run scripts/verify_ascii.luau
+lune run scripts/verify_boundaries.luau
+
+# THE BUILD IS PART OF IT. A no-op build is under a second, and when it is not a
+# no-op the Rust changed, which is exactly when the commands below are worth
+# running.
+if command -v cargo >/dev/null 2>&1; then
+	lune run scripts/smoke.luau
+else
+	echo "pre-push: no cargo on PATH, skipping the CLI smoke"
+fi

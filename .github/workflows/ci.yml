@@ -269,6 +269,17 @@ jobs:
           workspaces: .
           shared-key: ${{ runner.os }}-build
 
+      # LUNE, AND IT WAS MISSING. `Generate the interface surface` below runs a
+      # lune script, and this job never installed lune: the step failed with "the
+      # term 'lune' is not recognized" on every run, and `continue-on-error`
+      # reported that as success. The surface has therefore never been generated
+      # here, and every measurement that needs it has been quietly skipping.
+      #
+      # That step's own comment says a silent zero is the bad outcome and nothing
+      # reports one. It was right, and the cause was this rather than a mirror
+      # being down.
+      - uses: CompeyDev/setup-rokit@v0.1.2
+
       # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
       #
       # `find_cases_dir` looks in the working tree, then at a SIBLING checkout,
@@ -317,6 +328,21 @@ jobs:
         continue-on-error: true
         run: lune run scripts/fetch_api_surface.luau
 
+      # SAY SO WHEN IT DID NOT WORK. The step above is `continue-on-error`, which
+      # GitHub reports as success, so two separate failures hid behind a green
+      # tick: lune was not installed in this job at all, and the tracker URL had
+      # a space in the middle of it. Neither is fatal to a build and both should
+      # be visible, so this annotates rather than exits.
+      - name: Say if the interface surface is missing
+        if: always()
+        shell: bash
+        run: |
+          if [ -s host/datamodel/api_surface.json ]; then
+            echo "interface surface: $(wc -c < host/datamodel/api_surface.json) bytes"
+          else
+            echo "::warning::No interface surface was generated, so every measurement that needs a denominator will skip. See the step above for why."
+          fi
+
       # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
       # a fresh checkout has manifests and no packages; without this every Aether
       # mod fails to mount with "could not read entry module .../roblox_packages/
@@ -325,7 +351,13 @@ jobs:
       - name: Install each applet's own dependencies
         shell: bash
         run: |
-          for m in applets/*/pesde.toml; do
+          # DEMOS TOO, not just applets. `demos/pressable` brings its own Aether
+          # exactly like an applet does, and it was left out of this loop while
+          # being `check`ed one step later, so it was validated and never
+          # mounted. The smoke script mounts everything it discovers, which is
+          # what turned this up.
+          for m in applets/*/pesde.toml demos/*/pesde.toml; do
+            test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
             test -f "$d/roblox_packages/aether.luau" || {
@@ -365,30 +397,21 @@ jobs:
             exit 1
           }
 
-      # EVERY APPLET, not the first one. An applet that fails to load is skipped
-      # with a message and the host carries on, which is right at runtime and
-      # would hide a broken applet here.
+      # THE CLI CONTRACT, RUN FROM A SCRIPT THIS REPOSITORY OWNS.
       #
-      # `shell: bash` IS LOAD-BEARING. The default shell on windows-latest is
-      # pwsh, which does not expand a glob before handing it to a native
-      # executable, so `applets/*/` arrived at `dew check` as that literal string
-      # and it went looking for a directory named `*`.
-      - name: Validate every applet manifest and its syntax
-        shell: bash
-        run: cargo run --quiet --manifest-path host/Cargo.toml -- check applets/*/ demos/*/
-
-      # EVERY MOD, not the first one. An applet that fails to load is skipped with a
-      # message and the host carries on, which is right at runtime and would hide
-      # a broken mod here.
-      - name: Mount each applet
-        shell: bash
-        run: |
-          for m in applets/*/; do
-            id=$(basename "$m")
-            echo "--- $id"
-            cargo run --quiet --manifest-path host/Cargo.toml -- snapshot "$m" -o "/tmp/$id.png"
-          done
-
+      # These invocations used to live here and nowhere else, so nothing but CI
+      # ran them and nothing but CI could notice when they went stale. On
+      # 2026-09-13 two had: `check applets/*/` relied on the shell expanding a
+      # glob, which pwsh does not do for a native executable, and `snapshot
+      # --script` passed its output path positionally, which became a second
+      # target once applets were named by path. Both were found by a pull request
+      # rather than by the change that broke them.
+      #
+      # `scripts/smoke.luau` is the same file a developer runs before pushing, so
+      # local and CI cannot disagree. It does its own directory discovery, which
+      # is why there is no glob here for a shell to decline to expand.
+      - name: Every command the CLI promises
+        run: lune run scripts/smoke.luau --no-build
 
       # FMT AND CLIPPY HERE RATHER THAN IN A JOB OF THEIR OWN.
       #
@@ -442,6 +465,17 @@ jobs:
           workspaces: .
           shared-key: ${{ runner.os }}-render
 
+      # LUNE, AND IT WAS MISSING. `Generate the interface surface` below runs a
+      # lune script, and this job never installed lune: the step failed with "the
+      # term 'lune' is not recognized" on every run, and `continue-on-error`
+      # reported that as success. The surface has therefore never been generated
+      # here, and every measurement that needs it has been quietly skipping.
+      #
+      # That step's own comment says a silent zero is the bad outcome and nothing
+      # reports one. It was right, and the cause was this rather than a mirror
+      # being down.
+      - uses: CompeyDev/setup-rokit@v0.1.2
+
       # THE CONFORMANCE CASES COME FROM AETHER, so CI has to have Aether.
       #
       # `find_cases_dir` looks in the working tree, then at a SIBLING checkout,
@@ -482,6 +516,21 @@ jobs:
         continue-on-error: true
         run: lune run scripts/fetch_api_surface.luau
 
+      # SAY SO WHEN IT DID NOT WORK. The step above is `continue-on-error`, which
+      # GitHub reports as success, so two separate failures hid behind a green
+      # tick: lune was not installed in this job at all, and the tracker URL had
+      # a space in the middle of it. Neither is fatal to a build and both should
+      # be visible, so this annotates rather than exits.
+      - name: Say if the interface surface is missing
+        if: always()
+        shell: bash
+        run: |
+          if [ -s host/datamodel/api_surface.json ]; then
+            echo "interface surface: $(wc -c < host/datamodel/api_surface.json) bytes"
+          else
+            echo "::warning::No interface surface was generated, so every measurement that needs a denominator will skip. See the step above for why."
+          fi
+
       # EACH MOD INSTALLS ITS OWN FRAMEWORK. `roblox_packages/` is gitignored, so
       # a fresh checkout has manifests and no packages; without this every Aether
       # mod fails to mount with "could not read entry module .../roblox_packages/
@@ -490,7 +539,13 @@ jobs:
       - name: Install each applet's own dependencies
         shell: bash
         run: |
-          for m in applets/*/pesde.toml; do
+          # DEMOS TOO, not just applets. `demos/pressable` brings its own Aether
+          # exactly like an applet does, and it was left out of this loop while
+          # being `check`ed one step later, so it was validated and never
+          # mounted. The smoke script mounts everything it discovers, which is
+          # what turned this up.
+          for m in applets/*/pesde.toml demos/*/pesde.toml; do
+            test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
             test -f "$d/roblox_packages/aether.luau" || {
@@ -507,59 +562,21 @@ jobs:
 
       - run: cargo test --workspace
 
-      # WINDOW-ONLY COMMANDS AND FLAGS MUST BE REJECTED OFF WINDOWS.
-      # `run`, `--stats` and `--bench` drive the window loop and have nothing to run on.
-      - name: Assert run, --stats and --bench are rejected off Windows
-        shell: bash
-        run: |
-          for cmd in run --stats --bench; do
-            output=$(cargo run --quiet --manifest-path host/Cargo.toml -- "$cmd" 2>&1 || true)
-            echo "$output"
-            echo "$output" | grep -q "is Windows-only: it drives the window loop; use --snapshot to render headlessly" || {
-              echo "Expected $cmd to be rejected as Windows-only, got: $output"
-              exit 1
-            }
-          done
-
-      # VALIDATE MOD MANIFESTS AND LUAU SYNTAX
-      - name: Validate mods with check
-        shell: bash
-        run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- check applets/*/ demos/*/
-          cargo run --quiet --manifest-path host/Cargo.toml -- check applets/nameplate
-
-      # HEADLESS RENDERING: must produce real PNGs without a display.
-      - name: Render standalone script snapshot
-        shell: bash
-        run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- \
-            snapshot --script examples/standalone/app.luau --size 360x220 -o /tmp/standalone.png
-          test -s /tmp/standalone.png || { echo "standalone.png was not created or is empty"; exit 1; }
-          echo "Rendered /tmp/standalone.png successfully"
-
-      # MOD SELECTION HEADLESS: renders nameplate by name, not whichever sorts first.
-      - name: Render named mod snapshot
-        shell: bash
-        run: |
-          output=$(cargo run --quiet --manifest-path host/Cargo.toml -- snapshot applets/nameplate -o /tmp/nameplate.png)
-          echo "$output"
-          echo "$output" | grep -q "wrote /tmp/nameplate.png (340x148) for nameplate" || {
-            echo "Expected snapshot of nameplate by name, got: $output"
-            exit 1
-          }
-          test -s /tmp/nameplate.png || { echo "nameplate.png was not created or is empty"; exit 1; }
-          echo "Rendered /tmp/nameplate.png successfully"
-
-      # MOD SCAFFOLDING WORKFLOW: init, check, and snapshot
-      - name: Exercise mod scaffolding
-        shell: bash
-        run: |
-          cargo run --quiet --manifest-path host/Cargo.toml -- init test_scaffold --runtime datamodel
-          cargo run --quiet --manifest-path host/Cargo.toml -- check applets/test_scaffold
-          cargo run --quiet --manifest-path host/Cargo.toml -- snapshot applets/test_scaffold -o /tmp/scaffold.png
-          test -s /tmp/scaffold.png || { echo "scaffold.png was not created or is empty"; exit 1; }
-          rm -rf applets/test_scaffold
-          echo "Scaffolded, checked, and rendered test_scaffold mod successfully"
+      # THE CLI CONTRACT, RUN FROM A SCRIPT THIS REPOSITORY OWNS.
+      #
+      # These invocations used to live here and nowhere else, so nothing but CI
+      # ran them and nothing but CI could notice when they went stale. On
+      # 2026-09-13 two had: `check applets/*/` relied on the shell expanding a
+      # glob, which pwsh does not do for a native executable, and `snapshot
+      # --script` passed its output path positionally, which became a second
+      # target once applets were named by path. Both were found by a pull request
+      # rather than by the change that broke them.
+      #
+      # `scripts/smoke.luau` is the same file a developer runs before pushing, so
+      # local and CI cannot disagree. It does its own directory discovery, which
+      # is why there is no glob here for a shell to decline to expand.
+      - name: Every command the CLI promises
+        run: lune run scripts/smoke.luau --no-build
 
       # THE GALLERY RENDERS, AND SAYS HOW MUCH IT SHOWS.
       #

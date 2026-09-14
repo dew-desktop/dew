@@ -48,7 +48,18 @@ local serde = require("@lune/serde")
 --- release.
 --- Pinned to commit 2f099c9d2db0061c81728bad66f91140f2b20fed for upstream build
 --- 0.736.0.7361346, which is what all verified conformance cases cite.
-local TRACKER = "https://raw.githubusercontent.com/MaximumADHD/the engine-Client-Tracker/2f099c9d2db0061c81728bad66f91140f2b20fed"
+---
+--- THE PATH IS A THIRD PARTY'S REPOSITORY NAME, and it is spelled the way that
+--- repository is actually spelled because a URL is an address rather than a
+--- reference. A find-and-replace over the word once rewrote the middle of this
+--- one, which put a space in it, and `net.request` answered "invalid uri
+--- character" for months without anyone reading it: lune was missing from the
+--- jobs that call this, and the step is `continue-on-error`, so the failure was
+--- reported as success.
+---
+--- Nothing fetched here is committed. `OUT` is gitignored, so the data stays
+--- local and this repository redistributes none of it. See NOTICE.
+local TRACKER = "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/2f099c9d2db0061c81728bad66f91140f2b20fed"
 local OUT = "host/datamodel/api_surface.json"
 
 --- The classes the standard covers. `GuiObject` descendants are found by walking
