@@ -313,14 +313,28 @@ pub fn load(
 
     // 5 ── the applet's own module. It asks for a surface, or it returns a
     //      declaration describing one. Both arrive from running it.
-    //  `dew` ARRIVES AS THE CHUNK'S VARARG, so a module can reach it before it
-    //  returns anything. It was only ever handed to `mount`, which is why the
-    //  old contract had to return one: there was no other way to be given a
-    //  capability table. `local dew = ...` is the whole of the new way in, and
-    //  it keeps the property the argument was for, which is that `dew` is never
-    //  a global and what an applet was given is visible at its own call site.
+    //  `dew` IS A GLOBAL, the way `game` is one in the engine this host is shaped
+    //  after. It was handed to `mount` as an argument, which is why the old
+    //  contract had to return a table: there was no other way to be given a
+    //  capability table.
+    //
+    //  NOT A VARARG, WHICH WAS THE FIRST ATTEMPT. A chunk's `...` reaches the
+    //  entry module and stops there, so an applet split across two files could
+    //  not see `dew` from the second one without threading it through every call
+    //  that needed it. It is also not an idiom an applet author has met: a
+    //  ModuleScript's chunk receives nothing, so `local dew = ...` is a line
+    //  that means nothing in the engine.
+    //
+    //  AN UNGRANTED CAPABILITY IS STILL ABSENT RATHER THAN GUARDED. That comes
+    //  from which keys this table has, which `capabilities::build` decides from
+    //  the manifest, and not from how the table is delivered.
+    vm.lua()
+        .globals()
+        .set("dew", dew.clone())
+        .map_err(|e| format!("{}: {e}", manifest.id))?;
+
     let returned: LuaValue = modules::load_entry(&vm, &entry)
-        .and_then(|f| f.call(dew.clone()))
+        .and_then(|f| f.call(()))
         .map_err(|e| format!("{}: {e}", manifest.id))?;
     let declaration = match returned {
         LuaValue::Table(table) => table,
@@ -540,6 +554,11 @@ pub mod tests {
             std::fs::write(dir.join("dew.toml"), manifest).expect("dew.toml");
             std::fs::write(dir.join("main.luau"), entry).expect("entry");
             Fixture(dir)
+        }
+
+        /// A second file beside the entry, for an applet that is not one file.
+        pub fn write(&self, name: &str, source: &str) {
+            std::fs::write(self.0.join(name), source).expect("extra module");
         }
 
         pub fn load(&self) -> Result<Applet, String> {
@@ -1238,7 +1257,6 @@ mod asking_for_a_surface {
     use super::tests::Fixture;
 
     const ASKS: &str = r#"
-local dew = ...
 local root = dew.widget({ width = 120, height = 60 })
 local frame = Instance.new("Frame")
 frame.Name = "Asked"
@@ -1273,7 +1291,7 @@ frame.Parent = root
         let fixture = Fixture::new(
             "asks-ungranted",
             "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
-            "local dew = ...\nassert(dew.widget ~= nil, \"widget was granted\")\n\
+            "assert(dew.widget ~= nil, \"widget was granted\")\n\
              assert(dew.overlay == nil, \"overlay was not granted and must be absent\")\n\
              local root = dew.widget({ width = 10, height = 10 })\n",
         );
@@ -1300,13 +1318,45 @@ frame.Parent = root
         );
     }
 
+    /// A second file in the applet can reach `dew` without being handed it.
+    ///
+    /// THE REASON IT IS A GLOBAL. The first attempt passed it as the entry
+    /// chunk's vararg, which reaches the entry module and stops there: an applet
+    /// split across two files saw nothing from the second one, and `dew` would
+    /// have had to be threaded through every call that wanted it.
+    #[test]
+    fn a_required_module_can_reach_dew() {
+        let fixture = Fixture::new(
+            "asks-submodule",
+            "id = \"sub\"
+runtime = \"datamodel\"
+permissions = [\"widget\"]
+",
+            "local helper = require(\"./helper\")
+helper()
+",
+        );
+        fixture.write(
+            "helper.luau",
+            "return function()
+  assert(dew ~= nil, \"a required module should see dew\")
+             local root = dew.widget({ width = 12, height = 12 })
+             assert(root ~= nil, \"and should be answered by it\")
+end
+",
+        );
+        fixture
+            .load()
+            .expect("a submodule should be able to ask for the surface");
+    }
+
     /// What was asked for beats what was returned.
     #[test]
     fn asking_wins_over_a_stale_declaration() {
         let fixture = Fixture::new(
             "asks-both",
             "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
-            "local dew = ...\nlocal root = dew.widget({ width = 33, height = 44 })\n\
+            "local root = dew.widget({ width = 33, height = 44 })\n\
              return { size = { width = 999, height = 999 }, mount = function() end }\n",
         );
         let applet = fixture.load().expect("loads");

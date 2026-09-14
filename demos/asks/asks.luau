@@ -14,10 +14,8 @@
 	nothing left to return.
 ]]
 
---- `dew` IS THE CHUNK'S VARARG. It is not a global, and this line is where the
---- applet says it wants it.
-local dew = ...
-
+--- `dew` IS A GLOBAL, the way `game` is one in the engine Dew is shaped after,
+--- and it carries exactly the capabilities `dew.toml` granted.
 local root = dew.widget({
 	width = 260,
 	height = 120,
@@ -40,7 +38,7 @@ title.Name = "Title"
 title.Size = UDim2.new(1, -32, 0, 30)
 title.Position = UDim2.new(0, 16, 0, 18)
 title.BackgroundTransparency = 1
-title.Text = "asked for this"
+title.Text = "I'm a widget!"
 title.TextColor3 = Color3.fromRGB(233, 239, 249)
 title.TextSize = 20
 title.TextXAlignment = Enum.TextXAlignment.Left
