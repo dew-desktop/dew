@@ -1393,27 +1393,16 @@ mod a_pressable_responds {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    /// Aether's `Pressable` responds when the host drives the tree.
+    /// Aether's `Pressable` responds to a press the host delivered.
     ///
-    /// IGNORED, AND IT FAILS. It is the reproduction for a gap rather than a
-    /// regression guard: an applet that performs its own `Desktop.Mount` keeps
-    /// the framework's session, and nothing then steps it, so the framework's own
-    /// hit testing never sees a press the host delivered to the tree.
+    /// NOTHING DRIVES A SESSION HERE. The applet performed its own mount and the
+    /// host holds no session to step: the press reaches the framework because the
+    /// host offers a `UserInputService` and the framework connects to it, which is
+    /// the arrangement on the engine.
     ///
-    /// `framework-coverage` does not cover this. It drives `session.pointer` and
-    /// `session.step` directly, which is the path the host used to take and not
-    /// the one an applet runs on, so its green number says nothing about either.
-    ///
-    /// Remove the `ignore` when an applet that mounts itself is driven. Until
-    /// then `calculator` and `timetracker` keep their returned declaration, and
-    /// the host keeps mounting them.
-    ///
-    /// THE APPLET IS THE REAL ONE, not a fixture. What is under test is whether a
-    /// framework's own hit testing survives being rendered through this host's
-    /// DataModel rather than through the framework's session, and a fixture that
-    /// built its own pressable would be testing something simpler.
+    /// THE APPLET IS THE REAL ONE, not a fixture, because what is under test is
+    /// whether a framework's own hit testing survives this path at all.
     #[test]
-    #[ignore = "an applet that mounts itself keeps the session, and nothing steps it"]
     fn timetracker_toggles_when_its_button_is_pressed() {
         let dir = PathBuf::from("../examples/aether/timetracker");
         let dir = if dir.is_dir() {
@@ -1431,8 +1420,8 @@ mod a_pressable_responds {
         }
 
         let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-        let aether_root = dew_runtime::installed_package("aether")
-            .expect("no installed aether at the repository root");
+        let aether_root = dew_runtime::installed_package_in(&dir, "aether")
+            .expect("timetracker has no aether installed");
         let loaded =
             load(&dir, &aether_root, &Default::default(), &state).expect("timetracker should load");
 

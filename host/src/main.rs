@@ -358,6 +358,8 @@ impl Renderer {
 
     #[cfg(windows)]
     fn wheel(&mut self, x: f32, y: f32, delta: f32) -> Result<(), String> {
+        crate::services::pointer_moved(x, y);
+        crate::services::pointer_wheel(x, y, delta);
         match self {
             Renderer::Aether { driver, .. } => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
             Renderer::DataModel {

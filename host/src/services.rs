@@ -271,6 +271,16 @@ pub struct PointerState {
     at: Option<(f32, f32)>,
     /// Left, right, middle.
     held: [bool; 3],
+    /// Who to tell when input happens, by signal.
+    ///
+    /// A POLL ANSWERS "WHERE IS IT" AND NOTHING ELSE. A framework that wants to
+    /// know a press HAPPENED has to be told, because the moment between a press
+    /// and its release is not something a per-frame read can recover: press and
+    /// release inside one frame poll as never pressed at all.
+    began: Vec<(usize, LuaFunction)>,
+    ended: Vec<(usize, LuaFunction)>,
+    changed: Vec<(usize, LuaFunction)>,
+    next_listener: usize,
 }
 
 pub type SharedPointer = Arc<Mutex<PointerState>>;
@@ -288,12 +298,99 @@ pub fn pointer() -> &'static SharedPointer {
 
 /// Record where the pointer went. Called wherever input enters the host.
 pub fn pointer_moved(x: f32, y: f32) {
-    pointer().lock().expect("pointer").moved(x, y);
+    let listeners = {
+        let mut guard = pointer().lock().expect("pointer");
+        guard.moved(x, y);
+        guard.changed.iter().map(|(_, f)| f.clone()).collect()
+    };
+    //  FIRED OUTSIDE THE LOCK. A listener reads `Position` while it runs, and
+    //  holding the mutex across a guest call deadlocks on the first one that
+    //  asks where the pointer is.
+    deliver(listeners, "MouseMovement", x, y, 0.0);
 }
 
 /// Record a button going down or up.
 pub fn pointer_button(button: usize, down: bool) {
-    pointer().lock().expect("pointer").set_button(button, down);
+    let (listeners, at) = {
+        let mut guard = pointer().lock().expect("pointer");
+        guard.set_button(button, down);
+        let list = if down { &guard.began } else { &guard.ended };
+        (
+            list.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(),
+            guard.position().unwrap_or((0.0, 0.0)),
+        )
+    };
+    //  ONLY THE LEFT BUTTON IS NAMED, because it is the only one the enum entry
+    //  below exists for here. A right or middle press records its state, which a
+    //  poll can still read, and announces nothing.
+    let Some(kind) = button_name(button) else {
+        return;
+    };
+    deliver(listeners, kind, at.0, at.1, 0.0);
+}
+
+/// Record a wheel turn. Nothing is held; the delta is the whole event.
+pub fn pointer_wheel(x: f32, y: f32, delta: f32) {
+    let listeners = {
+        let guard = pointer().lock().expect("pointer");
+        guard.changed.iter().map(|(_, f)| f.clone()).collect()
+    };
+    deliver(listeners, "MouseWheel", x, y, delta);
+}
+
+fn button_name(button: usize) -> Option<&'static str> {
+    match button {
+        0 => Some("MouseButton1"),
+        1 => Some("MouseButton2"),
+        2 => Some("MouseButton3"),
+        _ => None,
+    }
+}
+
+/// Hand each listener an input object and let it fail on its own.
+///
+/// ONE LISTENER ERRORING DOES NOT SILENCE THE REST, which is what a signal does
+/// on the engine. It is reported rather than swallowed: a handler that throws
+/// every frame should be findable.
+fn deliver(listeners: Vec<LuaFunction>, kind: &'static str, x: f32, y: f32, z: f32) {
+    for listener in listeners {
+        if let Err(e) = listener.call::<()>((InputObject { kind, x, y, z },)) {
+            eprintln!("[dew] an input listener errored: {e}");
+        }
+    }
+}
+
+/// What a guest receives for one input event.
+///
+/// THE TWO FIELDS THE FRAMEWORK READS, and no more. `UserInputType` decides which
+/// branch a router takes and `Position.Z` carries a wheel delta, which is the
+/// engine's own arrangement rather than this host's invention.
+struct InputObject {
+    kind: &'static str,
+    x: f32,
+    y: f32,
+    z: f32,
+}
+
+impl LuaUserData for InputObject {
+    fn add_fields<F: LuaUserDataFields<Self>>(fields: &mut F) {
+        fields.add_field_method_get("UserInputType", |_, this| {
+            //  NAMED FROM THE SAME DATABASE the guest's `Enum` reads, so an item
+            //  this host hands over and one the guest names compare equal. A
+            //  made-up item would answer false against the real one.
+            Ok(crate::datamodel::enums::item_by_name(
+                "UserInputType",
+                this.kind,
+            ))
+        });
+        fields.add_field_method_get("Position", |lua, this| {
+            let position = lua.create_table()?;
+            position.set("X", this.x)?;
+            position.set("Y", this.y)?;
+            position.set("Z", this.z)?;
+            Ok(position)
+        });
+    }
 }
 
 impl PointerState {
@@ -357,7 +454,80 @@ fn install_pointer(lua: &Lua, pointer: &SharedPointer) -> LuaResult<()> {
     )?;
 
     host.set("Pointer", api)?;
+
+    //  AND THE SERVICE THAT DELIVERS, beside the one that answers.
+    //
+    //  A poll says where the pointer IS. A framework also has to learn that a
+    //  press HAPPENED, and cannot recover that from polling: a press and its
+    //  release inside one frame read as never pressed. On the engine both come
+    //  from `UserInputService`, so both come from here.
+    let input = lua.create_table()?;
+    for (name, which) in [
+        ("InputBegan", Signal::Began),
+        ("InputEnded", Signal::Ended),
+        ("InputChanged", Signal::Changed),
+    ] {
+        input.set(name, signal(lua, pointer, which)?)?;
+    }
+    host.set("Input", input)?;
+
     Ok(())
+}
+
+/// Which list a `Connect` adds to.
+#[derive(Clone, Copy)]
+enum Signal {
+    Began,
+    Ended,
+    Changed,
+}
+
+/// One signal, with the `Connect` returning a disconnectable the engine returns.
+///
+/// THE SHAPE IS THE ENGINE'S because the consumer is written against the engine:
+/// `signal:Connect(fn)` answering something with `Disconnect`. A different shape
+/// here would mean every guest branching on which host it is running under, which
+/// is the thing this whole direction removes.
+fn signal(lua: &Lua, pointer: &SharedPointer, which: Signal) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+    let owner = Arc::clone(pointer);
+
+    table.set(
+        "Connect",
+        lua.create_function(move |lua, (_this, f): (LuaValue, LuaFunction)| {
+            let id = {
+                let mut guard = owner.lock().expect("pointer");
+                let id = guard.next_listener;
+                guard.next_listener += 1;
+                match which {
+                    Signal::Began => guard.began.push((id, f)),
+                    Signal::Ended => guard.ended.push((id, f)),
+                    Signal::Changed => guard.changed.push((id, f)),
+                }
+                id
+            };
+
+            let connection = lua.create_table()?;
+            connection.set("Connected", true)?;
+            let dropper = Arc::clone(&owner);
+            connection.set(
+                "Disconnect",
+                lua.create_function(move |_, this: LuaTable| {
+                    let mut guard = dropper.lock().expect("pointer");
+                    match which {
+                        Signal::Began => guard.began.retain(|(k, _)| *k != id),
+                        Signal::Ended => guard.ended.retain(|(k, _)| *k != id),
+                        Signal::Changed => guard.changed.retain(|(k, _)| *k != id),
+                    }
+                    this.set("Connected", false)?;
+                    Ok(())
+                })?,
+            )?;
+            Ok(connection)
+        })?,
+    )?;
+
+    Ok(table)
 }
 
 impl Clock {
@@ -971,5 +1141,128 @@ mod tests {
         let (lua, _clock) = vm();
         let got: String = lua.load("return DewHost.Clock.Name").eval().expect("name");
         assert_eq!(got, "DewFrame");
+    }
+}
+
+#[cfg(test)]
+mod input_is_delivered {
+    use super::*;
+
+    /// A guest connects and is told, rather than having to poll.
+    ///
+    /// THE GAP THIS CLOSES: a poll answers where the pointer is. A press and its
+    /// release inside one frame read as never pressed, so a framework that only
+    /// polls cannot see a click at all.
+    #[test]
+    fn a_press_reaches_a_connected_listener() {
+        let lua = Lua::new();
+        let state: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
+        install_pointer(&lua, &state).expect("install");
+
+        lua.load(
+            r#"
+            seen = {}
+            DewHost.Input.InputBegan:Connect(function(input)
+                table.insert(seen, {
+                    kind = tostring(input.UserInputType),
+                    x = input.Position.X,
+                    y = input.Position.Y,
+                })
+            end)
+            "#,
+        )
+        .exec()
+        .expect("connect");
+
+        {
+            let mut guard = state.lock().expect("pointer");
+            guard.moved(40.0, 12.0);
+        }
+        let listeners: Vec<LuaFunction> = state
+            .lock()
+            .expect("pointer")
+            .began
+            .iter()
+            .map(|(_, f)| f.clone())
+            .collect();
+        deliver(listeners, "MouseButton1", 40.0, 12.0, 0.0);
+
+        let count: usize = lua.load("return #seen").eval().expect("count");
+        assert_eq!(count, 1, "the listener should have been told once");
+
+        let kind: String = lua.load("return seen[1].kind").eval().expect("kind");
+        assert!(
+            kind.contains("MouseButton1"),
+            "the input should name the button, got {kind}"
+        );
+        let x: f32 = lua.load("return seen[1].x").eval().expect("x");
+        assert_eq!(x, 40.0);
+    }
+
+    /// The enum item a guest compares against is the same one.
+    ///
+    /// A MADE-UP ITEM WOULD ANSWER FALSE against the real one, and the router
+    /// branches on exactly this comparison, so an item that merely prints right
+    /// would leave every press unhandled.
+    #[test]
+    fn the_input_type_compares_equal_to_the_guests_own() {
+        let lua = Lua::new();
+        crate::datamodel::install_vocabulary(&lua).expect("vocabulary");
+        let state: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
+        install_pointer(&lua, &state).expect("install");
+
+        lua.load(
+            r#"
+            matched = false
+            DewHost.Input.InputBegan:Connect(function(input)
+                matched = input.UserInputType == Enum.UserInputType.MouseButton1
+            end)
+            "#,
+        )
+        .exec()
+        .expect("connect");
+
+        let listeners: Vec<LuaFunction> = state
+            .lock()
+            .expect("pointer")
+            .began
+            .iter()
+            .map(|(_, f)| f.clone())
+            .collect();
+        deliver(listeners, "MouseButton1", 1.0, 2.0, 0.0);
+
+        let matched: bool = lua.load("return matched").eval().expect("matched");
+        assert!(
+            matched,
+            "the item this host hands over must equal Enum.UserInputType.MouseButton1"
+        );
+    }
+
+    /// Disconnecting stops delivery, and says so.
+    #[test]
+    fn a_disconnected_listener_is_not_told() {
+        let lua = Lua::new();
+        let state: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
+        install_pointer(&lua, &state).expect("install");
+
+        lua.load(
+            r#"
+            calls = 0
+            connection = DewHost.Input.InputBegan:Connect(function() calls += 1 end)
+            connection:Disconnect()
+            "#,
+        )
+        .exec()
+        .expect("connect");
+
+        assert!(
+            state.lock().expect("pointer").began.is_empty(),
+            "Disconnect should remove the listener"
+        );
+        let connected: bool = lua
+            .load("return connection.Connected")
+            .eval()
+            .expect("flag");
+        assert!(!connected, "and should say it is no longer connected");
     }
 }
