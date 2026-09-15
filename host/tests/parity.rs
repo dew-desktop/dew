@@ -22,8 +22,21 @@ mod common;
 // DataModel changes which Aether host `detect()` selects, so moving it is not a
 // relocation but a behaviour change. It is filed rather than forced.
 fn aether_root() -> PathBuf {
-    dew_runtime::installed_package("aether")
-        .expect("no installed aether — run `pesde install` at the repository root")
+    {
+        //  AN EXAMPLE'S INSTALL. This repository declares no framework of its own.
+        let mut found = None;
+        for example in ["examples/aether/pressable", "examples/aether/calculator"] {
+            for prefix in ["", "../"] {
+                let dir = PathBuf::from(format!("{prefix}{example}"));
+                if let Some(p) = dew_runtime::installed_package_in(&dir, "aether") {
+                    found = Some(p);
+                }
+            }
+        }
+        found.expect(
+            "no example has aether installed -- run `pesde install` in examples/aether/pressable",
+        )
+    }
 }
 
 /// What the fixtures below are loaded under.
@@ -38,7 +51,7 @@ fn caps() -> Capabilities {
     let root = aether_root();
     let mut caps = Capabilities::cli(root.clone());
     caps.aliases.insert("aether".to_string(), root.join("src"));
-    match dew_runtime::installed_package("vide") {
+    match dew_runtime::installed_package_in(&root, "vide") {
         Some(vide) => {
             caps.aliases.insert("vide".to_string(), vide.join("src"));
         }
