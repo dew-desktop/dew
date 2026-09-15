@@ -18,8 +18,8 @@ name: CI
 # IF EVERY JOB FAILS IN TWO SECONDS WITH NO LOGS, it is not this file. A job that
 # dies before its first step, whose log fetch returns `BlobNotFound`, did not get
 # a runner -- which in practice means the Actions minutes are gone. Check billing
-# before reading YAML. That happened on 2026-09-13 after a day of cold-cache
-# Windows builds, and the shape above is the response to it.
+# before reading YAML. A day of cold Windows builds is enough to exhaust them,
+# and the shape above is the response to that.
 on:
   push:
     branches: [main]
@@ -32,8 +32,8 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# WHY THESE THREE, MEASURED 2026-09-08 on a run that took 6m20s of `cargo build`
-# on Linux against 51s on Windows. The difference was a cold cache, and what a
+# WHY THESE THREE, measured on a run that took 6m20s of `cargo build` on Linux
+# against 51s on Windows. The difference was a cold cache, and what a
 # cold cache has to build here is expensive for reasons CI does not need.
 #
 # THE RESULT, same day, critical path across the whole workflow:
@@ -47,9 +47,8 @@ concurrency:
 # Linux), which is the debug info and the incremental artifacts below.
 #
 # READ A COLD NUMBER AS A COLD NUMBER. Changing a cache key -- or racing the
-# first save on `main` -- costs one full rebuild, and three of the runs measured
-# that day were cold for exactly those reasons rather than for anything the
-# workflow does.
+# first save on `main` -- costs one full rebuild. A run that looks slow is
+# usually one of those rather than anything the workflow does.
 #
 #   CARGO_INCREMENTAL   Incremental artifacts are never reused across CI runs and
 #                       are large, so they cost cache upload time and buy nothing.
@@ -81,7 +80,7 @@ jobs:
   # three Rust commits before it answer true. A gate nobody has watched refuse
   # is not known to work.
   changes:
-    name: what changed
+    name: decide which jobs need to run
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
@@ -144,7 +143,7 @@ jobs:
   # THIS JOB HAS NO `if:`. verify_ascii covers documentation, so the one kind of
   # commit that skips every Rust job is exactly the kind this job exists for.
   checks:
-    name: boundaries
+    name: architecture boundaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -158,16 +157,16 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
 
-      # ARCHITECTURE, CHECKED. ADR-004 draws hard lines between Aether, Dew and
-      # dew-cli, and a boundary with nothing checking it is a boundary nobody
-      # follows -- this repository has found that class five times in one
-      # milestone. Lune-only, so it runs beside commitlint before anything is
-      # built.
-      - run: lune run scripts/verify_boundaries.luau
+      # ARCHITECTURE, CHECKED. Dew owns its host outright: the rendering stack is
+      # this repository's, and no framework is a dependency of it. A boundary with
+      # nothing checking it is a boundary nobody follows. Lune-only, so it runs
+      # before anything is built.
+      - name: Check that Dew's host depends on no framework
+        run: lune run scripts/verify_boundaries.luau
 
 
   build:
-    name: build and mount every applet
+    name: Windows, build and render every example
     runs-on: windows-latest
     needs: [changes, checks]
     # ON `main` TOO, AND THE REASON IS THE CACHE RATHER THAN THE CHECK.
@@ -190,7 +189,7 @@ jobs:
       # than naming a version twice. `@stable` floated six releases ahead of the
       # machine this is developed on, which `-D warnings` turns into a red build
       # nobody can reproduce locally.
-      - name: Resolve the toolchain pin
+      - name: Read the Rust version from rust-toolchain.toml
         id: rust
         shell: bash
         run: |
@@ -206,7 +205,7 @@ jobs:
       # `.`, NOT `host`. THE WORKSPACE ROOT IS THE REPOSITORY ROOT.
       #
       # This said `workspaces: host` from before the rendering stack moved in and
-      # the four packages became one workspace (ADR-004, milestone 2 sprint 1).
+      # the four packages became one workspace.
       # After that move `cargo metadata` reports the target directory as
       # `<repo>/target`, and `host/target` does not exist at all -- so this step
       # restored and saved a directory that was not there, cached the registry
@@ -262,7 +261,7 @@ jobs:
       # Cloning the sibling makes local and CI read one source. The pesde pin
       # stays where it is and keeps doing its own job, which is supplying the
       # framework to mods.
-      - name: Fetch sibling aether for the conformance cases
+      - name: Clone Aether, which holds the conformance cases
         shell: bash
         run: git clone --depth 1 https://github.com/project-aether-ui/aether.git ../aether
 
@@ -293,7 +292,7 @@ jobs:
       # NOT FATAL. A third-party mirror being down is not a reason to fail a build:
       # the tests that need it say SKIPPED and the rest of the run still means
       # something. A silent zero would be the bad outcome, and nothing reports one.
-      - name: Generate the interface surface
+      - name: Generate the DataModel property list
         continue-on-error: true
         run: lune run scripts/fetch_api_surface.luau
 
@@ -302,7 +301,7 @@ jobs:
       # tick: lune was not installed in this job at all, and the tracker URL had
       # a space in the middle of it. Neither is fatal to a build and both should
       # be visible, so this annotates rather than exits.
-      - name: Say if the interface surface is missing
+      - name: Warn if the property list was not generated
         if: always()
         shell: bash
         run: |
@@ -317,7 +316,7 @@ jobs:
       # mod fails to mount with "could not read entry module .../roblox_packages/
       # aether.luau". The host injects nothing any more, so there is no fallback
       # that would quietly cover a missed install.
-      - name: Install each applet's own dependencies
+      - name: Install each example's own packages
         shell: bash
         run: |
           # EVERY EXAMPLE THAT BRINGS A FRAMEWORK. This once looked only at
@@ -332,7 +331,8 @@ jobs:
               echo "$d installed no aether redirect"; exit 1; }
           done
 
-      - run: cargo build --manifest-path host/Cargo.toml
+      - name: Build the host
+        run: cargo build --manifest-path host/Cargo.toml
 
       # `cargo test` compiled ZERO tests until the manifest gained some, and
       # printed `ok. 0 passed` while doing it -- the same sentence a passing suite
@@ -350,7 +350,7 @@ jobs:
       # stayed green, because a smaller green number reads exactly like a pass.
       # Raise the floor when the suite grows; lowering it has to be a deliberate
       # line in a diff.
-      - name: Test the workspace, and refuse a suite that shrank
+      - name: Run the Rust tests, and fail if the suite shrank
         shell: bash
         run: |
           FLOOR=352
@@ -367,18 +367,15 @@ jobs:
 
       # THE CLI CONTRACT, RUN FROM A SCRIPT THIS REPOSITORY OWNS.
       #
-      # These invocations used to live here and nowhere else, so nothing but CI
-      # ran them and nothing but CI could notice when they went stale. On
-      # 2026-09-13 two had: `check applets/*/` relied on the shell expanding a
-      # glob, which pwsh does not do for a native executable, and `snapshot
-      # --script` passed its output path positionally, which became a second
-      # target once applets were named by path. Both were found by a pull request
-      # rather than by the change that broke them.
+      # Keeping these invocations in the workflow and nowhere else meant nothing
+      # but CI ran them, and nothing but CI could notice when they went stale. Two
+      # of them had: a glob pwsh does not expand for a native executable, and an
+      # output path that became a second target once applets were named by path.
       #
       # `scripts/smoke.luau` is the same file a developer runs before pushing, so
       # local and CI cannot disagree. It does its own directory discovery, which
       # is why there is no glob here for a shell to decline to expand.
-      - name: Every command the CLI promises
+      - name: Run every command the CLI documents
         run: lune run scripts/smoke.luau --no-build
 
       # FMT AND CLIPPY HERE RATHER THAN IN A JOB OF THEIR OWN.
@@ -391,12 +388,14 @@ jobs:
       # Running them last, after the build and the mounts, keeps the useful
       # property the separate job had: a formatting complaint does not hide a
       # mount failure, because the mounts have already run.
-      - run: cargo fmt --manifest-path host/Cargo.toml --all --check
+      - name: Check formatting
+        run: cargo fmt --manifest-path host/Cargo.toml --all --check
 
-      - run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
+      - name: Lint, with warnings treated as errors
+        run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
 
   linux:
-    name: build and render without win32
+    name: Linux, build and render headlessly
     runs-on: ubuntu-latest
     needs: [changes, checks]
     # ON `main` TOO, AND THE REASON IS THE CACHE RATHER THAN THE CHECK.
@@ -415,7 +414,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve the toolchain pin
+      - name: Read the Rust version from rust-toolchain.toml
         id: rust
         shell: bash
         run: |
@@ -460,7 +459,7 @@ jobs:
       # Cloning the sibling makes local and CI read one source. The pesde pin
       # stays where it is and keeps doing its own job, which is supplying the
       # framework to mods.
-      - name: Fetch sibling aether for the conformance cases
+      - name: Clone Aether, which holds the conformance cases
         shell: bash
         run: git clone --depth 1 https://github.com/project-aether-ui/aether.git ../aether
 
@@ -474,8 +473,6 @@ jobs:
           chmod +x "$RUNNER_TEMP/pesde/pesde"
           echo "$RUNNER_TEMP/pesde" >> "$GITHUB_PATH"
 
-      - run: pesde install
-
       # THE INTERFACE SURFACE IS GENERATED, NOT COMMITTED.
       #
       # It derives from a third party's published data, so the repository does not
@@ -485,7 +482,7 @@ jobs:
       # NOT FATAL. A third-party mirror being down is not a reason to fail a build:
       # the tests that need it say SKIPPED and the rest of the run still means
       # something. A silent zero would be the bad outcome, and nothing reports one.
-      - name: Generate the interface surface
+      - name: Generate the DataModel property list
         continue-on-error: true
         run: lune run scripts/fetch_api_surface.luau
 
@@ -494,7 +491,7 @@ jobs:
       # tick: lune was not installed in this job at all, and the tracker URL had
       # a space in the middle of it. Neither is fatal to a build and both should
       # be visible, so this annotates rather than exits.
-      - name: Say if the interface surface is missing
+      - name: Warn if the property list was not generated
         if: always()
         shell: bash
         run: |
@@ -509,7 +506,7 @@ jobs:
       # mod fails to mount with "could not read entry module .../roblox_packages/
       # aether.luau". The host injects nothing any more, so there is no fallback
       # that would quietly cover a missed install.
-      - name: Install each applet's own dependencies
+      - name: Install each example's own packages
         shell: bash
         run: |
           # EVERY EXAMPLE THAT BRINGS A FRAMEWORK. This once looked only at
@@ -530,38 +527,37 @@ jobs:
       #
       # The Windows job keeps the full build, because `cargo test --workspace`
       # immediately after compiles every target regardless.
-      - run: cargo build --manifest-path host/Cargo.toml --bin dew --bin gallery-coverage
+      - name: Build the host and the coverage tool
+        run: cargo build --manifest-path host/Cargo.toml --bin dew --bin gallery-coverage
 
-      - run: cargo test --workspace
+      - name: Run the Rust tests
+        run: cargo test --workspace
 
       # THE CLI CONTRACT, RUN FROM A SCRIPT THIS REPOSITORY OWNS.
       #
-      # These invocations used to live here and nowhere else, so nothing but CI
-      # ran them and nothing but CI could notice when they went stale. On
-      # 2026-09-13 two had: `check applets/*/` relied on the shell expanding a
-      # glob, which pwsh does not do for a native executable, and `snapshot
-      # --script` passed its output path positionally, which became a second
-      # target once applets were named by path. Both were found by a pull request
-      # rather than by the change that broke them.
+      # Keeping these invocations in the workflow and nowhere else meant nothing
+      # but CI ran them, and nothing but CI could notice when they went stale. Two
+      # of them had: a glob pwsh does not expand for a native executable, and an
+      # output path that became a second target once applets were named by path.
       #
       # `scripts/smoke.luau` is the same file a developer runs before pushing, so
       # local and CI cannot disagree. It does its own directory discovery, which
       # is why there is no glob here for a shell to decline to expand.
-      - name: Every command the CLI promises
+      - name: Run every command the CLI documents
         run: lune run scripts/smoke.luau --no-build
 
       # THE GALLERY RENDERS, AND SAYS HOW MUCH IT SHOWS.
       #
       # `datamodel-surface` reports what the host ACCEPTS; this reports what
-      # anything actually DRAWS, and the gap between them is milestone 5. The
+      # anything actually DRAWS, and the gap between them is the work left. The
       # render runs here because a gallery of images nobody re-renders is a
       # folder of screenshots that rots -- a scene that stops rendering has to
       # fail a build, or it stops being evidence of anything.
       #
       # The coverage number is printed rather than gated. Gating it on a
       # threshold would make the honest early figure a build failure; the number
-      # moving is a sprint's job to report, not CI's to enforce.
-      - name: Render the gallery and report coverage
+      # moving is worth reporting in a pull request, not enforcing here.
+      - name: Render the gallery, and report how much it covers
         shell: bash
         run: |
           cargo run --quiet --manifest-path host/Cargo.toml --bin gallery-coverage --             --render "$RUNNER_TEMP/gallery" --scenes
