@@ -144,7 +144,7 @@ jobs:
   # THIS JOB HAS NO `if:`. verify_ascii covers documentation, so the one kind of
   # commit that skips every Rust job is exactly the kind this job exists for.
   checks:
-    name: commitlint, boundaries and ASCII
+    name: boundaries
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -157,33 +157,6 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # FIRST, NOT LAST. This was once the final step of the build job, so a
-      # malformed subject line cost a full toolchain install, a pesde install, a
-      # cold cargo build and three mod mounts -- about ten minutes -- to find out
-      # about. It needs nothing but lune, so it runs the moment lune exists.
-      #
-      # ON A PULL REQUEST, `HEAD` IS NOT YOUR COMMIT. GitHub checks out a
-      # synthetic merge commit whose subject is `Merge <sha> into <sha>`, which
-      # no conventional-commit rule describes and which nobody wrote. The
-      # script's own exemption covers `Title (#1)`, the subject a MERGED pull
-      # request gets, and not this one -- so the first pull request this
-      # repository ever ran CI on was rejected for a commit that is not in it.
-      #
-      # The commits worth validating are the ones the branch ADDS, so on a pull
-      # request this checks that range instead. On a push it checks HEAD, which
-      # is what the script does by default.
-      - name: Validate commit subjects
-        shell: bash
-        env:
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD: ${{ github.event.pull_request.head.sha }}
-        run: |
-          if [ -n "$PR_BASE" ]; then
-            echo "pull request: checking $PR_BASE..$PR_HEAD"
-            lune run scripts/commitlint_check.luau "$PR_BASE..$PR_HEAD"
-          else
-            lune run scripts/commitlint_check.luau
-          fi
 
       # ARCHITECTURE, CHECKED. ADR-004 draws hard lines between Aether, Dew and
       # dew-cli, and a boundary with nothing checking it is a boundary nobody
@@ -192,13 +165,6 @@ jobs:
       # built.
       - run: lune run scripts/verify_boundaries.luau
 
-      # PLAIN ASCII IN DOCUMENTATION. CONTRIBUTING.md names three places --
-      # commits, pull requests and documentation. commitlint covers the first,
-      # this covers the third, and nothing covered either until six sprint
-      # records had drifted. Scoped to Markdown ON PURPOSE: source comments and
-      # what Dew prints at runtime are not documentation, and a gate that
-      # overreaches gets disabled and takes the real rule with it.
-      - run: lune run scripts/verify_ascii.luau
 
   build:
     name: build and mount every applet

@@ -62,10 +62,8 @@ An applet installs its own packages from its own directory.
 
 ## Contributing
 
-[CONTRIBUTING.md](CONTRIBUTING.md), and
-[docs/contributing/guidelines.md](docs/contributing/guidelines.md) for how work is
-branched, written and landed. Contributions require agreeing to the
-[CLA](CLA.md).
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to run it and what has to pass.
+Contributions require agreeing to the [CLA](CLA.md).
 
 ## License
 
