@@ -170,14 +170,19 @@ jobs:
     name: build and mount every applet
     runs-on: windows-latest
     needs: [changes, checks]
-    # PULL REQUESTS ONLY, because a push to `main` is a merge of a pull request
-    # that just ran this exact matrix. Running it again bills a second Windows
-    # machine to learn what was learned four minutes earlier.
+    # ON `main` TOO, AND THE REASON IS THE CACHE RATHER THAN THE CHECK.
     #
-    # The trade, stated: nothing re-checks `main` after a merge. That is
-    # acceptable while every change arrives through a pull request, and it is the
-    # first thing to revisit if that stops being true.
-    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request'
+    # An Actions cache is readable only by the ref that wrote it and by branches
+    # off the default one. This job was pull-request-only, so every cache landed
+    # on `refs/pull/N/merge` and none was ever written on `main`: nine caches of
+    # 240MB, every one of them write-only. A pull request's first run therefore
+    # built from cold every time, around 500s against the 110s a warm one takes,
+    # and only a second push to the SAME pull request was ever fast.
+    #
+    # Running here on a merge costs one machine and seeds a cache every later
+    # branch can read. It also gives back what the earlier arrangement traded
+    # away, which is that something checks `main` after a merge.
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
@@ -394,14 +399,19 @@ jobs:
     name: build and render without win32
     runs-on: ubuntu-latest
     needs: [changes, checks]
-    # PULL REQUESTS ONLY, because a push to `main` is a merge of a pull request
-    # that just ran this exact matrix. Running it again bills a second Windows
-    # machine to learn what was learned four minutes earlier.
+    # ON `main` TOO, AND THE REASON IS THE CACHE RATHER THAN THE CHECK.
     #
-    # The trade, stated: nothing re-checks `main` after a merge. That is
-    # acceptable while every change arrives through a pull request, and it is the
-    # first thing to revisit if that stops being true.
-    if: needs.changes.outputs.code == 'true' && github.event_name == 'pull_request'
+    # An Actions cache is readable only by the ref that wrote it and by branches
+    # off the default one. This job was pull-request-only, so every cache landed
+    # on `refs/pull/N/merge` and none was ever written on `main`: nine caches of
+    # 240MB, every one of them write-only. A pull request's first run therefore
+    # built from cold every time, around 500s against the 110s a warm one takes,
+    # and only a second push to the SAME pull request was ever fast.
+    #
+    # Running here on a merge costs one machine and seeds a cache every later
+    # branch can read. It also gives back what the earlier arrangement traded
+    # away, which is that something checks `main` after a merge.
+    if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
 
