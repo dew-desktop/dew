@@ -1,37 +1,40 @@
 # Contributing
 
-Start with [docs/contributing/guidelines.md](docs/contributing/guidelines.md).
-It is the index, and it carries the short version of everything below it.
-
-Three things worth knowing before the first pull request:
-
-- **One observable goal per branch**, and the prefix says which kind of work it
-  is. A branch that needs "and" to describe it is two branches.
-- **`main` is always green.** Every commit on it compiles, passes its checks, and
-  runs.
-- **Plain ASCII**, in commits, pull requests and documentation alike.
-
-## Start here
+## Running it
 
 ```sh
-lune run scripts/setup.luau
+cargo run -- examples/host/basic-widget
 ```
 
-It checks the tools, points git at `.githooks/pre-push`, and says which examples
-still need their own packages installed. Run it again whenever something looks
-wrong; it reports rather than assumes and changes nothing that is already set.
-
-The hook runs the commit subject check, the ASCII and boundary gates, and every
-command the CLI promises, in under three seconds. It is worth having: the cheap
-CI job gates the expensive ones, so a commit subject with the wrong scope costs a
-full round trip and reports nothing about your code. Those gates run from the
-same scripts CI runs, so a pass here is a pass there.
-
-Run the CLI checks on their own with:
+Every example brings the framework it requires, so install one before running
+it:
 
 ```sh
-lune run scripts/smoke.luau
+cd examples/aether/timetracker && pesde install
 ```
 
-If you are writing a widget rather than changing the host, you probably want
-[docs/applet_contract.md](docs/applet_contract.md) instead.
+Dew itself declares no framework. `cargo test --manifest-path host/Cargo.toml`
+borrows one from an example that has installed it.
+
+## Checking it
+
+```sh
+lune run scripts/smoke.luau            every command the CLI promises
+lune run scripts/verify_boundaries.luau  Dew owns its host outright
+cargo test --manifest-path host/Cargo.toml
+```
+
+CI runs those, plus the build and the applet mounts on both Windows and Linux.
+
+## Writing an applet
+
+[docs/applet_contract.md](docs/applet_contract.md) is what a `dew.toml` and an
+entry module have to say. [examples/](examples/) is the same thing working.
+
+## Pull requests
+
+**One observable goal per branch**, and the prefix says which kind of work it
+is. A branch that needs "and" to describe it is two branches.
+
+**`main` is always green.** Every commit on it compiles, passes its checks, and
+runs.

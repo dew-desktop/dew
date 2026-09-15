@@ -106,7 +106,16 @@ pub fn strip_extended_prefix(path: PathBuf) -> PathBuf {
 /// needs the package root to reach `src/host/Desktop.luau`, and the `@aether`
 /// alias is that root's `src`.
 pub fn installed_package(name: &str) -> Option<PathBuf> {
-    let mut cur = std::env::current_dir().ok()?;
+    installed_package_in(&std::env::current_dir().ok()?, name)
+}
+
+/// The same, starting somewhere named rather than at the working directory.
+///
+/// AN APPLET'S OWN INSTALL IS THE ONE THAT MATTERS. Each brings the framework it
+/// declared, so "the installed Aether" is a question with one answer per applet
+/// and none at all for the repository containing them.
+pub fn installed_package_in(start: &Path, name: &str) -> Option<PathBuf> {
+    let mut cur = start.to_path_buf();
     let base = loop {
         let candidate = cur.join("roblox_packages").join(".pesde");
         if candidate.is_dir() {

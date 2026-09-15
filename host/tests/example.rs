@@ -49,8 +49,18 @@ mod common;
 // DataModel changes which Aether host `detect()` selects, so moving it is not a
 // relocation but a behaviour change. It is filed rather than forced.
 fn aether_root() -> PathBuf {
-    dew_runtime::installed_package("aether")
-        .expect("no installed aether — run `pesde install` at the repository root")
+    //  AN EXAMPLE'S INSTALL. This repository declares no framework: an applet
+    //  brings the one it requires, so a test wanting one names an applet rather
+    //  than reading a pin kept for the purpose.
+    for example in ["examples/aether/pressable", "examples/aether/calculator"] {
+        for prefix in ["", "../"] {
+            let dir = PathBuf::from(format!("{prefix}{example}"));
+            if let Some(found) = dew_runtime::installed_package_in(&dir, "aether") {
+                return found;
+            }
+        }
+    }
+    panic!("no example has aether installed -- run `pesde install` in examples/aether/pressable")
 }
 
 /// What the fixtures below are loaded under.
@@ -65,11 +75,17 @@ fn caps() -> Capabilities {
     let root = aether_root();
     let mut caps = Capabilities::cli(root.clone());
     caps.aliases.insert("aether".to_string(), root.join("src"));
-    match dew_runtime::installed_package("vide") {
+    //  THE SAME EXAMPLE'S VIDE, beside the Aether above. A framework and the
+    //  library it was resolved with have to come from one install, or the tree
+    //  is built by one copy and reconciled by another.
+    match dew_runtime::installed_package_in(&root, "vide") {
         Some(vide) => {
             caps.aliases.insert("vide".to_string(), vide.join("src"));
         }
-        None => panic!("no installed vide — run `pesde install` at the repository root"),
+        None => panic!(
+            "no vide beside {} -- run `pesde install` in examples/aether/pressable",
+            root.display()
+        ),
     }
     caps
 }
