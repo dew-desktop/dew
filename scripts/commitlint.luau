@@ -2,7 +2,59 @@
 -- Dew Luau Commitlint Configuration & Validator (@dew/commitlint)
 -- Strictly mapped to directories that physically exist in the repository
 
-local style = require("./house_style")
+export type Finding = {
+    rule: string,
+    detail: string,
+}
+
+local ATTRIBUTION = {
+	{ pattern = "[Cc]o%-[Aa]uthored%-[Bb]y:.*[Cc]laude", detail = "a Co-Authored-By trailer naming a tool" },
+	{ pattern = "[Cc]o%-[Aa]uthored%-[Bb]y:.*[Cc]opilot", detail = "a Co-Authored-By trailer naming a tool" },
+	{ pattern = "[Cc]o%-[Aa]uthored%-[Bb]y:.*[Cc]ursor", detail = "a Co-Authored-By trailer naming a tool" },
+	{ pattern = "[Cc]o%-[Aa]uthored%-[Bb]y:.*GPT", detail = "a Co-Authored-By trailer naming a tool" },
+	{ pattern = "[Gg]enerated with", detail = "a generated-by footer" },
+	{ pattern = "[Aa][Ii]%-generated", detail = "a generated-by note" },
+}
+
+--- Tool attribution, anywhere in a piece of text.
+local function findForbidden(text: string): { Finding }
+	local found: { Finding } = {}
+	for _, rule in ipairs(ATTRIBUTION) do
+		if string.find(text, rule.pattern) then
+			table.insert(found, { rule = "attribution", detail = rule.detail })
+			break
+		end
+	end
+	return found
+end
+
+--- Plain ASCII, which CONTRIBUTING promises for three places and had for one.
+---
+--- `verify_ascii` walks Markdown, so documentation was covered and commits were
+--- not. A bare emoji in a subject passed every gate.
+---
+--- BYTE ABOVE 127, not a character allowlist. An em dash, a curly quote, an
+--- arrow and an emoji are one rule, and naming them individually is how the next
+--- one gets in.
+local function nonAsciiAt(text: string): (number?, string?)
+	for index = 1, #text do
+		local byte = string.byte(text, index)
+		if byte and byte > 127 then
+			--- Report the whole character, not its first byte, so the message
+			--- shows what to delete rather than a number.
+			local width = 1
+			if byte >= 240 then
+				width = 4
+			elseif byte >= 224 then
+				width = 3
+			elseif byte >= 192 then
+				width = 2
+			end
+			return index, string.sub(text, index, index + width - 1)
+		end
+	end
+	return nil, nil
+end
 
 export type CommitLintConfig = {
     types: {string},
@@ -153,12 +205,12 @@ local function validateCommit(message: string): ValidationResult
     end
 
     -- 4. No attribution naming a tool.
-    for _, finding in ipairs(style.findForbidden(message)) do
+    for _, finding in ipairs(findForbidden(message)) do
         table.insert(errors, `Remove {finding.detail}: a commit is authored by the person landing it`)
     end
 
     -- 5. Plain ASCII, which is promised for commits and was only checked in docs.
-    local at, character = style.nonAsciiAt(message)
+    local at, character = nonAsciiAt(message)
     if at and character then
         table.insert(
             errors,

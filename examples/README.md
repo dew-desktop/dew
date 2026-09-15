@@ -47,5 +47,18 @@ any other package; Dew supplies nothing.
 cargo run -- examples/aether/timetracker
 ```
 
+Each one installs its own framework: a `pesde.toml` naming Aether and vide by
+commit, required through the redirect `pesde install` writes beside it. Dew
+supplies nothing and its own dependencies are empty.
+
 `framework-coverage` measures these to report how much of the framework is
-actually exercised rather than merely shipped.
+actually exercised rather than merely shipped. An example opts in by exporting
+`Measure`; the rest are skipped and the run says how many of each it saw.
+
+| export | what it is |
+| :--- | :--- |
+| `Measure` | mounts the same tree with a given Aether, for the coverage pass |
+| `Aether` | the table the tool wraps to record what was used |
+| `Script` | the interaction to drive, as data |
+| `Session` | what the tool steps, from `Aether.Desktop.Mount` |
+| `Width`, `Height` | the surface to paint |
