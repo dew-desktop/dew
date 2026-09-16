@@ -170,6 +170,11 @@ struct Measured {
 }
 
 fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Measured>, String> {
+    //  A VM OF ITS OWN NEEDS A POINTER OF ITS OWN. The host's pointer is process
+    //  level, so an example that connects to the input service leaves its
+    //  listener behind for the next VM -- and calling a listener whose Lua has
+    //  been dropped panics rather than misbehaving.
+    services::forget_pointer();
     let mut caps = Capabilities::cli(dir.to_path_buf());
     caps.require_roots = vec![dir.to_path_buf()];
     caps.aliases.clear();
@@ -261,6 +266,10 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     };
     let used = measured.used.clone();
 
+    //  The measuring VM is finished with; its listeners go with it. See
+    //  `measure_demo`.
+    services::forget_pointer();
+
     // THE DEMO'S OWN PACKAGES ARE ITS ONLY REQUIRE ROOT, and it gets no aliases.
     // A demo that only loads because the host handed it a framework would prove
     // nothing about a mod, which is the thing it stands in for.
@@ -339,12 +348,32 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
             "up" => Pointer::Up,
             other => return Err(format!("{name}: unknown pointer '{other}'")),
         };
+        // WHICH BUTTON, DEFAULTING TO THE PRIMARY ONE. A step that says nothing
+        // is the left button, which is what every script written before this said
+        // and what a session means by "down".
+        let button = match step.get::<Option<String>>("button") {
+            Ok(Some(named)) => match named.as_str() {
+                "left" => 0,
+                "right" => 1,
+                "middle" => 2,
+                other => return Err(format!("{name}: unknown button '{other}'")),
+            },
+            _ => 0,
+        };
         // RECORDED AS WELL AS DELIVERED, so a demo that polls the host sees the
         // same pointer the tree was told about. Without this a guest reading
         // `DewHost.Pointer` headlessly gets nothing while the tree gets events.
         services::pointer_moved(x, y);
         if matches!(pointer, Pointer::Down | Pointer::Up) {
-            services::pointer_button(0, matches!(pointer, Pointer::Down));
+            services::pointer_button(button, matches!(pointer, Pointer::Down));
+        }
+        // A SESSION POINTER HAS NO BUTTON, and a framework's router arbitrates
+        // the primary one. So a secondary press is reported through the input
+        // service and stops there: handing it to the session as well would make
+        // the router press whatever the pointer happened to be over, and a
+        // right-click that also left-clicks is not a gesture any host performs.
+        if button != 0 {
+            continue;
         }
         session
             .pointer(pointer, x, y)
@@ -358,7 +387,7 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     // differential can distinguish "the input never arrived" from "the feature
     // ignored it" -- two bugs with one symptom, and the pixel count cannot tell
     // them apart. Finding the pressable's own was worth four rounds of guessing.
-    for field in ["Presses", "Hovered", "Ticks", "Opened"] {
+    for field in ["Presses", "Hovered", "Ticks", "Opened", "Chosen"] {
         if let Ok(reader) = app.get::<mlua::Function>(field) {
             if let Ok(v) = reader.call::<LuaValue>(()) {
                 eprintln!("  probe   {name}: {field} = {v:?}");

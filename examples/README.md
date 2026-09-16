@@ -47,6 +47,9 @@ any other package; Dew supplies nothing.
 cargo run -- examples/aether/timetracker
 ```
 
+`contextmenu` opens a menu from a right-click the host reports through its input
+service, walks the pointer onto a row and presses it.
+
 Each one installs its own framework: a `pesde.toml` naming Aether and vide by
 commit, required through the redirect `pesde install` writes beside it. Dew
 supplies nothing and its own dependencies are empty.
@@ -62,3 +65,8 @@ actually exercised rather than merely shipped. An example opts in by exporting
 | `Script` | the interaction to drive, as data |
 | `Session` | what the tool steps, from `Aether.Desktop.Mount` |
 | `Width`, `Height` | the surface to paint |
+| a reader | what the example saw: `Presses`, `Opened`, `Chosen`, `Hovered`, `Ticks` |
+
+A reader is what separates "the input never arrived" from "the feature ignored
+it". Both paint the same picture, and `contextmenu` answers `Chosen` with the
+row a press landed on, which no pixel count can report.

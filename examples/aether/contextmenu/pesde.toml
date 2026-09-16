@@ -1,0 +1,20 @@
+name = "dew_examples/contextmenu"
+version = "0.0.1"
+description = "A context menu opened by a right-click, so the framework can prove a menu lands on the row it was aimed at"
+
+# A DEMO INSTALLS ITS OWN FRAMEWORK. The host injects nothing, and Dew's own
+# [dependencies] is empty and gated -- an application that wants Aether carries a
+# manifest, exactly as applets/*/ do.
+[target]
+environment = "roblox"
+lib = "contextmenu.luau"
+
+[dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "46d65d1a57034b5c455be92136745c9b5c3e35f7" }
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"
