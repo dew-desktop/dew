@@ -296,6 +296,19 @@ pub fn pointer() -> &'static SharedPointer {
     POINTER.get_or_init(|| Arc::new(Mutex::new(PointerState::default())))
 }
 
+/// Forget the pointer entirely: where it was, which buttons are held, and every
+/// listener connected to it.
+///
+/// FOR A PROCESS THAT RUNS MORE THAN ONE GUEST. The cell is process level because
+/// one cursor exists, which is right while one guest is running and wrong the
+/// moment a second one loads: its listeners join the first one's, and a Lua
+/// function whose state has since been dropped panics the host when the next
+/// press is delivered. `framework-coverage` loads two VMs per example and found
+/// this the first time an example connected to the service at all.
+pub fn forget_pointer() {
+    *pointer().lock().expect("pointer") = PointerState::default();
+}
+
 /// Record where the pointer went. Called wherever input enters the host.
 pub fn pointer_moved(x: f32, y: f32) {
     let listeners = {
