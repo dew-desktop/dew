@@ -10,7 +10,7 @@ environment = "roblox"
 lib = "contextmenu.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "bd3bd1f4c7d884e32fdc566cb8b1582a9b6110c2" }
+aether = { repo = "project-aether-ui/aether", rev = "f011ab6bf529e41ee4edebaf37ed5a20c11e27e2" }
 vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
 
 [indices]

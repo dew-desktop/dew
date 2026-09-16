@@ -1442,6 +1442,22 @@ mod a_pressable_responds {
         let mut pointer = datamodel::input::Pointer::default();
         let button = datamodel::input::Button::Left;
 
+        //  LAY THE TREE OUT BEFORE AIMING AT IT. An applet that parents itself
+        //  into its surface leaves `AbsolutePosition` at the origin until
+        //  something computes geometry, and a framework hit-testing against that
+        //  finds every rectangle stacked at (0, 0). Rendering a frame is what a
+        //  window does between pointer events, so this does it too.
+        let settle = || {
+            let mut guard = dom.lock().expect("dom");
+            datamodel::render::commit_geometry(
+                &mut guard,
+                *root,
+                loaded.width as f32,
+                loaded.height as f32,
+            );
+        };
+        settle();
+
         //  THE CENTRE OF THE TOGGLE, which sits at (286, 16) and is 74 by 24.
         let (x, y) = (286.0 + 37.0, 16.0 + 12.0);
 
@@ -1455,14 +1471,17 @@ mod a_pressable_responds {
         services::pointer_moved(x, y);
         pointer.moved(&surface, x, y).expect("moved");
         services::tick(&loaded.clock, 1.0 / 60.0);
+        settle();
 
         services::pointer_button(button as usize, true);
         pointer.down(&surface, button, x, y).expect("down");
         services::tick(&loaded.clock, 1.0 / 60.0);
+        settle();
 
         services::pointer_button(button as usize, false);
         pointer.up(&surface, button, x, y).expect("up");
         services::tick(&loaded.clock, 1.0 / 60.0);
+        settle();
 
         let label_after = button_label(dom, *root);
         assert_ne!(

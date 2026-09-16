@@ -217,5 +217,4 @@ local function build()
 		return tree
 	end
 
-local mounted = Aether.Desktop.Mount(build, WIDTH, HEIGHT)
-;(mounted.Tree :: any).Parent = root
+Aether.mount(build, root)

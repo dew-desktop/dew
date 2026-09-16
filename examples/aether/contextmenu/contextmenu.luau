@@ -126,16 +126,18 @@ end
 
 --- THE APPLET ASKS FOR ITS SURFACE and parents its own tree into it. Nothing
 --- here is handed back for a host to mount on this applet's behalf.
-local root = (dew :: any).widget({ width = WIDTH, height = HEIGHT })
+---
+--- `dew.widget` is nil unless `dew.toml` asked for `widget`, so the assert names
+--- the manifest line rather than letting a call on nil be the error.
+local widget = assert(dew.widget, "dew.toml must grant `widget`")
+local root = widget({ width = WIDTH, height = HEIGHT })
 
-local mounted = Aether.Desktop.Mount(build, WIDTH, HEIGHT)
-
-;(mounted.Tree :: any).Parent = root
+Aether.mount(build, root)
 
 --- THE HOST'S OWN INPUT SERVICE, connected once per process the way a framework
 --- connects to it. `MouseButton2` is the only thing this listens for; the
 --- primary button belongs to the router and arrives through the session.
-local host: any = (DewHost :: any)
+local host = DewHost
 if host ~= nil and host.Input ~= nil then
 	host.Input.InputBegan:Connect(function(input: any)
 		if tostring(input.UserInputType) ~= "Enum.UserInputType.MouseButton2" then
