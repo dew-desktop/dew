@@ -46,10 +46,6 @@ local ROWS = {
 
 --- The centre of row `index`, in surface coordinates: the padding above the
 --- first row, then a row and a gap for each one before it.
-local function rowCentre(index: number): (number, number)
-	local top = CLICK.y + MENU.padding + (index - 1) * (MENU.row + MENU.spacing)
-	return CLICK.x + MENU.width / 2, top + MENU.row / 2
-end
 
 local opens = 0
 local chosen: string? = nil
@@ -97,6 +93,22 @@ local function build(A: any): any
 				else A.Vocabulary.Color3.new(0.07, 0.08, 0.11)
 		end,
 
+		--- WHAT WAS CHOSEN, ON SCREEN. A test beside this file reads the tree the
+		--- host holds, the way a person reads the window, so an outcome that is
+		--- not drawn is an outcome nothing can check.
+		A.create "TextLabel" {
+			Name = "Chosen",
+			Position = A.Vocabulary.UDim2.fromOffset(12, HEIGHT - 28),
+			Size = A.Vocabulary.UDim2.fromOffset(WIDTH - 24, 20),
+			BackgroundTransparency = 1,
+			TextColor3 = A.Vocabulary.Color3.new(0.85, 0.89, 0.95),
+			TextSize = 13,
+			TextXAlignment = A.Vocabulary.Enum.TextXAlignment.Left,
+			Text = function()
+				return `chosen: {picked() or "nothing"}`
+			end,
+		},
+
 		A.ContextMenu({
 			IsOpen = open,
 			OnClose = function()
@@ -137,54 +149,3 @@ if host ~= nil and host.Input ~= nil then
 	end)
 end
 
-local ITEM_X, ITEM_Y = rowCentre(2)
-
---- WHAT THE MEASUREMENT READS, and nothing the host does. `framework-coverage`
---- steps `Session`, paints `Width` by `Height`, drives `Script` and asks the
---- readers below what the application saw.
-return {
-	id = "contextmenu",
-
-	Session = mounted.Session,
-	Width = WIDTH,
-	Height = HEIGHT,
-
-	--- RIGHT-CLICK, TRAVEL, CHOOSE. The secondary button carries `button`, which
-	--- the tool reports through the host's input service rather than through the
-	--- session: a session pointer has no button, and the router would take it for
-	--- the primary one and press whatever the menu happens to cover.
-	---
-	--- The move before the press is not decoration. A row is focused by the
-	--- pointer arriving over it, and a press at a coordinate the router has never
-	--- seen resolves against the hover set of wherever the pointer was last.
-	Script = {
-		{ pointer = "move", x = CLICK.x, y = CLICK.y },
-		{ step = 1 / 60 },
-		{ pointer = "down", button = "right", x = CLICK.x, y = CLICK.y },
-		{ pointer = "up", button = "right", x = CLICK.x, y = CLICK.y },
-		{ step = 1 / 60 },
-		{ pointer = "move", x = ITEM_X, y = ITEM_Y },
-		{ step = 1 / 60 },
-		{ pointer = "down", x = ITEM_X, y = ITEM_Y },
-		{ pointer = "up", x = ITEM_X, y = ITEM_Y },
-		{ step = 1 / 60 },
-	},
-
-	--- How many times the right-click reached the application at all.
-	Opened = function(): number
-		return opens
-	end,
-
-	--- WHICH ROW RAN. The claim a pixel count cannot make: a menu open on the
-	--- wrong row paints almost the same image as one open on the right row.
-	Chosen = function(): string
-		return chosen or "nothing"
-	end,
-
-	Aether = Aether,
-	Measure = function(A: any)
-		return Aether.Desktop.Mount(function()
-			return build(A)
-		end, WIDTH, HEIGHT)
-	end,
-}

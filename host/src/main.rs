@@ -877,6 +877,16 @@ fn parse_test(args: &[String]) -> Result<Command, String> {
                 let val = iter.next().ok_or("missing value for --dir")?;
                 dir = Some(PathBuf::from(val));
             }
+            //  A DIRECTORY IS A DIRECTORY, and anything else is a filter. Every
+            //  other command takes a path positionally, and `dew test
+            //  examples/aether/contextmenu` reading as a name to match meant the
+            //  suite beside an applet could only be reached through `--dir`.
+            s if !s.starts_with('-') && PathBuf::from(s).is_dir() => {
+                if dir.is_some() {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+                dir = Some(PathBuf::from(s));
+            }
             s if !s.starts_with('-') => {
                 if filter.is_none() {
                     filter = Some(s.to_string());
@@ -1712,6 +1722,24 @@ return process
             eprintln!("  Vocabulary installation failed: {e}");
             continue;
         }
+        //  A SUITE BESIDE AN APPLET GETS A SURFACE TO LOAD IT INTO. Anywhere
+        //  else this installs nothing, so Aether's own suites see exactly what
+        //  they always saw.
+        if suite_path
+            .parent()
+            .map(|d| d.join("dew.toml").is_file())
+            .unwrap_or(false)
+        {
+            let state: crate::capabilities::Shared =
+                Arc::new(Mutex::new(crate::capabilities::HostState::default()));
+            if let Err(e) = install_test_surface(vm.lua(), &dom, &state) {
+                failed += 1;
+                eprintln!("::error::{suite_name}");
+                eprintln!("  test surface installation failed: {e}");
+                continue;
+            }
+        }
+
         let clock: crate::services::SharedClock =
             Arc::new(Mutex::new(crate::services::Clock::default()));
         if let Err(e) = crate::services::install(vm.lua(), &clock) {
@@ -2071,6 +2099,131 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// What a `.test.luau` beside an applet is given, on top of the DataModel.
+///
+/// AN APPLET RETURNS NOTHING, so a test cannot read one. It requires the applet
+/// like any module, the applet asks for its surface and builds under it, and the
+/// test then drives input and reads the tree the host holds. That is the same
+/// path a person takes, which is the point: the old arrangement mounted the tree
+/// a second time under a recording copy of the framework and measured that.
+///
+/// INSTALLED ONLY BY `dew test`. `DewTest` is not part of what an applet may
+/// reach, and an applet that found one would be reading a test harness.
+fn install_test_surface(
+    lua: &mlua::Lua,
+    dom: &dew_host::datamodel::SharedDom,
+    state: &crate::capabilities::Shared,
+) -> mlua::Result<()> {
+    let root = dom
+        .lock()
+        .expect("dom")
+        .insert("ScreenGui".into(), "DewRoot".into());
+    let handle = dew_host::datamodel::handle(lua, dom, root)?;
+
+    //  EVERY SURFACE IS GRANTED HERE, unlike in the host, where the table
+    //  carries only what a manifest asked for. A test is not the place to
+    //  rehearse a refusal, and one that wanted to would assert on `applets::load`
+    //  instead.
+    let granted = [
+        crate::manifest::Permission::Widget,
+        crate::manifest::Permission::Window,
+        crate::manifest::Permission::Overlay,
+        crate::manifest::Permission::Popover,
+        crate::manifest::Permission::Storage,
+        crate::manifest::Permission::Clipboard,
+    ];
+    let grant = crate::capabilities::SurfaceGrant {
+        requested: Arc::new(Mutex::new(None)),
+        root: Some(mlua::IntoLua::into_lua(handle.clone(), lua)?),
+        title: "test".to_string(),
+    };
+    let dew = crate::capabilities::build(lua, &granted, state, &grant)?;
+    lua.globals().set("dew", dew)?;
+
+    let harness = lua.create_table()?;
+    harness.set("Root", handle)?;
+
+    //  RECORDED AND DELIVERED, in the order the renderer uses. A framework polls
+    //  `services` for where the pointer is and connects to the input service for
+    //  what happened; driving one without the other leaves half of it reading a
+    //  pointer that never moved.
+    let pointer = lua.create_table()?;
+    let surface_dom = dom.clone();
+    pointer.set(
+        "Move",
+        lua.create_function(move |lua, (x, y): (f32, f32)| {
+            crate::services::pointer_moved(x, y);
+            let surface = dew_host::datamodel::input::Surface {
+                lua,
+                dom: &surface_dom,
+                root,
+                size: (0.0, 0.0),
+            };
+            let mut p = dew_host::datamodel::input::Pointer::default();
+            let _ = p.moved(&surface, x, y);
+            Ok(())
+        })?,
+    )?;
+
+    for (name, down) in [("Down", true), ("Up", false)] {
+        let surface_dom = dom.clone();
+        pointer.set(
+            name,
+            lua.create_function(move |lua, (x, y, button): (f32, f32, Option<usize>)| {
+                let button = button.unwrap_or(0);
+                crate::services::pointer_moved(x, y);
+                crate::services::pointer_button(button, down);
+                let surface = dew_host::datamodel::input::Surface {
+                    lua,
+                    dom: &surface_dom,
+                    root,
+                    size: (0.0, 0.0),
+                };
+                let kind = match button {
+                    1 => dew_host::datamodel::input::Button::Right,
+                    2 => dew_host::datamodel::input::Button::Middle,
+                    _ => dew_host::datamodel::input::Button::Left,
+                };
+                let mut p = dew_host::datamodel::input::Pointer::default();
+                let _ = if down {
+                    p.down(&surface, kind, x, y)
+                } else {
+                    p.up(&surface, kind, x, y)
+                };
+                Ok(())
+            })?,
+        )?;
+    }
+    harness.set("Pointer", pointer)?;
+
+    //  LAYOUT HAS TO HAVE RUN before a test can ask where anything is.
+    //  `AbsolutePosition` reads the reflection database's default of zero until
+    //  something computes it, and zero is a plausible coordinate rather than an
+    //  error: a test that clicks there hits whatever is at the origin and passes
+    //  against the wrong element.
+    //
+    //  The window loop does this every frame. A test says when.
+    let settle_dom = dom.clone();
+    harness.set(
+        "Settle",
+        lua.create_function(move |_, size: Option<mlua::Table>| {
+            let (w, h) = match size {
+                Some(t) => (
+                    t.get("width").unwrap_or(0.0),
+                    t.get("height").unwrap_or(0.0),
+                ),
+                None => (0.0, 0.0),
+            };
+            let mut guard = settle_dom.lock().expect("dom");
+            dew_host::datamodel::render::commit_geometry(&mut guard, root, w, h);
+            Ok(())
+        })?,
+    )?;
+
+    lua.globals().set("DewTest", harness)?;
+    Ok(())
 }
 
 #[cfg(test)]
