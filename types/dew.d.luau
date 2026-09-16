@@ -118,3 +118,41 @@ declare dew: {
 	--- Requires "audio".
 	audio: Audio?,
 }
+
+--- A signal a host fires, shaped the way the engine shapes one.
+type Signal = {
+	Connect: (self: Signal, listener: (input: any) -> ()) -> { Disconnect: (self: any) -> () },
+}
+
+--- What the host answers about itself, beside the capability table.
+---
+--- SEPARATE FROM `dew` BECAUSE IT IS NOT A CAPABILITY. Nothing here is granted
+--- or withheld by a manifest: a clock and a pointer are what any host has, and a
+--- framework reaches for them the way it reaches for the engine's own services.
+declare DewHost: {
+	--- Where the pointer is, asked of whichever host can answer.
+	Pointer: {
+		Position: () -> (number?, number?),
+		IsDown: (button: number?) -> boolean,
+	},
+
+	--- What the host delivers through, the way the engine delivers through
+	--- `UserInputService`. A press and its release inside one frame cannot be
+	--- recovered by polling, so they arrive here.
+	Input: {
+		InputBegan: Signal,
+		InputEnded: Signal,
+		InputChanged: Signal,
+	},
+
+	--- Frames, for anything that has to run per frame rather than per event.
+	Clock: {
+		Name: string,
+		OnFrame: (listener: (dt: number) -> ()) -> () -> (),
+	},
+
+	--- Measuring text, which needs the face the host will actually draw with.
+	Text: {
+		Measure: (text: string, size: number, font: string?) -> (number, number),
+	},
+}
