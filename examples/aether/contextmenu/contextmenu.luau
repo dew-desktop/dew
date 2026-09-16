@@ -58,12 +58,12 @@ local summon: ((x: number, y: number) -> ())? = nil
 --- for the real table. Every symbol this reads is a symbol this demo shows.
 local function build(A: any): any
 	local open = A.source(false)
-	local anchor = A.source(A.Vocabulary.Vector2.new(CLICK.x, CLICK.y))
+	local anchor = A.source(Vector2.new(CLICK.x, CLICK.y))
 	local picked = A.source(nil :: string?)
 
 	summon = function(x: number, y: number)
 		opens += 1
-		anchor(A.Vocabulary.Vector2.new(x, y))
+		anchor(Vector2.new(x, y))
 		open(true)
 	end
 
@@ -81,7 +81,7 @@ local function build(A: any): any
 
 	return A.create "Frame" {
 		Name = "Root",
-		Size = A.Vocabulary.UDim2.fromOffset(WIDTH, HEIGHT),
+		Size = UDim2.fromOffset(WIDTH, HEIGHT),
 
 		--- THE CHOICE IS ON THE BACKGROUND, so the last paint differs from the
 		--- first after the menu has closed again. A menu that opens and shuts
@@ -89,8 +89,8 @@ local function build(A: any): any
 		--- that reads zero for an interaction that worked perfectly.
 		BackgroundColor3 = function()
 			return if picked() ~= nil
-				then A.Vocabulary.Color3.new(0.16, 0.28, 0.2)
-				else A.Vocabulary.Color3.new(0.07, 0.08, 0.11)
+				then Color3.new(0.16, 0.28, 0.2)
+				else Color3.new(0.07, 0.08, 0.11)
 		end,
 
 		--- WHAT WAS CHOSEN, ON SCREEN. A test beside this file reads the tree the
@@ -98,12 +98,12 @@ local function build(A: any): any
 		--- not drawn is an outcome nothing can check.
 		A.create "TextLabel" {
 			Name = "Chosen",
-			Position = A.Vocabulary.UDim2.fromOffset(12, HEIGHT - 28),
-			Size = A.Vocabulary.UDim2.fromOffset(WIDTH - 24, 20),
+			Position = UDim2.fromOffset(12, HEIGHT - 28),
+			Size = UDim2.fromOffset(WIDTH - 24, 20),
 			BackgroundTransparency = 1,
-			TextColor3 = A.Vocabulary.Color3.new(0.85, 0.89, 0.95),
+			TextColor3 = Color3.new(0.85, 0.89, 0.95),
 			TextSize = 13,
-			TextXAlignment = A.Vocabulary.Enum.TextXAlignment.Left,
+			TextXAlignment = Enum.TextXAlignment.Left,
 			Text = function()
 				return `chosen: {picked() or "nothing"}`
 			end,
@@ -118,8 +118,8 @@ local function build(A: any): any
 			Items = function()
 				return items
 			end,
-			Position = A.Vocabulary.UDim2.fromOffset(CLICK.x, CLICK.y),
-			Size = A.Vocabulary.UDim2.fromOffset(MENU.width, 0),
+			Position = UDim2.fromOffset(CLICK.x, CLICK.y),
+			Size = UDim2.fromOffset(MENU.width, 0),
 		}),
 	}
 end

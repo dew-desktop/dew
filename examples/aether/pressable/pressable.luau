@@ -27,13 +27,13 @@ local function build(A: any): any
 
 	return A.create "Frame" {
 		Name = "Root",
-		Size = A.Vocabulary.UDim2.fromOffset(WIDTH, HEIGHT),
-		BackgroundColor3 = A.Vocabulary.Color3.new(0.07, 0.08, 0.11),
+		Size = UDim2.fromOffset(WIDTH, HEIGHT),
+		BackgroundColor3 = Color3.new(0.07, 0.08, 0.11),
 
 		A.Pressable({
 			Name = "Button",
-			Position = A.Vocabulary.UDim2.fromOffset(BUTTON.x, BUTTON.y),
-			Size = A.Vocabulary.UDim2.fromOffset(BUTTON.width, BUTTON.height),
+			Position = UDim2.fromOffset(BUTTON.x, BUTTON.y),
+			Size = UDim2.fromOffset(BUTTON.width, BUTTON.height),
 
 			--- OPAQUE, EXPLICITLY. `Pressable` defaults
 			--- `BackgroundTransparency` to 1, so a button given only a colour
@@ -46,8 +46,8 @@ local function build(A: any): any
 			--- than on anything the host happened to repaint.
 			BackgroundColor3 = function()
 				return if pressed()
-					then A.Vocabulary.Color3.new(0.95, 0.75, 0.2)
-					else A.Vocabulary.Color3.new(0.22, 0.55, 0.95)
+					then Color3.new(0.95, 0.75, 0.2)
+					else Color3.new(0.22, 0.55, 0.95)
 			end,
 
 			--- `OnPressed` AND `OnReleased` ARE THE CONTRACT. There is no
