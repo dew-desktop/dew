@@ -898,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn the_vocabulary_answers_every_name_aether_requires() {
+    fn the_vocabulary_answers_every_name_aether_declares() {
         // A SUPERSET, ASSERTED AS ONE, and the list is not decoration.
         //
         // Aether's `REQUIRED_VOCABULARY` names eleven types, and under its
