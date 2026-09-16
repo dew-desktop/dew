@@ -35,7 +35,7 @@
 //! "your program is wrong" must never arrive as the same message.
 
 mod content;
-mod enums;
+pub mod enums;
 pub mod input;
 pub mod members;
 pub mod render;
