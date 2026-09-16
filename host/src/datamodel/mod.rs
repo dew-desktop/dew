@@ -1338,7 +1338,7 @@ pub fn handle(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<LuaAnyUserData
 /// TWO THINGS CHANGED, AND ONLY TOGETHER ARE THEY ENOUGH.
 ///
 /// The gap closed. `vocabulary.rs` now answers every one of the eleven names
-/// Aether's `Host.Vocabulary` declares, `fromHex` and `fromHSV` included, so
+/// Aether's `REQUIRED_VOCABULARY` requires, `fromHex` and `fromHSV` included, so
 /// there is no member for a first writer to take away.
 ///
 /// And the second writer left. Under Aether's DataModel host `InstallVocabulary`

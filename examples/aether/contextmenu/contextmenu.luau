@@ -54,12 +54,12 @@ local chosen: string? = nil
 --- the tree being built and the host's input service is installed once.
 local summon: ((x: number, y: number) -> ())? = nil
 
---- Built with whatever Aether it is handed, so the coverage proxy can stand in
---- for the real table. Every symbol this reads is a symbol this demo shows.
-local function build(A: any): any
-	local open = A.source(false)
-	local anchor = A.source(Vector2.new(CLICK.x, CLICK.y))
-	local picked = A.source(nil :: string?)
+--- The tree, built once inside a reactive scope. Every symbol this reads is a
+--- symbol this demo shows.
+local function build(): any
+	local open = Aether.source(false)
+	local anchor = Aether.source(Vector2.new(CLICK.x, CLICK.y))
+	local picked = Aether.source(nil :: string?)
 
 	summon = function(x: number, y: number)
 		opens += 1
@@ -79,7 +79,7 @@ local function build(A: any): any
 		})
 	end
 
-	return A.create "Frame" {
+	return Aether.create "Frame" {
 		Name = "Root",
 		Size = UDim2.fromOffset(WIDTH, HEIGHT),
 
@@ -96,7 +96,7 @@ local function build(A: any): any
 		--- WHAT WAS CHOSEN, ON SCREEN. A test beside this file reads the tree the
 		--- host holds, the way a person reads the window, so an outcome that is
 		--- not drawn is an outcome nothing can check.
-		A.create "TextLabel" {
+		Aether.create "TextLabel" {
 			Name = "Chosen",
 			Position = UDim2.fromOffset(12, HEIGHT - 28),
 			Size = UDim2.fromOffset(WIDTH - 24, 20),
@@ -109,7 +109,7 @@ local function build(A: any): any
 			end,
 		},
 
-		A.ContextMenu({
+		Aether.ContextMenu({
 			IsOpen = open,
 			OnClose = function()
 				open(false)
@@ -128,9 +128,7 @@ end
 --- here is handed back for a host to mount on this applet's behalf.
 local root = (dew :: any).widget({ width = WIDTH, height = HEIGHT })
 
-local mounted = Aether.Desktop.Mount(function()
-	return build(Aether)
-end, WIDTH, HEIGHT)
+local mounted = Aether.Desktop.Mount(build, WIDTH, HEIGHT)
 
 ;(mounted.Tree :: any).Parent = root
 

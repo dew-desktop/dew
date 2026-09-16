@@ -600,7 +600,7 @@ pub fn install(lua: &Lua) -> LuaResult<()> {
 
     // ---- Font, and the two sequence types ----
     //
-    // THE REST OF THE ELEVEN NAMES Aether's `Host.Vocabulary` declares, and they
+    // THE REST OF THE ELEVEN NAMES Aether's `REQUIRED_VOCABULARY` requires, and they
     // are here for completeness rather than because Dew draws with them. A
     // gradient is step K's neighbourhood and `ColorSequence`/`NumberSequence` are
     // the two properties this host still refuses.
@@ -898,10 +898,10 @@ mod tests {
     }
 
     #[test]
-    fn the_vocabulary_answers_every_name_aether_declares() {
+    fn the_vocabulary_answers_every_name_aether_requires() {
         // A SUPERSET, ASSERTED AS ONE, and the list is not decoration.
         //
-        // Aether's `Host.Vocabulary` declares eleven names, and under its
+        // Aether's `REQUIRED_VOCABULARY` names eleven types, and under its
         // DataModel host `InstallVocabulary` is `function() end` -- so on this
         // host these globals are the ONLY vocabulary a mod has. A partial one is
         // worse than none: `available()` asks whether six of the names exist and

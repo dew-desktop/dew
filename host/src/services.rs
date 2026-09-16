@@ -65,6 +65,7 @@
 
 use dew_raster::Font;
 use mlua::prelude::*;
+use mlua::WeakLua;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -277,10 +278,37 @@ pub struct PointerState {
     /// know a press HAPPENED has to be told, because the moment between a press
     /// and its release is not something a per-frame read can recover: press and
     /// release inside one frame poll as never pressed at all.
-    began: Vec<(usize, LuaFunction)>,
-    ended: Vec<(usize, LuaFunction)>,
-    changed: Vec<(usize, LuaFunction)>,
+    began: Vec<Listener>,
+    ended: Vec<Listener>,
+    changed: Vec<Listener>,
     next_listener: usize,
+}
+
+/// A subscribed guest function, and a weak handle on the state it came from.
+///
+/// THE STATE IS WHY THE HANDLE IS HERE. This list is process level while a Lua
+/// state is not: a guest that subscribes and is then dropped leaves its function
+/// behind, and calling one whose state has gone aborts the process from inside
+/// mlua rather than erroring. Holding the state weakly says which entries are
+/// still callable, and upgrading it before the call keeps it callable until the
+/// call returns.
+struct Listener {
+    id: usize,
+    f: LuaFunction,
+    state: WeakLua,
+}
+
+/// The callable listeners, with the ones whose state has gone dropped.
+fn live(list: &mut Vec<Listener>) -> Vec<(LuaFunction, Lua)> {
+    let mut out = Vec::new();
+    list.retain(|listener| match listener.state.try_upgrade() {
+        Some(state) => {
+            out.push((listener.f.clone(), state));
+            true
+        }
+        None => false,
+    });
+    out
 }
 
 pub type SharedPointer = Arc<Mutex<PointerState>>;
@@ -314,7 +342,7 @@ pub fn pointer_moved(x: f32, y: f32) {
     let listeners = {
         let mut guard = pointer().lock().expect("pointer");
         guard.moved(x, y);
-        guard.changed.iter().map(|(_, f)| f.clone()).collect()
+        live(&mut guard.changed)
     };
     //  FIRED OUTSIDE THE LOCK. A listener reads `Position` while it runs, and
     //  holding the mutex across a guest call deadlocks on the first one that
@@ -327,11 +355,13 @@ pub fn pointer_button(button: usize, down: bool) {
     let (listeners, at) = {
         let mut guard = pointer().lock().expect("pointer");
         guard.set_button(button, down);
-        let list = if down { &guard.began } else { &guard.ended };
-        (
-            list.iter().map(|(_, f)| f.clone()).collect::<Vec<_>>(),
-            guard.position().unwrap_or((0.0, 0.0)),
-        )
+        let at = guard.position().unwrap_or((0.0, 0.0));
+        let list = if down {
+            live(&mut guard.began)
+        } else {
+            live(&mut guard.ended)
+        };
+        (list, at)
     };
     //  ONLY THE LEFT BUTTON IS NAMED, because it is the only one the enum entry
     //  below exists for here. A right or middle press records its state, which a
@@ -345,8 +375,8 @@ pub fn pointer_button(button: usize, down: bool) {
 /// Record a wheel turn. Nothing is held; the delta is the whole event.
 pub fn pointer_wheel(x: f32, y: f32, delta: f32) {
     let listeners = {
-        let guard = pointer().lock().expect("pointer");
-        guard.changed.iter().map(|(_, f)| f.clone()).collect()
+        let mut guard = pointer().lock().expect("pointer");
+        live(&mut guard.changed)
     };
     deliver(listeners, "MouseWheel", x, y, delta);
 }
@@ -365,8 +395,10 @@ fn button_name(button: usize) -> Option<&'static str> {
 /// ONE LISTENER ERRORING DOES NOT SILENCE THE REST, which is what a signal does
 /// on the engine. It is reported rather than swallowed: a handler that throws
 /// every frame should be findable.
-fn deliver(listeners: Vec<LuaFunction>, kind: &'static str, x: f32, y: f32, z: f32) {
-    for listener in listeners {
+fn deliver(listeners: Vec<(LuaFunction, Lua)>, kind: &'static str, x: f32, y: f32, z: f32) {
+    //  THE STATE IS HELD FOR THE LENGTH OF THE CALL, which is the whole reason it
+    //  travels alongside the function rather than being checked and dropped.
+    for (listener, _state) in listeners {
         if let Err(e) = listener.call::<()>((InputObject { kind, x, y, z },)) {
             eprintln!("[dew] an input listener errored: {e}");
         }
@@ -512,10 +544,15 @@ fn signal(lua: &Lua, pointer: &SharedPointer, which: Signal) -> LuaResult<LuaTab
                 let mut guard = owner.lock().expect("pointer");
                 let id = guard.next_listener;
                 guard.next_listener += 1;
+                let listener = Listener {
+                    id,
+                    f,
+                    state: lua.weak(),
+                };
                 match which {
-                    Signal::Began => guard.began.push((id, f)),
-                    Signal::Ended => guard.ended.push((id, f)),
-                    Signal::Changed => guard.changed.push((id, f)),
+                    Signal::Began => guard.began.push(listener),
+                    Signal::Ended => guard.ended.push(listener),
+                    Signal::Changed => guard.changed.push(listener),
                 }
                 id
             };
@@ -528,9 +565,9 @@ fn signal(lua: &Lua, pointer: &SharedPointer, which: Signal) -> LuaResult<LuaTab
                 lua.create_function(move |_, this: LuaTable| {
                     let mut guard = dropper.lock().expect("pointer");
                     match which {
-                        Signal::Began => guard.began.retain(|(k, _)| *k != id),
-                        Signal::Ended => guard.ended.retain(|(k, _)| *k != id),
-                        Signal::Changed => guard.changed.retain(|(k, _)| *k != id),
+                        Signal::Began => guard.began.retain(|l| l.id != id),
+                        Signal::Ended => guard.ended.retain(|l| l.id != id),
+                        Signal::Changed => guard.changed.retain(|l| l.id != id),
                     }
                     this.set("Connected", false)?;
                     Ok(())
@@ -1191,13 +1228,7 @@ mod input_is_delivered {
             let mut guard = state.lock().expect("pointer");
             guard.moved(40.0, 12.0);
         }
-        let listeners: Vec<LuaFunction> = state
-            .lock()
-            .expect("pointer")
-            .began
-            .iter()
-            .map(|(_, f)| f.clone())
-            .collect();
+        let listeners = live(&mut state.lock().expect("pointer").began);
         deliver(listeners, "MouseButton1", 40.0, 12.0, 0.0);
 
         let count: usize = lua.load("return #seen").eval().expect("count");
@@ -1235,13 +1266,7 @@ mod input_is_delivered {
         .exec()
         .expect("connect");
 
-        let listeners: Vec<LuaFunction> = state
-            .lock()
-            .expect("pointer")
-            .began
-            .iter()
-            .map(|(_, f)| f.clone())
-            .collect();
+        let listeners = live(&mut state.lock().expect("pointer").began);
         deliver(listeners, "MouseButton1", 1.0, 2.0, 0.0);
 
         let matched: bool = lua.load("return matched").eval().expect("matched");
