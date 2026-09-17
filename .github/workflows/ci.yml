@@ -323,12 +323,21 @@ jobs:
           # `applets/*/`, so a demo was `check`ed one step later and never
           # mounted, and the gap had nothing to report it. One tree means one
           # glob now, and the depth is the same for all of them.
+          #
+          # ONE REDIRECT PER DECLARED DEPENDENCY, not a hardcoded check for
+          # `aether.luau`. An example that declares only `vide` (no Aether)
+          # never gets one, and the old unconditional check failed it for a
+          # framework it never asked for.
           for m in examples/*/*/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
-            test -f "$d/roblox_packages/aether.luau" || {
-              echo "$d installed no aether redirect"; exit 1; }
+            deps=$(sed -n '/\[dependencies\]/,/^\[/p' "$m" \
+              | grep -E '^[A-Za-z_][A-Za-z0-9_]* *=' | sed -E 's/ *=.*//')
+            for dep in $deps; do
+              test -f "$d/roblox_packages/$dep.luau" || {
+                echo "$d installed no $dep redirect"; exit 1; }
+            done
           done
 
       - name: Build the host
@@ -513,12 +522,21 @@ jobs:
           # `applets/*/`, so a demo was `check`ed one step later and never
           # mounted, and the gap had nothing to report it. One tree means one
           # glob now, and the depth is the same for all of them.
+          #
+          # ONE REDIRECT PER DECLARED DEPENDENCY, not a hardcoded check for
+          # `aether.luau`. An example that declares only `vide` (no Aether)
+          # never gets one, and the old unconditional check failed it for a
+          # framework it never asked for.
           for m in examples/*/*/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
-            test -f "$d/roblox_packages/aether.luau" || {
-              echo "$d installed no aether redirect"; exit 1; }
+            deps=$(sed -n '/\[dependencies\]/,/^\[/p' "$m" \
+              | grep -E '^[A-Za-z_][A-Za-z0-9_]* *=' | sed -E 's/ *=.*//')
+            for dep in $deps; do
+              test -f "$d/roblox_packages/$dep.luau" || {
+                echo "$d installed no $dep redirect"; exit 1; }
+            done
           done
 
       # TWO BINARIES, NOT SIX. This job renders and scaffolds; it never runs the
