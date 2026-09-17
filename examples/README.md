@@ -6,7 +6,7 @@ Programs that run on Dew, each showing one thing.
 
 What the host itself offers, with no framework involved.
 
-`basic-widget` is the smallest applet that draws: it opens a float, builds a
+`basic-widget` is the smallest applet that draws: it opens a widget, builds a
 card out of instances, and puts text on it.
 
 ```sh

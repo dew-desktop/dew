@@ -21,9 +21,9 @@
 ]]
 
 --- `dew` is a global carrying exactly the capabilities `dew.toml` granted.
-local float = assert(dew.Float, "dew.toml must grant `float`")
+local widget = assert(dew.Widget, "dew.toml must grant `widget`")
 
-local root = float({
+local root = widget({
 	width = 340,
 	height = 148,
 	anchor = "topRight",

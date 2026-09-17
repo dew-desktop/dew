@@ -26,14 +26,14 @@ pub enum Permission {
     RbxAssetId,
 
     // SURFACES ARE CAPABILITIES (ADR-012), and they are separate ones because
-    // they differ in weight. A float draws in a corner. An overlay that is
+    // they differ in weight. A widget draws in a corner. An overlay that is
     // topmost and click-through can draw over everything on screen while the
     // user does not know it is there. Granting those with one word would be
     // saying they are the same request.
     //
     // Every applet gets a surface today without asking. These make the asking
     // explicit, which is the honest version of what was always happening.
-    Float,
+    Widget,
     Window,
     Overlay,
     Popover,
@@ -47,7 +47,7 @@ impl Permission {
             Permission::Notifications => "notifications",
             Permission::Clipboard => "clipboard",
             Permission::RbxAssetId => "rbxassetid",
-            Permission::Float => "float",
+            Permission::Widget => "widget",
             Permission::Window => "window",
             Permission::Overlay => "overlay",
             Permission::Popover => "popover",
@@ -61,7 +61,7 @@ impl Permission {
     /// rather than written into the manifest as though it meant something.
     pub fn surface_from_name(word: &str) -> Option<Permission> {
         let found = match word {
-            "float" => Permission::Float,
+            "widget" => Permission::Widget,
             "window" => Permission::Window,
             "overlay" => Permission::Overlay,
             "popover" => Permission::Popover,
@@ -78,7 +78,7 @@ impl Permission {
     pub fn is_surface(self) -> bool {
         matches!(
             self,
-            Permission::Float | Permission::Window | Permission::Overlay | Permission::Popover
+            Permission::Widget | Permission::Window | Permission::Overlay | Permission::Popover
         )
     }
 }

@@ -26,7 +26,7 @@ pub struct HostState {
 
 pub type Shared = Arc<Mutex<HostState>>;
 
-/// What `dew.Float{ ... }` needs to answer an applet.
+/// What `dew.Widget{ ... }` needs to answer an applet.
 ///
 /// THE ROOT IS MADE BEFORE THE APPLET RUNS, so asking for a surface hands back
 /// something that already exists rather than creating a window from inside a
@@ -96,7 +96,7 @@ pub fn build(
             //  own PascalCase convention -- except `Permission::Popover`, which
             //  has no surface kind behind it yet and is left exactly as it was.
             let name: &str = match permission {
-                Permission::Float => "Float",
+                Permission::Widget => "Widget",
                 Permission::Window => "Window",
                 Permission::Overlay => "Overlay",
                 _ => permission.name(),
@@ -121,7 +121,7 @@ pub fn build(
             continue;
         }
         match permission {
-            Permission::Float | Permission::Window | Permission::Overlay | Permission::Popover => {
+            Permission::Widget | Permission::Window | Permission::Overlay | Permission::Popover => {
                 unreachable!("surfaces are skipped above")
             }
             Permission::Storage => {

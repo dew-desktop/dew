@@ -39,7 +39,7 @@ thread_local! {
     ///
     /// EVERY ENTRY IS TAGGED. One queue for every window on the thread is the
     /// right structure, and it was the right structure when there was one
-    /// window too, but without the tag a click on a float and a click on its
+    /// window too, but without the tag a click on a widget and a click on its
     /// popover were the same value and neither could be routed.
     static EVENTS: RefCell<Vec<(SurfaceId, Event)>> = const { RefCell::new(Vec::new()) };
 }
@@ -211,7 +211,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
 ///
 /// `SM_CXSCREEN` is the PRIMARY monitor, not the virtual desktop spanning all of
 /// them. Proper multi-monitor placement is a real feature and this is not it —
-/// but a float anchored to the primary display's corner is right far more often
+/// but a widget anchored to the primary display's corner is right far more often
 /// than one anchored to the bounding box of every display, which on a
 /// two-monitor setup puts it off the edge of the one you are looking at.
 pub fn screen_size() -> (i32, i32) {
@@ -221,7 +221,7 @@ pub fn screen_size() -> (i32, i32) {
             (w, h)
         } else {
             // A headless or remote session can report zero. A plausible desktop
-            // beats a float positioned at the origin of a screen of size zero.
+            // beats a widget positioned at the origin of a screen of size zero.
             (1920, 1080)
         }
     }
@@ -292,7 +292,7 @@ impl Window {
             // Registering twice returns an error that is not one — a second window
             // of the same class is fine and the class is already there. The
             // result is deliberately discarded rather than checked.
-            let layered = matches!(surface, Surface::Float { .. } | Surface::Overlay { .. });
+            let layered = matches!(surface, Surface::Widget { .. } | Surface::Overlay { .. });
 
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
@@ -320,14 +320,14 @@ impl Window {
             // behaviour every time.
             let title_w = wide(match surface {
                 Surface::Window { title } => title.as_str(),
-                Surface::Float { .. } | Surface::Overlay { .. } => "",
+                Surface::Widget { .. } | Surface::Overlay { .. } => "",
             });
 
-            // A FLOAT IS BORDERLESS, TOPMOST, AND OUT OF THE TASKBAR.
+            // A WIDGET IS BORDERLESS, TOPMOST, AND OUT OF THE TASKBAR.
             //
             // `WS_EX_TOOLWINDOW` is the one that keeps it out of Alt-Tab and the
             // taskbar; without it a desktop clock is a window you can tab to,
-            // which is not what a float is. `WS_EX_LAYERED` is what makes
+            // which is not what a widget is. `WS_EX_LAYERED` is what makes
             // `UpdateLayeredWindow` available, and therefore per-pixel alpha.
             let (style, ex_style, x, y) = match surface {
                 Surface::Window { .. } => (
@@ -336,7 +336,7 @@ impl Window {
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
                 ),
-                Surface::Float {
+                Surface::Widget {
                     x,
                     y,
                     click_through,
@@ -345,7 +345,7 @@ impl Window {
                     if *click_through {
                         // TRANSPARENT means hit-testing falls through to whatever
                         // is behind. It is a property of the window, not of the
-                        // painting, so a float can be fully opaque and still be
+                        // painting, so a widget can be fully opaque and still be
                         // clicked through.
                         ex |= WS_EX_TRANSPARENT;
                     }
@@ -369,7 +369,7 @@ impl Window {
 
             // Only an ordinary window has chrome to account for. A popup's
             // outer rectangle IS its client area, and adjusting one would make
-            // the float larger than the surface it presents.
+            // the widget larger than the surface it presents.
             if !layered {
                 let _ = AdjustWindowRect(&mut rect, style, false);
             }
@@ -423,7 +423,7 @@ impl Window {
 
     /// Put a BGRA buffer on screen, whichever kind of surface this is.
     ///
-    /// A float takes the layered path, where the buffer's ALPHA becomes the
+    /// A widget takes the layered path, where the buffer's ALPHA becomes the
     /// window's shape; an ordinary window takes the blit, where it is ignored.
     /// The caller does not choose — it painted a frame, and how that reaches the
     /// screen is a property of the window it asked for.
@@ -587,9 +587,9 @@ mod tests {
     use super::*;
     use crate::Surface;
 
-    /// A float surface parked offscreen, so a test never flashes at the user.
+    /// A widget surface parked offscreen, so a test never flashes at the user.
     fn offscreen() -> Surface {
-        Surface::Float {
+        Surface::Widget {
             x: -4000,
             y: -4000,
             click_through: false,
@@ -612,7 +612,7 @@ mod tests {
     ///
     /// THE WHOLE POINT OF THE TAG. With one window this was unobservable, which
     /// is why the queue went untagged for as long as it did; with two, an
-    /// untagged queue routes a click on a popover to the float behind it.
+    /// untagged queue routes a click on a popover to the widget behind it.
     #[test]
     fn two_surfaces_do_not_share_their_events() {
         let mut pump = Pump::new();

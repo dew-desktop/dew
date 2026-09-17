@@ -156,7 +156,7 @@ local function VirtualWindow(props: WindowProps)
 	}
 end
 
---- AN OVERLAY: a float the size of the desktop.
+--- AN OVERLAY: a widget the size of the desktop.
 ---
 --- The virtual windows below then appear to sit directly on the desktop with
 --- nothing around them, and the surface is indistinguishable from a host that

@@ -21,7 +21,7 @@
 
 type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center"
 
-type FloatOptions = {
+type WidgetOptions = {
 	width: number?,
 	height: number?,
 	--- Defaults to "topRight". An anchor rather than coordinates, because a
@@ -41,7 +41,7 @@ type WindowOptions = {
 	title: string?,
 }
 
---- A float the size of the desktop.
+--- A widget the size of the desktop.
 ---
 --- Clicks fall through wherever nothing was painted, so the root frame must set
 --- `BackgroundTransparency = 1` or the overlay becomes a screen-sized sheet of
@@ -140,9 +140,9 @@ declare dew: {
 		Measure: (text: string, size: number, font: string?) -> (number, number),
 	},
 
-	--- Requires "float". A floating, borderless, always-on-top surface, which
+	--- Requires "widget". A floating, borderless, always-on-top surface, which
 	--- is what Dew is for.
-	Float: ((FloatOptions?) -> any)?,
+	Widget: ((WidgetOptions?) -> any)?,
 
 	--- Requires "window". An ordinary window: caption, border, taskbar.
 	Window: ((WindowOptions?) -> any)?,

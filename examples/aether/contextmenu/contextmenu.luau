@@ -128,10 +128,10 @@ end
 --- THE APPLET ASKS FOR ITS SURFACE and parents its own tree into it. Nothing
 --- here is handed back for a host to mount on this applet's behalf.
 ---
---- `dew.Float` is nil unless `dew.toml` asked for `float`, so the assert names
+--- `dew.Widget` is nil unless `dew.toml` asked for `widget`, so the assert names
 --- the manifest line rather than letting a call on nil be the error.
-local float = assert(dew.Float, "dew.toml must grant `float`")
-local root = float({ width = WIDTH, height = HEIGHT })
+local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local root = widget({ width = WIDTH, height = HEIGHT })
 
 vide.mount(build, root)
 

@@ -17,7 +17,7 @@
 //! ## One pump, many surfaces
 //!
 //! The pump belongs to the thread, not to a window. Every event it returns says
-//! which [`SurfaceId`] produced it, because a shell showing a float and its
+//! which [`SurfaceId`] produced it, because a shell showing a widget and its
 //! popover has to know which tree a click was meant for.
 
 #![cfg(windows)]
@@ -29,7 +29,7 @@ pub use win32::{screen_size, Pump, SurfaceId, Window};
 /// What kind of surface a window is.
 ///
 /// NOT A FLAG ON ONE STRUCT, because the two differ in what they can be asked.
-/// A float has an anchor and no title; a window has a title and no anchor, and
+/// A widget has an anchor and no title; a window has a title and no anchor, and
 /// letting either set the other's fields means a setting that is silently
 /// ignored — which is how a manifest becomes decoration.
 #[derive(Debug, Clone, PartialEq)]
@@ -48,7 +48,7 @@ pub enum Surface {
     /// composited from a premultiplied buffer rather than blitted into a
     /// rectangle. `WS_EX_LAYERED` with `UpdateLayeredWindow` does this on an
     /// ordinary DIB, so it needs no swapchain and no DirectComposition.
-    Float {
+    Widget {
         /// Screen position of the top-left corner.
         x: i32,
         y: i32,
@@ -57,9 +57,9 @@ pub enum Surface {
         click_through: bool,
     },
 
-    /// A float the size of the desktop.
+    /// A widget the size of the desktop.
     ///
-    /// The same layered surface as `Float`, spanning the screen, so what the
+    /// The same layered surface as `Widget`, spanning the screen, so what the
     /// tree paints appears to sit directly on the desktop with nothing around
     /// it. An application that draws its own windows inside one of these is
     /// indistinguishable from one that owns several.
@@ -75,7 +75,7 @@ pub enum Surface {
     /// `WS_EX_TRANSPARENT` would DESTROY that — it makes the whole window
     /// click-through including the painted parts. It stays available because a
     /// purely decorative overlay wants exactly that, but it is off by default
-    /// here for the opposite reason it is off for a float.
+    /// here for the opposite reason it is off for a widget.
     Overlay {
         /// Above every other window. A workspace you cannot see is useless, so
         /// this defaults on — but it does mean the overlay sits above full-screen

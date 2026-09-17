@@ -74,7 +74,7 @@ pub struct Applet {
     pub vm: Vm,
 }
 
-/// Default float size when a mod declares none.
+/// Default widget size when a mod declares none.
 const DEFAULT_SIZE: (u32, u32) = (380, 56);
 
 fn size_from(declaration: &LuaTable) -> (u32, u32) {
@@ -338,7 +338,7 @@ pub fn load(
         Runtime::DataModel => "mount = function(dew, root) … end",
     };
     //  AN APPLET THAT ASKED FOR ITS SURFACE HAS ALREADY BUILT ITS TREE. It was
-    //  handed the root by `dew.Float{}` while it ran, so there is nothing left
+    //  handed the root by `dew.Widget{}` while it ran, so there is nothing left
     //  for the host to call and no declaration to read. That is the shape this
     //  is moving to; the returned table is what it is moving from.
     let mount: Option<LuaFunction> = match declaration.get::<LuaFunction>("mount") {
@@ -346,7 +346,7 @@ pub fn load(
         Err(_) if asked.is_some() => None,
         Err(_) => {
             return Err(format!(
-                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.Float{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
+                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.Widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
                 manifest.id
             ))
         }
@@ -362,7 +362,7 @@ pub fn load(
         //      be two answers to the same question.
         Ceremony::DataModel { root } => {
             //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
-            //      `dew.Float{}` handed it this same root while it ran, so the
+            //      `dew.Widget{}` handed it this same root while it ran, so the
             //      instances are under there already and calling a second
             //      entry point would ask it to build them twice.
             if let Some(mount) = mount {
@@ -468,7 +468,7 @@ runtime = \"datamodel\"
         };
 
         assert!(
-            err.contains("float") && err.contains("permissions"),
+            err.contains("widget") && err.contains("permissions"),
             "the refusal should name the permission to add, got: {err}"
         );
     }
@@ -487,7 +487,7 @@ runtime = \"datamodel\"
     fn a_mod_cannot_reach_a_framework_it_did_not_declare() {
         let fixture = Fixture::new(
             "undeclared",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 local Aether = require("@aether/api")
                 return { id = "plain", size = { width = 10, height = 10 } }
@@ -529,7 +529,7 @@ runtime = \"datamodel\"
     fn a_datamodel_mod_mounts_and_the_renderer_finds_what_it_parented() {
         let fixture = Fixture::new(
             "mounts",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             PLAIN,
         );
         let loaded = fixture.load().expect("the mod loads");
@@ -552,7 +552,7 @@ runtime = \"datamodel\"
         // the root the host made, and the VM a mod is actually given.
         let fixture = Fixture::new(
             "clickable",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -609,7 +609,7 @@ runtime = \"datamodel\"
         // terms as `dew.Time`.
         let fixture = Fixture::new(
             "services",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -637,7 +637,7 @@ runtime = \"datamodel\"
         // sees it as `take_dirty` answering true for a mod that changed nothing.
         let fixture = Fixture::new(
             "idleclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 ticks = 0
                 return {
@@ -680,7 +680,7 @@ runtime = \"datamodel\"
         // listener must repaint -- the paint follows the change, not the tick.
         let fixture = Fixture::new(
             "animclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -737,7 +737,7 @@ runtime = \"datamodel\"
         // count being wrong.
         let fixture = Fixture::new(
             "vocabulary",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             PLAIN,
         );
         assert!(fixture.load().is_ok());
@@ -767,7 +767,7 @@ runtime = \"datamodel\"
         // manifest granted.
         let fixture = Fixture::new(
             "caps",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\", \"storage\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -786,7 +786,7 @@ runtime = \"datamodel\"
     fn a_datamodel_mod_without_mount_is_told_the_signature_it_needed() {
         let fixture = Fixture::new(
             "nomount",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             r#"return { id = "plain" }"#,
         );
         let Err(message) = fixture.load() else {
@@ -811,7 +811,7 @@ runtime = \"datamodel\"
     fn a_mod_resolves_an_image_through_rbxassetid_with_grant() {
         let fixture = Fixture::new(
             "rbxgrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\", \"rbxassetid\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"rbxassetid\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -857,7 +857,7 @@ runtime = \"datamodel\"
     fn a_mod_is_refused_an_image_through_rbxassetid_without_grant() {
         let fixture = Fixture::new(
             "rbxnogrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\", \"storage\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -897,7 +897,7 @@ mod asking_for_a_surface {
     use super::tests::Fixture;
 
     const ASKS: &str = r#"
-local root = dew.Float({ width = 120, height = 60 })
+local root = dew.Widget({ width = 120, height = 60 })
 local frame = Instance.new("Frame")
 frame.Name = "Asked"
 frame.Size = UDim2.new(1, 0, 1, 0)
@@ -914,7 +914,7 @@ frame.Parent = root
     fn an_applet_that_asks_returns_nothing() {
         let fixture = Fixture::new(
             "asks",
-            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             ASKS,
         );
         let applet = fixture.load().expect("an applet that asks should load");
@@ -930,10 +930,10 @@ frame.Parent = root
     fn an_ungranted_surface_is_not_on_the_table() {
         let fixture = Fixture::new(
             "asks-ungranted",
-            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
-            "assert(dew.Float ~= nil, \"float was granted\")\n\
+            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "assert(dew.Widget ~= nil, \"widget was granted\")\n\
              assert(dew.Overlay == nil, \"overlay was not granted and must be absent\")\n\
-             local root = dew.Float({ width = 10, height = 10 })\n",
+             local root = dew.Widget({ width = 10, height = 10 })\n",
         );
         fixture
             .load()
@@ -945,7 +945,7 @@ frame.Parent = root
     fn an_applet_that_does_neither_is_told_both_ways_out() {
         let fixture = Fixture::new(
             "asks-neither",
-            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
             "return { size = { width = 10, height = 10 } }\n",
         );
         let error = match fixture.load() {
@@ -953,7 +953,7 @@ frame.Parent = root
             Ok(_) => panic!("an applet with no surface and no mount should not load"),
         };
         assert!(
-            error.contains("dew.Float") && error.contains("mount"),
+            error.contains("dew.Widget") && error.contains("mount"),
             "the message should name both ways out, got: {error}"
         );
     }
@@ -970,7 +970,7 @@ frame.Parent = root
             "asks-submodule",
             "id = \"sub\"
 runtime = \"datamodel\"
-permissions = [\"float\"]
+permissions = [\"widget\"]
 ",
             "local helper = require(\"./helper\")
 helper()
@@ -980,7 +980,7 @@ helper()
             "helper.luau",
             "return function()
   assert(dew ~= nil, \"a required module should see dew\")
-             local root = dew.Float({ width = 12, height = 12 })
+             local root = dew.Widget({ width = 12, height = 12 })
              assert(root ~= nil, \"and should be answered by it\")
 end
 ",
@@ -995,8 +995,8 @@ end
     fn asking_wins_over_a_stale_declaration() {
         let fixture = Fixture::new(
             "asks-both",
-            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
-            "local root = dew.Float({ width = 33, height = 44 })\n\
+            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "local root = dew.Widget({ width = 33, height = 44 })\n\
              return { size = { width = 999, height = 999 }, mount = function() end }\n",
         );
         let applet = fixture.load().expect("loads");

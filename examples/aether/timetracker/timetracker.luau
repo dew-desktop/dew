@@ -37,8 +37,8 @@ local WIDTH, HEIGHT = 380, 56
 --- rather than a shape drawn on a dark rectangle.
 ---
 --- `clickThrough` stays false because the START button is a control.
-local float = assert(dew.Float, "dew.toml must grant `float`")
-local root = float({
+local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local root = widget({
 	width = WIDTH,
 	height = HEIGHT,
 	anchor = "topRight",

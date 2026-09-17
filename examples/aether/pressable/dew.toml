@@ -14,4 +14,4 @@ description = "A pressable that changes colour under a press"
 runtime = "datamodel"
 
 # NO PERMISSIONS. It does arithmetic on its own state and touches nothing.
-permissions = ["float"]
+permissions = ["widget"]

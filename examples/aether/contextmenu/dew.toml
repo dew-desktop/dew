@@ -13,4 +13,4 @@ runtime = "datamodel"
 
 # NO PERMISSIONS BEYOND A SURFACE. It reads the pointer the host reports and
 # touches nothing else.
-permissions = ["float"]
+permissions = ["widget"]

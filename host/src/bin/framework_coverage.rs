@@ -127,7 +127,7 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// to whichever it resolves first.
 /// A `dew` global for a VM that is measuring rather than running.
 ///
-/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.Float`, so a VM without one
+/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.Widget`, so a VM without one
 /// cannot load it at all: the call is at module scope and there is nothing to
 /// index. This is the same answer the host gives, narrowed to what a measurement
 /// needs, which is a root to parent into.
@@ -161,7 +161,7 @@ fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
     )?;
     dew.set("Time", time)?;
 
-    for surface in ["Float", "Window", "Overlay", "popover"] {
+    for surface in ["Widget", "Window", "Overlay", "popover"] {
         let handed = root.clone();
         dew.set(
             surface,

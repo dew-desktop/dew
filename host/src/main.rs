@@ -1335,7 +1335,7 @@ fn execute_init(
     // has to name a surface now, because it is written into the manifest as the
     // applet's one grant.
     let surface_grant = manifest::Permission::surface_from_name(&surface).ok_or_else(|| {
-        format!("unknown surface '{surface}': use 'window', 'float', 'overlay' or 'popover'")
+        format!("unknown surface '{surface}': use 'window', 'widget', 'overlay' or 'popover'")
     })?;
     // A PATH OR A NAME, AND THE VALIDATION USED TO FORBID THE PATH. Every
     // character was checked against an alphanumeric set and the next statement
@@ -1820,7 +1820,7 @@ fn execute_help(subcommand: Option<String>) {
             println!();
             println!("Options:");
             println!("  --runtime, -r <RT>    Runtime: 'datamodel' (default, and the only one)");
-            println!("  --surface <SURFACE>   Surface: 'window' (default), 'overlay', or 'float'");
+            println!("  --surface <SURFACE>   Surface: 'window' (default), 'overlay', or 'widget'");
             println!("  --size <WxH>          Default size (default: 340x180)");
         }
         Some("test") => {
@@ -2036,7 +2036,7 @@ fn install_test_surface(
     //  rehearse a refusal, and one that wanted to would assert on `applets::load`
     //  instead.
     let granted = [
-        crate::manifest::Permission::Float,
+        crate::manifest::Permission::Widget,
         crate::manifest::Permission::Window,
         crate::manifest::Permission::Overlay,
         crate::manifest::Permission::Popover,
@@ -2182,7 +2182,7 @@ mod tests {
     fn init_grants_the_surface_it_was_asked_for() {
         for surface in [
             manifest::Permission::Window,
-            manifest::Permission::Float,
+            manifest::Permission::Widget,
             manifest::Permission::Overlay,
             manifest::Permission::Popover,
         ] {

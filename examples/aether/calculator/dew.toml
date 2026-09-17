@@ -12,4 +12,4 @@ runtime = "datamodel"
 
 # NO PERMISSIONS BEYOND A SURFACE. It does arithmetic on its own state and
 # touches nothing else.
-permissions = ["float"]
+permissions = ["widget"]

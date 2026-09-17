@@ -10,4 +10,4 @@ runtime = "datamodel"
 # WHAT THIS APPLET MAY REACH. Absent means nothing, which is the correct
 # default: an applet that renders and cannot touch the machine fails loudly
 # and locally.
-permissions = ["float", "storage"]
+permissions = ["widget", "storage"]

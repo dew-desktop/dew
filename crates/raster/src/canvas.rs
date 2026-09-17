@@ -177,7 +177,7 @@ impl Canvas {
     ///
     /// `a` of 0 clears to nothing, which is what a LAYERED window wants: the
     /// desktop shows through wherever the tree did not paint, so the rounded
-    /// corners and soft edges it draws become the float's real silhouette
+    /// corners and soft edges it draws become the widget's real silhouette
     /// instead of a shape cut out of a rectangle.
     ///
     /// The output stays PREMULTIPLIED, which is what `UpdateLayeredWindow`
