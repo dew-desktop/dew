@@ -13,6 +13,7 @@
 ]]
 
 local Aether = require("./roblox_packages/aether")
+local vide = require("./roblox_packages/vide")
 
 local create = Aether.create
 local source = Aether.source
@@ -217,4 +218,4 @@ local function build()
 		return tree
 	end
 
-Aether.mount(build, root)
+vide.mount(build, root)

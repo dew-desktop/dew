@@ -9,7 +9,7 @@ environment = "roblox"
 lib = "timetracker.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "f011ab6bf529e41ee4edebaf37ed5a20c11e27e2" }
+aether = { repo = "project-aether-ui/aether", rev = "a4c11012fbdb8a27d0e345e252e36b7f8fd02af8" }
 
 # AETHER DECLARES VIDE AS A PEER, so the application chooses the copy. One vide
 # per process: two would mean a source made against one graph is invisible to an

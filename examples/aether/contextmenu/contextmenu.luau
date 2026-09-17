@@ -29,6 +29,7 @@
 ]]
 
 local Aether = require("./roblox_packages/aether")
+local vide = require("./roblox_packages/vide")
 
 local WIDTH, HEIGHT = 240, 180
 
@@ -132,7 +133,7 @@ end
 local widget = assert(dew.widget, "dew.toml must grant `widget`")
 local root = widget({ width = WIDTH, height = HEIGHT })
 
-Aether.mount(build, root)
+vide.mount(build, root)
 
 --- THE HOST'S OWN INPUT SERVICE, connected once per process the way a framework
 --- connects to it. `MouseButton2` is the only thing this listens for; the
