@@ -1207,6 +1207,25 @@ fn place_widget(
     (x, y)
 }
 
+/// Set or clear the `Dragging` attribute on a widget's root, marking the tree
+/// dirty so a guest polling it sees the change the same frame it happened.
+///
+/// AN ATTRIBUTE, NOT A PROPERTY. `root` is a real `ScreenGui`, validated
+/// against Roblox's own schema like every instance this host creates, and
+/// `ScreenGui` has no `Dragging` property there -- inventing one would mean a
+/// second, host-only property system alongside the reflection-backed one
+/// everything else goes through. `SetAttribute`/`GetAttribute` is Roblox's
+/// own mechanism for exactly this: host- or author-defined data a class's
+/// schema was never going to have, read the same way on both.
+#[cfg(windows)]
+fn set_dragging_attribute(dom: &datamodel::SharedDom, root: usize, dragging: bool) {
+    dom.lock().expect("dom").set_attribute(
+        root,
+        "Dragging",
+        Some(rbx_types::Variant::Bool(dragging)),
+    );
+}
+
 /// `dew run <dir>`'s entry point. A second invocation while a Dew service is
 /// already running hands its applet to that service instead of starting a
 /// second process — see `coordinator.rs` for the single-instance check, the
@@ -1269,8 +1288,13 @@ fn run_applet(
         height = screen.1.max(1) as u32;
     }
 
-    let applets::Mounted::DataModel { ref dom, .. } = mounted;
+    let applets::Mounted::DataModel { ref dom, root } = mounted;
     dom.lock().expect("dom").assets.set_blocking(false);
+    // OWNED, SO IT OUTLIVES THE MOVE BELOW. `create_renderer` takes `mounted`
+    // by value; the drag state machine further down still needs a handle on
+    // the same arena to set `Dragging` on `root`, and a `SharedDom` clone is
+    // an `Arc` clone -- the same dom, not a second one.
+    let dom = dom.clone();
 
     let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
 
@@ -1353,6 +1377,7 @@ fn run_applet(
                             );
                             if (dx * dx + dy * dy).sqrt() >= 4.0 {
                                 ds.dragging = true;
+                                set_dragging_attribute(&dom, root, true);
                             }
                         }
                         if ds.dragging {
@@ -1408,6 +1433,7 @@ fn run_applet(
                                 // an accepted, cosmetic simplification — and
                                 // this event is not forwarded at all.
                                 suppress = true;
+                                set_dragging_attribute(&dom, root, false);
                                 if let Some((_, _, _, true)) = drag_options {
                                     positions::save(&manifest.id, position);
                                 }
