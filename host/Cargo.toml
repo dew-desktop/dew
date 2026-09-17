@@ -101,6 +101,11 @@ serde_json = "1"
 toml = "0.8"
 dirs = "6.0"
 
+# `.dewpkg` IS A ZIP FILE, nothing more. `deflate` is the only compression
+# feature enabled -- a manifest and a handful of Luau files never approach the
+# case `bzip2` or `zstd` exist for, so there is nothing to gain by linking them.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 # WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
 # from a platform -- surfaces and input -- and a tray icon is neither. It presents
 # nothing of Aether and the CLI will never want one, so the mechanism lives here
