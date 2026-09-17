@@ -1,0 +1,20 @@
+name = "dew_examples/widget_behaviors"
+version = "0.0.1"
+
+# STILL NO FRAMEWORK. `Instance.new`, property assignment and `Parent` remain
+# the whole vocabulary this applet builds its tree with; vide is here only for
+# `source`/`effect`, to react to the host's own `Dragging` attribute without
+# hand-rolled diffing, the way a framework-free applet can still use a plain
+# reactive primitive without adopting Aether on top of it.
+[target]
+environment = "roblox"
+lib = "widget-behaviors.luau"
+
+[dependencies]
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"
