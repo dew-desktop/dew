@@ -22,10 +22,12 @@
 //! ordinary way one Windows process hands a short message to another it does
 //! not otherwise share memory with.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::thread;
 use std::time::Duration;
 
@@ -34,8 +36,8 @@ use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, ERROR_PIPE_CONNECTED, HANDLE,
 };
 use windows::Win32::Storage::FileSystem::{
-    CreateFileW, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE, FILE_SHARE_MODE,
-    OPEN_EXISTING, PIPE_ACCESS_INBOUND,
+    CreateFileW, ReadFile, WriteFile, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+    FILE_SHARE_MODE, OPEN_EXISTING, PIPE_ACCESS_DUPLEX, PIPE_ACCESS_INBOUND,
 };
 use windows::Win32::System::Pipes::{
     ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_MESSAGE,
@@ -51,6 +53,13 @@ use dew_window::Pump;
 /// desktop service.
 const MUTEX_NAME: &str = "Local\\DewSingleInstance";
 const PIPE_NAME: &str = r"\\.\pipe\Dew";
+
+/// A second pipe, separate from `PIPE_NAME`, because a query needs an answer
+/// and `PIPE_NAME`'s server only ever reads -- `PIPE_ACCESS_INBOUND` cannot
+/// write a response back. Kept apart from the load pipe rather than made
+/// duplex, so the fire-and-forget load path this pipe has served since the
+/// single-instance mutex was added stays exactly as it was.
+const QUERY_PIPE_NAME: &str = r"\\.\pipe\DewQuery";
 
 /// Whether this invocation is the one Dew process, or a request handed to it.
 pub enum Role {
@@ -129,6 +138,46 @@ pub fn send_to_running(dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Ask a running coordinator whether `id` is one of its currently loaded
+/// applets. `Ok(false)` covers both "no, it is not loaded" and "there is no
+/// coordinator to ask" -- `dew uninstall` treats those the same way, since
+/// neither leaves anything running for it to orphan.
+pub fn query_running(id: &str) -> Result<bool, String> {
+    let pipe_name = wide(QUERY_PIPE_NAME);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(pipe_name.as_ptr()),
+            FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
+            FILE_SHARE_MODE::default(),
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    };
+    let Ok(handle) = handle else {
+        // NO COORDINATOR IS LISTENING, so nothing is running under it.
+        return Ok(false);
+    };
+
+    let wrote = unsafe { WriteFile(handle, Some(id.as_bytes()), None, None) };
+    if wrote.is_err() {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Ok(false);
+    }
+
+    let mut buf = [0u8; 16];
+    let mut read = 0u32;
+    let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+
+    Ok(got.is_ok() && read > 0 && buf[0] == b'1')
+}
+
 /// Listen for `send_to_running` calls forever, forwarding each directory to
 /// `tx`. Runs on a thread of its own so a slow or absent client never blocks
 /// the coordinator's own tray pump.
@@ -177,6 +226,52 @@ fn spawn_pipe_server(tx: mpsc::Sender<PathBuf>) {
     });
 }
 
+/// Answer `query_running` calls forever. `running` is read fresh on every
+/// request rather than owned by this thread, because the set of loaded
+/// applet ids changes on the coordinator's own thread and this is the only
+/// other thread that needs to see it.
+fn spawn_query_server(running: Arc<Mutex<HashSet<String>>>) {
+    thread::spawn(move || loop {
+        let name = wide(QUERY_PIPE_NAME);
+        let handle = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(name.as_ptr()),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                4096,
+                4096,
+                0,
+                None,
+            )
+        };
+        if handle.is_invalid() {
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+
+        let connected = unsafe { ConnectNamedPipe(handle, None) };
+        let ok = connected.is_ok() || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+        if ok {
+            let mut buf = [0u8; 4096];
+            let mut read = 0u32;
+            let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
+            if got.is_ok() && read > 0 {
+                if let Ok(id) = std::str::from_utf8(&buf[..read as usize]) {
+                    let is_running = running.lock().map(|set| set.contains(id)).unwrap_or(false);
+                    let response: &[u8] = if is_running { b"1" } else { b"0" };
+                    let _ = unsafe { WriteFile(handle, Some(response), None, None) };
+                }
+            }
+        }
+
+        unsafe {
+            let _ = DisconnectNamedPipe(handle);
+            let _ = CloseHandle(handle);
+        }
+    });
+}
+
 /// One applet the coordinator currently has loaded.
 struct Loaded {
     /// Shown in the tray menu. The directory's own name, not the manifest's
@@ -184,6 +279,13 @@ struct Loaded {
     /// making the tray wait for that round trip to show anything would be a
     /// worse tray than one that names the thing you typed.
     name: String,
+    /// This applet's own manifest id, read here on the coordinator thread
+    /// rather than waited for from the applet's thread, so a query or an
+    /// auto-load decision never blocks on a VM that has not started yet.
+    /// `None` when the manifest could not be read at all -- `run_applet`
+    /// reports that failure properly; the coordinator just has no id to
+    /// track for it.
+    applet_id: Option<String>,
     /// Checked once a frame by the applet's own loop. Set to unload it
     /// without ending the process.
     close: Arc<AtomicBool>,
@@ -206,6 +308,14 @@ fn spawn_applet(
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| dir.display().to_string());
+
+    // READ HERE, BEFORE THE THREAD EXISTS. `run_applet` reads the same
+    // manifest again on the applet's own thread to actually mount it; this
+    // second read is what lets the coordinator know an applet's id in time
+    // to answer `query_running` and to skip loading an installed applet a
+    // second time, neither of which can wait on a VM that has not started.
+    let applet_id = crate::manifest::Manifest::load(&dir).ok().map(|m| m.id);
+
     let close = Arc::new(AtomicBool::new(false));
     let close_for_thread = Arc::clone(&close);
 
@@ -224,6 +334,7 @@ fn spawn_applet(
         id,
         Loaded {
             name,
+            applet_id,
             close,
             handle,
         },
@@ -240,6 +351,20 @@ fn sync_tray(registry: &std::collections::HashMap<u32, Loaded>) {
     crate::tray::set_applets(list);
 }
 
+/// Refresh the set `query_running` answers from, after the registry changes.
+fn sync_running(
+    registry: &std::collections::HashMap<u32, Loaded>,
+    running: &Arc<Mutex<HashSet<String>>>,
+) {
+    let ids: HashSet<String> = registry
+        .values()
+        .filter_map(|a| a.applet_id.clone())
+        .collect();
+    if let Ok(mut guard) = running.lock() {
+        *guard = ids;
+    }
+}
+
 /// The coordinator's own loop. `_mutex` is held for as long as this runs — its
 /// only job is to keep the named mutex alive so a later `dew run` sees it.
 ///
@@ -249,6 +374,9 @@ fn sync_tray(registry: &std::collections::HashMap<u32, Loaded>) {
 pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> Result<(), String> {
     let (load_tx, load_rx) = mpsc::channel::<PathBuf>();
     spawn_pipe_server(load_tx);
+
+    let running: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+    spawn_query_server(Arc::clone(&running));
 
     // A TRAY THAT FAILS TO CREATE DOES NOT STOP THE SERVICE. `crate::run_applet`
     // used to make the same choice for the single-applet tray it created;
@@ -278,7 +406,25 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
         &mut registry,
     );
     next_id += 1;
+
+    // EVERY INSTALLED, ENABLED APPLET LOADS ALONGSIDE `first_dir`, UNLESS IT
+    // IS `first_dir` ITSELF UNDER ANOTHER NAME. `dew run` against a
+    // directory that happens to be an installed applet's own copy is not
+    // asking for that applet twice.
+    let already: HashSet<String> = registry
+        .values()
+        .filter_map(|loaded| loaded.applet_id.clone())
+        .collect();
+    for (id, dir) in crate::installed::enabled() {
+        if already.contains(&id) {
+            continue;
+        }
+        spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
+        next_id += 1;
+    }
+
     sync_tray(&registry);
+    sync_running(&registry, &running);
 
     // THE TRAY'S OWN PUMP, ON THIS THREAD. `Tray::new` created a message-only
     // window here, on the coordinator thread, and a window's messages are
@@ -316,6 +462,7 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
 
         if changed {
             sync_tray(&registry);
+            sync_running(&registry, &running);
         }
 
         if crate::tray::exit_requested() {
