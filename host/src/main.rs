@@ -22,6 +22,8 @@ use dew_host::datamodel;
 use dew_host::manifest;
 mod applets;
 #[cfg(windows)]
+mod coordinator;
+#[cfg(windows)]
 mod positions;
 mod surface;
 #[cfg(windows)]
@@ -229,11 +231,21 @@ impl Renderer {
     /// arrived in sprint 8; what was still missing was somewhere to send a
     /// pointer, which is a hit test.
     #[cfg(windows)]
-    fn moved(&mut self, x: f32, y: f32) -> Result<(), String> {
+    fn moved(
+        &mut self,
+        x: f32,
+        y: f32,
+        service_pointer: &services::SharedPointer,
+    ) -> Result<(), String> {
         // THE HOST ANSWERS WHERE THE POINTER IS (ADR-010), so it has to know. A
         // guest deciding hover by geometry polls this on frames with no input at
         // all, which is why it is recorded here rather than only delivered.
-        crate::services::pointer_moved(x, y);
+        //
+        // ON THIS APPLET'S OWN CELL, not the process-global one -- a process
+        // running more than one applet has more than one cursor position to
+        // report, and `services::pointer()` can only ever hold the last one
+        // written. See `applets::Applet::pointer`'s doc comment.
+        crate::services::pointer_moved_on(service_pointer, x, y);
         match self {
             Renderer::DataModel {
                 dom,
@@ -263,9 +275,15 @@ impl Renderer {
     /// THE BUTTON TRAVELS, because a DataModel mod has `MouseButton2Click` and
     /// `SecondaryActivated` and not just a left click.
     #[cfg(windows)]
-    fn down(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
-        crate::services::pointer_moved(x, y);
-        crate::services::pointer_button(button as usize, true);
+    fn down(
+        &mut self,
+        button: Button,
+        x: f32,
+        y: f32,
+        service_pointer: &services::SharedPointer,
+    ) -> Result<(), String> {
+        crate::services::pointer_moved_on(service_pointer, x, y);
+        crate::services::pointer_button_on(service_pointer, button as usize, true);
         match self {
             Renderer::DataModel {
                 dom,
@@ -293,9 +311,15 @@ impl Renderer {
 
     /// A button came up.
     #[cfg(windows)]
-    fn up(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
-        crate::services::pointer_moved(x, y);
-        crate::services::pointer_button(button as usize, false);
+    fn up(
+        &mut self,
+        button: Button,
+        x: f32,
+        y: f32,
+        service_pointer: &services::SharedPointer,
+    ) -> Result<(), String> {
+        crate::services::pointer_moved_on(service_pointer, x, y);
+        crate::services::pointer_button_on(service_pointer, button as usize, false);
         match self {
             Renderer::DataModel {
                 dom,
@@ -322,9 +346,15 @@ impl Renderer {
     }
 
     #[cfg(windows)]
-    fn wheel(&mut self, x: f32, y: f32, delta: f32) -> Result<(), String> {
-        crate::services::pointer_moved(x, y);
-        crate::services::pointer_wheel(x, y, delta);
+    fn wheel(
+        &mut self,
+        x: f32,
+        y: f32,
+        delta: f32,
+        service_pointer: &services::SharedPointer,
+    ) -> Result<(), String> {
+        crate::services::pointer_moved_on(service_pointer, x, y);
+        crate::services::pointer_wheel_on(service_pointer, x, y, delta);
         match self {
             Renderer::DataModel {
                 dom,
@@ -1031,6 +1061,9 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
         }
         SnapshotTarget::Applet(dir) => {
             let active = load_applet(&dir)?;
+            // `pointer` IS NOT NEEDED HERE. A snapshot renders one frame and
+            // exits without ever calling `Renderer::moved`/`down`/`up`/`wheel`,
+            // so there is no cursor for `dew.Pointer`/`dew.Input` to report.
             let applets::Applet {
                 manifest,
                 width,
@@ -1039,6 +1072,7 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
                 mounted,
                 clock,
                 vm,
+                ..
             } = active;
 
             let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
@@ -1123,6 +1157,11 @@ fn place_widget(
     (x, y)
 }
 
+/// `dew run <dir>`'s entry point. A second invocation while a Dew service is
+/// already running hands its applet to that service instead of starting a
+/// second process — see `coordinator.rs` for the single-instance check, the
+/// named pipe that carries the request, and the tray, thread-per-applet loop
+/// the first invocation becomes.
 fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
@@ -1136,268 +1175,282 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
     #[cfg(windows)]
     {
         println!("💧 Dew starting");
-        let active = load_applet(dir)?;
-        let applets::Applet {
-            manifest,
-            mut width,
-            mut height,
-            surface,
-            mounted,
-            clock,
-            vm,
-        } = active;
-
-        let screen = dew_window::screen_size();
-        if surface.fills_screen() {
-            width = screen.0.max(1) as u32;
-            height = screen.1.max(1) as u32;
+        match coordinator::acquire()? {
+            coordinator::Role::Primary(guard) => {
+                coordinator::run(guard, dir.to_path_buf(), stats, bench)
+            }
+            coordinator::Role::Secondary => coordinator::send_to_running(dir),
         }
-
-        let applets::Mounted::DataModel { ref dom, .. } = mounted;
-        dom.lock().expect("dom").assets.set_blocking(false);
-
-        let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
-
-        // WHICH DRAGGABLE BEHAVIOURS THIS SURFACE ASKED FOR, if it is a widget
-        // at all. `None` for everything else, which turns the whole drag state
-        // machine below into dead branches that never arm — a window or an
-        // overlay is never draggable, so this is not a case those surfaces need
-        // to think about.
-        let drag_options = match &surface {
-            surface::Declared::Widget {
-                draggable,
-                keep_on_screen,
-                snap_to_edges,
-                save_position,
-                ..
-            } => Some((*draggable, *keep_on_screen, *snap_to_edges, *save_position)),
-            _ => None,
-        };
-
-        let mut resolved = surface.resolve(screen, (width, height));
-
-        // A SAVED POSITION OVERRIDES THE DECLARED ANCHOR, exactly like a real
-        // Rainmeter skin: the anchor is what a widget that has never been
-        // dragged falls back to, and a drag that happened once wins from then
-        // on until the next drag replaces it.
-        if let (Surface::Widget { x, y, .. }, Some((_, _, _, true))) = (&mut resolved, drag_options)
-        {
-            if let Some(saved) = positions::load(&manifest.id) {
-                (*x, *y) = saved;
-            }
-        }
-
-        let mut window = Window::new(&resolved, width, height)?;
-
-        // THE WINDOW'S CURRENT ON-SCREEN POSITION, TRACKED HERE because nothing
-        // else does: `Window` itself only knows its size (`resized` exists for
-        // exactly that reason), and a resolved `Surface` is consumed once at
-        // creation. Dragging needs to know where the window is NOW, both to
-        // compute a candidate position and to convert a future pointer event's
-        // client-relative coordinates back to screen space.
-        let mut position: (i32, i32) = match &resolved {
-            Surface::Widget { x, y, .. } => (*x, *y),
-            _ => (0, 0),
-        };
-        let mut drag: Option<DragState> = None;
-
-        let _keep_alive = vm;
-
-        let tooltip = if manifest.description.trim().is_empty() {
-            format!("Dew — {}", manifest.display_name())
-        } else {
-            format!(
-                "Dew — {}: {}",
-                manifest.display_name(),
-                manifest.description
-            )
-        };
-
-        let _tray = match tray::Tray::new(icon_path().as_deref(), &tooltip) {
-            Ok(tray) => Some(tray),
-            Err(message) => {
-                eprintln!("[dew] no tray icon: {message}");
-                None
-            }
-        };
-
-        let mut last = Instant::now();
-        let (mut frames, mut painted_frames) = (0u32, 0u32);
-        let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
-        let mut last_report = Instant::now();
-
-        // THE PUMP IS THE THREAD'S, NOT THE WINDOW'S, and every event says which
-        // surface produced it. One surface is open here, so routing is a
-        // comparison that always succeeds; it is written out rather than
-        // assumed because the second surface is what step B adds, and an event
-        // silently applied to the wrong tree is not a failure that announces
-        // itself.
-        let mut pump = Pump::new();
-        while let Some(events) = pump.poll() {
-            for (from, event) in events {
-                if from != window.id() {
-                    continue;
-                }
-                match event {
-                    Event::PointerMove { x, y } => {
-                        // ARMED BUT NOT YET DRAGGING: keep forwarding to the
-                        // hit-test pipeline (hover still works for a press that
-                        // turns out not to be a drag) and watch for the
-                        // threshold. `screen_now` is what keeps the distance
-                        // moved correct across a window that has already been
-                        // repositioned once — see `DragState`'s doc comment.
-                        let mut forward = true;
-                        if let Some(ds) = &mut drag {
-                            let screen_now = (position.0 as f32 + x, position.1 as f32 + y);
-                            if !ds.dragging {
-                                let (dx, dy) = (
-                                    screen_now.0 - ds.press_screen.0,
-                                    screen_now.1 - ds.press_screen.1,
-                                );
-                                if (dx * dx + dy * dy).sqrt() >= 4.0 {
-                                    ds.dragging = true;
-                                }
-                            }
-                            if ds.dragging {
-                                // PAST THE THRESHOLD: the hover pipeline stops
-                                // seeing moves entirely. The window is about to
-                                // slide under a stationary cursor, and
-                                // forwarding that as a hover delta would be
-                                // nonsense.
-                                forward = false;
-                                let dx = (screen_now.0 - ds.press_screen.0).round() as i32;
-                                let dy = (screen_now.1 - ds.press_screen.1).round() as i32;
-                                let candidate = (ds.window_origin.0 + dx, ds.window_origin.1 + dy);
-                                let (_, keep_on_screen, snap_to_edges, _) =
-                                    drag_options.expect("drag only arms for a widget");
-                                let placed = place_widget(
-                                    candidate,
-                                    (width, height),
-                                    snap_to_edges,
-                                    keep_on_screen,
-                                );
-                                window.set_position(placed.0, placed.1);
-                                position = placed;
-                            }
-                        }
-                        if forward {
-                            renderer.moved(x, y)?;
-                        }
-                    }
-                    Event::PointerDown { x, y, button } => {
-                        // DISPATCHED UNCHANGED, EVERY TIME. A press-and-hold
-                        // button must still work even on a draggable widget, so
-                        // arming a drag never replaces this.
-                        renderer.down(button, x, y)?;
-                        if button == Button::Left {
-                            if let Some((draggable, _, _, _)) = drag_options {
-                                if draggable {
-                                    drag = Some(DragState {
-                                        press_screen: (
-                                            position.0 as f32 + x,
-                                            position.1 as f32 + y,
-                                        ),
-                                        window_origin: position,
-                                        dragging: false,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    Event::PointerUp { x, y, button } => {
-                        let mut suppress = false;
-                        if button == Button::Left {
-                            if let Some(ds) = drag.take() {
-                                if ds.dragging {
-                                    // A REAL DRAG HAPPENED. `OnReleased` will not
-                                    // fire for whatever was pressed underneath —
-                                    // an accepted, cosmetic simplification — and
-                                    // this event is not forwarded at all.
-                                    suppress = true;
-                                    if let Some((_, _, _, true)) = drag_options {
-                                        positions::save(&manifest.id, position);
-                                    }
-                                }
-                            }
-                        }
-                        if !suppress {
-                            renderer.up(button, x, y)?;
-                        }
-                    }
-                    Event::Wheel { x, y, delta } => {
-                        renderer.wheel(x, y, delta)?;
-                    }
-                    Event::Resized {
-                        width: w,
-                        height: h,
-                    } => {
-                        // THE SHELL APPLIES THE SIZE NOW. The window used to
-                        // catch its own resize while draining its own queue.
-                        window.resized(w, h);
-                        renderer.invalidate();
-                    }
-                    Event::Exposed => renderer.invalidate(),
-                    Event::CloseRequested => return Ok(()),
-                    Event::Key { name, .. } => renderer.key(&name)?,
-                    Event::Char(_) => {}
-                }
-            }
-
-            let dt = last.elapsed().as_secs_f32();
-            last = Instant::now();
-
-            if bench {
-                renderer.invalidate();
-            }
-
-            let t0 = Instant::now();
-            let painted = renderer
-                .frame(dt)
-                .map_err(|e| format!("while rendering: {e}"))?;
-            let t_frame = t0.elapsed();
-
-            let t1 = Instant::now();
-            if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
-                window.present(bgra, width, height);
-            }
-            let t_raster = t1.elapsed();
-
-            if stats {
-                frames += 1;
-                if painted {
-                    sum_frame += t_frame;
-                    sum_present += t_raster;
-                    painted_frames += 1;
-                }
-                if last_report.elapsed() >= Duration::from_secs(1) {
-                    let n = painted_frames.max(1);
-                    println!(
-                        "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
-                        sum_frame / n,
-                        sum_present / n
-                    );
-                    frames = 0;
-                    painted_frames = 0;
-                    sum_frame = Duration::ZERO;
-                    sum_present = Duration::ZERO;
-                    last_report = Instant::now();
-                }
-            }
-
-            if tray::exit_requested() {
-                return Ok(());
-            }
-
-            if let Some(target) = tray::frame_budget() {
-                let elapsed = last.elapsed();
-                if elapsed < target {
-                    std::thread::sleep(target - elapsed);
-                }
-            }
-        }
-
-        Ok(())
     }
+}
+
+/// Run one applet's window, VM and frame loop on whichever thread calls this,
+/// until its window closes, `close` is set, or the whole service is asked to
+/// exit. `coordinator::run` calls this once per loaded applet, each on a
+/// thread of its own.
+///
+/// THIS IS TODAY'S `execute_run` BODY, WITH TWO CHANGES. No tray is created
+/// here — the coordinator owns the one tray for the whole process, not each
+/// applet its own — and the loop now has a second way to end besides the
+/// window closing: `close`, which the coordinator's tray menu sets to unload
+/// this one applet without taking the process down.
+#[cfg(windows)]
+fn run_applet(
+    dir: &Path,
+    stats: bool,
+    bench: bool,
+    close: &std::sync::atomic::AtomicBool,
+) -> Result<(), String> {
+    let active = load_applet(dir)?;
+    let applets::Applet {
+        manifest,
+        mut width,
+        mut height,
+        surface,
+        mounted,
+        clock,
+        pointer: service_pointer,
+        vm,
+    } = active;
+
+    let screen = dew_window::screen_size();
+    if surface.fills_screen() {
+        width = screen.0.max(1) as u32;
+        height = screen.1.max(1) as u32;
+    }
+
+    let applets::Mounted::DataModel { ref dom, .. } = mounted;
+    dom.lock().expect("dom").assets.set_blocking(false);
+
+    let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
+
+    // WHICH DRAGGABLE BEHAVIOURS THIS SURFACE ASKED FOR, if it is a widget
+    // at all. `None` for everything else, which turns the whole drag state
+    // machine below into dead branches that never arm — a window or an
+    // overlay is never draggable, so this is not a case those surfaces need
+    // to think about.
+    let drag_options = match &surface {
+        surface::Declared::Widget {
+            draggable,
+            keep_on_screen,
+            snap_to_edges,
+            save_position,
+            ..
+        } => Some((*draggable, *keep_on_screen, *snap_to_edges, *save_position)),
+        _ => None,
+    };
+
+    let mut resolved = surface.resolve(screen, (width, height));
+
+    // A SAVED POSITION OVERRIDES THE DECLARED ANCHOR, exactly like a real
+    // Rainmeter skin: the anchor is what a widget that has never been
+    // dragged falls back to, and a drag that happened once wins from then
+    // on until the next drag replaces it.
+    if let (Surface::Widget { x, y, .. }, Some((_, _, _, true))) = (&mut resolved, drag_options) {
+        if let Some(saved) = positions::load(&manifest.id) {
+            (*x, *y) = saved;
+        }
+    }
+
+    let mut window = Window::new(&resolved, width, height)?;
+
+    // THE WINDOW'S CURRENT ON-SCREEN POSITION, TRACKED HERE because nothing
+    // else does: `Window` itself only knows its size (`resized` exists for
+    // exactly that reason), and a resolved `Surface` is consumed once at
+    // creation. Dragging needs to know where the window is NOW, both to
+    // compute a candidate position and to convert a future pointer event's
+    // client-relative coordinates back to screen space.
+    let mut position: (i32, i32) = match &resolved {
+        Surface::Widget { x, y, .. } => (*x, *y),
+        _ => (0, 0),
+    };
+    let mut drag: Option<DragState> = None;
+
+    let _keep_alive = vm;
+
+    let mut last = Instant::now();
+    let (mut frames, mut painted_frames) = (0u32, 0u32);
+    let (mut sum_frame, mut sum_present) = (Duration::ZERO, Duration::ZERO);
+    let mut last_report = Instant::now();
+
+    // THE PUMP IS THE THREAD'S, NOT THE WINDOW'S, and every event says which
+    // surface produced it. One surface is open here, so routing is a
+    // comparison that always succeeds; it is written out rather than
+    // assumed because a popover is what would add a second, and an event
+    // silently applied to the wrong tree is not a failure that announces
+    // itself.
+    let mut pump = Pump::new();
+    while let Some(events) = pump.poll() {
+        for (from, event) in events {
+            if from != window.id() {
+                continue;
+            }
+            match event {
+                Event::PointerMove { x, y } => {
+                    // ARMED BUT NOT YET DRAGGING: keep forwarding to the
+                    // hit-test pipeline (hover still works for a press that
+                    // turns out not to be a drag) and watch for the
+                    // threshold. `screen_now` is what keeps the distance
+                    // moved correct across a window that has already been
+                    // repositioned once — see `DragState`'s doc comment.
+                    let mut forward = true;
+                    if let Some(ds) = &mut drag {
+                        let screen_now = (position.0 as f32 + x, position.1 as f32 + y);
+                        if !ds.dragging {
+                            let (dx, dy) = (
+                                screen_now.0 - ds.press_screen.0,
+                                screen_now.1 - ds.press_screen.1,
+                            );
+                            if (dx * dx + dy * dy).sqrt() >= 4.0 {
+                                ds.dragging = true;
+                            }
+                        }
+                        if ds.dragging {
+                            // PAST THE THRESHOLD: the hover pipeline stops
+                            // seeing moves entirely. The window is about to
+                            // slide under a stationary cursor, and
+                            // forwarding that as a hover delta would be
+                            // nonsense.
+                            forward = false;
+                            let dx = (screen_now.0 - ds.press_screen.0).round() as i32;
+                            let dy = (screen_now.1 - ds.press_screen.1).round() as i32;
+                            let candidate = (ds.window_origin.0 + dx, ds.window_origin.1 + dy);
+                            let (_, keep_on_screen, snap_to_edges, _) =
+                                drag_options.expect("drag only arms for a widget");
+                            let placed = place_widget(
+                                candidate,
+                                (width, height),
+                                snap_to_edges,
+                                keep_on_screen,
+                            );
+                            window.set_position(placed.0, placed.1);
+                            position = placed;
+                        }
+                    }
+                    if forward {
+                        renderer.moved(x, y, &service_pointer)?;
+                    }
+                }
+                Event::PointerDown { x, y, button } => {
+                    // DISPATCHED UNCHANGED, EVERY TIME. A press-and-hold
+                    // button must still work even on a draggable widget, so
+                    // arming a drag never replaces this.
+                    renderer.down(button, x, y, &service_pointer)?;
+                    if button == Button::Left {
+                        if let Some((draggable, _, _, _)) = drag_options {
+                            if draggable {
+                                drag = Some(DragState {
+                                    press_screen: (position.0 as f32 + x, position.1 as f32 + y),
+                                    window_origin: position,
+                                    dragging: false,
+                                });
+                            }
+                        }
+                    }
+                }
+                Event::PointerUp { x, y, button } => {
+                    let mut suppress = false;
+                    if button == Button::Left {
+                        if let Some(ds) = drag.take() {
+                            if ds.dragging {
+                                // A REAL DRAG HAPPENED. `OnReleased` will not
+                                // fire for whatever was pressed underneath —
+                                // an accepted, cosmetic simplification — and
+                                // this event is not forwarded at all.
+                                suppress = true;
+                                if let Some((_, _, _, true)) = drag_options {
+                                    positions::save(&manifest.id, position);
+                                }
+                            }
+                        }
+                    }
+                    if !suppress {
+                        renderer.up(button, x, y, &service_pointer)?;
+                    }
+                }
+                Event::Wheel { x, y, delta } => {
+                    renderer.wheel(x, y, delta, &service_pointer)?;
+                }
+                Event::Resized {
+                    width: w,
+                    height: h,
+                } => {
+                    // THE SHELL APPLIES THE SIZE NOW. The window used to
+                    // catch its own resize while draining its own queue.
+                    window.resized(w, h);
+                    renderer.invalidate();
+                }
+                Event::Exposed => renderer.invalidate(),
+                // UNLOADS THIS APPLET, AND NOTHING ELSE. The process used to
+                // exit the moment its one window closed; the coordinator
+                // outlives every applet now, so this thread simply ends and
+                // leaves the registry entry for the coordinator to notice
+                // and drop.
+                Event::CloseRequested => return Ok(()),
+                Event::Key { name, .. } => renderer.key(&name)?,
+                Event::Char(_) => {}
+            }
+        }
+
+        let dt = last.elapsed().as_secs_f32();
+        last = Instant::now();
+
+        if bench {
+            renderer.invalidate();
+        }
+
+        let t0 = Instant::now();
+        let painted = renderer
+            .frame(dt)
+            .map_err(|e| format!("while rendering: {e}"))?;
+        let t_frame = t0.elapsed();
+
+        let t1 = Instant::now();
+        if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
+            window.present(bgra, width, height);
+        }
+        let t_raster = t1.elapsed();
+
+        if stats {
+            frames += 1;
+            if painted {
+                sum_frame += t_frame;
+                sum_present += t_raster;
+                painted_frames += 1;
+            }
+            if last_report.elapsed() >= Duration::from_secs(1) {
+                let n = painted_frames.max(1);
+                println!(
+                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
+                    sum_frame / n,
+                    sum_present / n
+                );
+                frames = 0;
+                painted_frames = 0;
+                sum_frame = Duration::ZERO;
+                sum_present = Duration::ZERO;
+                last_report = Instant::now();
+            }
+        }
+
+        // TWO WAYS TO BE TOLD TO STOP: `close`, set by the coordinator when
+        // this one applet is unloaded from the tray menu, and
+        // `tray::exit_requested`, set when the whole service is. Either ends
+        // this thread's own loop; whether the PROCESS exits is the
+        // coordinator's call, made once every applet thread has.
+        if close.load(std::sync::atomic::Ordering::Relaxed) || tray::exit_requested() {
+            return Ok(());
+        }
+
+        if let Some(target) = tray::frame_budget() {
+            let elapsed = last.elapsed();
+            if elapsed < target {
+                std::thread::sleep(target - elapsed);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn check_mod_dir(dir: &Path) -> Result<(manifest::Manifest, PathBuf, Vec<String>), String> {

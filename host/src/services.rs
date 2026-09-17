@@ -329,10 +329,19 @@ pub fn forget_pointer() {
     *pointer().lock().expect("pointer") = PointerState::default();
 }
 
-/// Record where the pointer went. Called wherever input enters the host.
+/// Record where the pointer went, on the process-wide cell. Wherever more than
+/// one guest can be live at once, use `pointer_moved_on` against that guest's
+/// own `SharedPointer` instead -- see its doc comment for why this one is
+/// wrong the moment a second guest loads.
 pub fn pointer_moved(x: f32, y: f32) {
+    pointer_moved_on(pointer(), x, y);
+}
+
+/// Record where the pointer went on `state`, and tell whoever is listening on
+/// it. Called wherever input enters the host.
+pub fn pointer_moved_on(state: &SharedPointer, x: f32, y: f32) {
     let listeners = {
-        let mut guard = pointer().lock().expect("pointer");
+        let mut guard = state.lock().expect("pointer");
         guard.moved(x, y);
         live(&mut guard.changed)
     };
@@ -342,10 +351,16 @@ pub fn pointer_moved(x: f32, y: f32) {
     deliver(listeners, "MouseMovement", x, y, 0.0);
 }
 
-/// Record a button going down or up.
+/// Record a button going down or up, on the process-wide cell. See
+/// `pointer_moved`'s doc comment.
 pub fn pointer_button(button: usize, down: bool) {
+    pointer_button_on(pointer(), button, down);
+}
+
+/// Record a button going down or up on `state`.
+pub fn pointer_button_on(state: &SharedPointer, button: usize, down: bool) {
     let (listeners, at) = {
-        let mut guard = pointer().lock().expect("pointer");
+        let mut guard = state.lock().expect("pointer");
         guard.set_button(button, down);
         let at = guard.position().unwrap_or((0.0, 0.0));
         let list = if down {
@@ -364,10 +379,17 @@ pub fn pointer_button(button: usize, down: bool) {
     deliver(listeners, kind, at.0, at.1, 0.0);
 }
 
-/// Record a wheel turn. Nothing is held; the delta is the whole event.
+/// Record a wheel turn on the process-wide cell. See `pointer_moved`'s doc
+/// comment.
 pub fn pointer_wheel(x: f32, y: f32, delta: f32) {
+    pointer_wheel_on(pointer(), x, y, delta);
+}
+
+/// Record a wheel turn on `state`. Nothing is held; the delta is the whole
+/// event.
+pub fn pointer_wheel_on(state: &SharedPointer, x: f32, y: f32, delta: f32) {
     let listeners = {
-        let mut guard = pointer().lock().expect("pointer");
+        let mut guard = state.lock().expect("pointer");
         live(&mut guard.changed)
     };
     deliver(listeners, "MouseWheel", x, y, delta);
@@ -659,6 +681,38 @@ pub fn tick(clock: &SharedClock, dt: f32) {
 /// permissions, and either order has to add its members to the one table
 /// rather than each clobbering the other's.
 pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
+    install_core(lua, clock)?;
+    // THE POINTER COMES WITH THE HOST, not from a second call every caller has
+    // to remember -- for a process running exactly one guest at a time, which
+    // is every caller of this function. `install_with_pointer` is the seam for
+    // a process running more than one.
+    install_pointer(lua, pointer())
+}
+
+/// Like `install`, but wires `dew.Pointer` and `dew.Input` to a pointer state
+/// of the caller's own rather than the process-global one.
+///
+/// FOR A PROCESS RUNNING MORE THAN ONE APPLET AT ONCE. `pointer()` is a single
+/// process-wide cell: right while exactly one guest is live, and wrong from
+/// the moment a second one loads alongside it -- `dew.Pointer.Position()` in
+/// one applet would answer with wherever the OTHER applet's window last saw
+/// the cursor, and an `InputBegan` connection made by one would fire for a
+/// click delivered to the other's window. `applets::load` gives every applet
+/// its own `SharedPointer`, made the same way `SharedClock` and `SharedDom`
+/// already are, and this is the seam that wires it in instead of the shared
+/// cell.
+pub fn install_with_pointer(
+    lua: &Lua,
+    clock: &SharedClock,
+    pointer: &SharedPointer,
+) -> LuaResult<()> {
+    install_core(lua, clock)?;
+    install_pointer(lua, pointer)
+}
+
+/// `dew.Text` and `dew.Clock`, shared by `install` and `install_with_pointer`.
+/// Everything except which pointer state ends up behind `dew.Pointer`.
+fn install_core(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     let dew: LuaTable = match lua.globals().get("dew") {
         Ok(existing) => existing,
         Err(_) => {
@@ -764,11 +818,6 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     // which is the truthful implementation on any host that drives its own frames.
 
     dew.set("Clock", dew_clock)?;
-
-    // THE POINTER COMES WITH THE HOST, not from a second call every caller has to
-    // remember. The cell is process level, so there is nothing to thread and
-    // nothing a caller can get wrong by forgetting.
-    install_pointer(lua, pointer())?;
     Ok(())
 }
 

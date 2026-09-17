@@ -111,6 +111,17 @@ windows = { version = "0.59", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
     "Win32_System_LibraryLoader",
+    # A SECOND `dew run` HAS TO REACH THE FIRST. `Win32_System_Threading` is the
+    # named mutex that says whether a coordinator is already running,
+    # `Win32_System_Pipes` and `Win32_Storage_FileSystem` are the named pipe a
+    # second invocation hands its applet's directory to it over, and
+    # `Win32_System_IO`/`Win32_Security` are what those two signatures reach for
+    # even though nothing here names either type directly.
+    "Win32_System_Threading",
+    "Win32_System_Pipes",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Security",
 ] }
 
 # `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.
