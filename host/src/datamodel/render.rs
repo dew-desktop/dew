@@ -1352,6 +1352,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
             - number(dom, id, "TextTransparency")
                 .unwrap_or(0.0)
                 .clamp(0.0, 1.0),
+        text_wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
         image,
     }
 }

@@ -71,6 +71,7 @@ fn node(image: Option<Image>) -> Node {
         text_colour: None,
         text_alpha: 1.0,
         image,
+        text_wrap: false,
     }
 }
 
@@ -385,6 +386,7 @@ fn a_rounded_clip_masks_the_corner_and_keeps_the_middle() {
         text_colour: None,
         text_alpha: 1.0,
         image: None,
+        text_wrap: false,
     };
     let mut painter = painted(bar);
     let canvas = painter.canvas_mut();
