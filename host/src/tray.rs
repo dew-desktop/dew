@@ -58,9 +58,11 @@ static UNLOAD_QUEUE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const ID_EXIT: usize = 1000;
+const ID_MANAGE: usize = 1001;
 /// Where the per-applet unload entries start. Clear of `CAPS` (2000-2005) and
-/// `ID_EXIT`, with room for far more loaded applets than the menu could ever
-/// show usefully before the low word of `WM_COMMAND`'s `wParam` runs out.
+/// `ID_EXIT`/`ID_MANAGE`, with room for far more loaded applets than the menu
+/// could ever show usefully before the low word of `WM_COMMAND`'s `wParam`
+/// runs out.
 const ID_APPLET_BASE: usize = 3000;
 
 /// The offered caps. `None` is uncapped and is the default.
@@ -128,6 +130,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let id = wp.0 & 0xFFFF;
             if id == ID_EXIT {
                 EXIT_REQUESTED.store(1, Ordering::Relaxed);
+            } else if id == ID_MANAGE {
+                crate::manage::open_or_focus();
             } else if let Some((_, _, us)) = CAPS.iter().find(|(cap_id, _, _)| *cap_id == id) {
                 FRAME_BUDGET_US.store(*us, Ordering::Relaxed);
             } else if id >= ID_APPLET_BASE {
@@ -168,10 +172,16 @@ unsafe fn show_menu(hwnd: HWND) {
         PCWSTR(wide("Max FPS").as_ptr()),
     );
 
-    // ONE ENTRY PER LOADED APPLET, EACH ITS OWN UNLOAD. No `Manage applets`
-    // window exists yet to browse a longer list from, so a flat entry per
-    // applet is the whole of what this sprint owes the menu -- see the
-    // module doc's note on what else belongs here once one does.
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_MANAGE,
+        PCWSTR(wide("Manage applets").as_ptr()),
+    );
+
+    // ONE ENTRY PER LOADED APPLET, EACH ITS OWN UNLOAD -- a quick unload for
+    // whatever is already running, alongside the fuller install/enable view
+    // `Manage applets` opens.
     let applets = APPLETS.lock().expect("tray applets").clone();
     if !applets.is_empty() {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());

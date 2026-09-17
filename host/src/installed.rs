@@ -186,6 +186,24 @@ pub fn install(source: &Path, force: bool) -> Result<String, String> {
     Ok(id)
 }
 
+/// Set `id`'s enabled bit on disk. Whether `id` is currently running is not
+/// this function's question, the same way `uninstall` leaves it to the
+/// caller -- the management window decides separately whether the change
+/// means live-loading or live-unloading it.
+pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
+    let dest = applets_dir()
+        .ok_or("could not find a per-user data directory")?
+        .join(id);
+    if !dest.is_dir() {
+        return Err(format!("no applet installed with id '{id}'"));
+    }
+
+    let mut state = read_state();
+    state.insert(id.to_string(), enabled);
+    write_state(&state);
+    Ok(())
+}
+
 /// Remove `id` from the store and forget its enabled bit. Whether `id` is
 /// currently running in an active coordinator is not this function's
 /// question -- callers that care check `coordinator::query_running` first.

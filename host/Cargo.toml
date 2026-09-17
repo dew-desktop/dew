@@ -122,6 +122,11 @@ windows = { version = "0.59", features = [
     "Win32_System_IO",
     "Win32_Storage_FileSystem",
     "Win32_Security",
+    # THE MANAGE-APPLETS WINDOW'S OWN CHILD CONTROLS. `Win32_Graphics_Gdi`
+    # names nothing rendering -- `COLOR_WINDOW` and `HBRUSH` are what
+    # `WNDCLASSW.hbrBackground` needs so the window paints an ordinary white
+    # background instead of the artifacts an unset brush leaves behind.
+    "Win32_Graphics_Gdi",
 ] }
 
 # `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.
