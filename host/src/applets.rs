@@ -23,7 +23,7 @@
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
 use crate::manifest::{Manifest, Runtime};
-use crate::services::{self, Clock, SharedClock};
+use crate::services::{self, Clock, PointerState, SharedClock, SharedPointer};
 use crate::surface::{Declared, Requested};
 use dew_runtime::{modules, Vm};
 use mlua::prelude::*;
@@ -68,6 +68,16 @@ pub struct Applet {
     /// clock is not a property of which runtime the author chose -- so putting
     /// it in the enum would have made "can this mod animate" depend on that.
     pub clock: SharedClock,
+    /// Where this mod's `dew.Pointer`/`dew.Input` believe the cursor is.
+    ///
+    /// ONE PER APPLET, LIKE THE CLOCK ABOVE, and for the same reason a shared
+    /// one would be wrong: a process running more than one applet at once has
+    /// more than one cursor position to report, one per window, and a single
+    /// process-wide cell can only ever hold the last one written -- see
+    /// `services::pointer`'s doc comment for the failure this was built to
+    /// stop. The frame loop feeds it through `services::pointer_moved_on` and
+    /// friends rather than through the process-global `pointer_moved`.
+    pub pointer: SharedPointer,
     /// The VM this mod lives in. Held because dropping it takes the mod's Lua
     /// handles with it — a mod is exactly as alive as its VM: a `SharedDom` is
     /// full of `InstanceRef`s the guest also holds.
@@ -183,7 +193,13 @@ pub fn load(
     //      directly; an Aether mod reaches the same functions through the
     //      `Host.Text` and `Host.Clock` seams its interface already declares.
     let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
-    services::install(vm.lua(), &clock).map_err(|e| format!("{}: {e}", manifest.id))?;
+    //      ITS OWN POINTER, NOT THE PROCESS-WIDE ONE. `services::install` wires
+    //      `dew.Pointer`/`dew.Input` to the one cell every guest used to share,
+    //      which was correct for a process running exactly one applet and is
+    //      not any more -- see `SharedPointer`'s doc comment above.
+    let pointer: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
+    services::install_with_pointer(vm.lua(), &clock, &pointer)
+        .map_err(|e| format!("{}: {e}", manifest.id))?;
 
     //      AND THE VALUE VOCABULARY, FOR BOTH RUNTIMES SINCE SPRINT 6. `UDim2`,
     //      `Color3`, `Enum` and the rest are the language of the platform on the
@@ -396,6 +412,7 @@ pub fn load(
         surface,
         mounted,
         clock,
+        pointer,
         vm,
     })
 }
@@ -1084,17 +1101,21 @@ mod a_pressable_responds {
         //  framework polls `services` for where the pointer is and whether a
         //  button is down; dispatching without recording delivers the event to
         //  an instance and leaves the poller reading a pointer that never moved.
-        services::pointer_moved(x, y);
+        //  ON THE APPLET'S OWN CELL, not the process-global one: `load` wires
+        //  `dew.Pointer`/`dew.Input` to `loaded.pointer` now, so recording on
+        //  the shared cell here would leave the applet's own poll reading a
+        //  pointer that never moved.
+        services::pointer_moved_on(&loaded.pointer, x, y);
         pointer.moved(&surface, x, y).expect("moved");
         services::tick(&loaded.clock, 1.0 / 60.0);
         settle();
 
-        services::pointer_button(button as usize, true);
+        services::pointer_button_on(&loaded.pointer, button as usize, true);
         pointer.down(&surface, button, x, y).expect("down");
         services::tick(&loaded.clock, 1.0 / 60.0);
         settle();
 
-        services::pointer_button(button as usize, false);
+        services::pointer_button_on(&loaded.pointer, button as usize, false);
         pointer.up(&surface, button, x, y).expect("up");
         services::tick(&loaded.clock, 1.0 / 60.0);
         settle();

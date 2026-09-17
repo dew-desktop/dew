@@ -6,16 +6,19 @@
 //! furniture inside the crate that must stay useful to hosts which have none.
 //!
 //! `HWND_MESSAGE` creates a window that is never shown, never in the taskbar, and
-//! exists only to receive. The main loop's `poll()` pumps every message for the
-//! thread, so this window's procedure runs there without a second pump.
+//! exists only to receive. The coordinator's own `poll()` pumps every message for
+//! its thread, so this window's procedure runs there without a second pump — see
+//! `coordinator.rs` for why the tray moved to a thread of its own rather than
+//! staying on whichever applet happened to be first.
 //!
 //! WHAT IS TEMPORARY HERE, and should be said out loud: the menu is a frame-rate
-//! cap and an exit. It is scaffolding for reaching settings that do not have a UI
-//! yet, and the moment Dew has a settings surface most of this should move into
-//! it — a tray menu is a bad place to configure anything you cannot see the
-//! effect of.
+//! cap, the loaded applets, and an exit. It is scaffolding for reaching settings
+//! that do not have a UI yet, and the moment Dew has a settings surface most of
+//! this should move into it — a tray menu is a bad place to configure anything
+//! you cannot see the effect of.
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Mutex;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -35,8 +38,30 @@ static FRAME_BUDGET_US: AtomicU32 = AtomicU32::new(0);
 /// Set when the menu's Exit is chosen.
 static EXIT_REQUESTED: AtomicU32 = AtomicU32::new(0);
 
+/// What the menu currently lists as loaded, set by the coordinator whenever its
+/// registry changes.
+///
+/// A `Mutex<Vec<_>>` RATHER THAN SOMETHING RICHER, because nothing here reads it
+/// except `show_menu`, built fresh on every click — there is no state to keep in
+/// step between updates, only the latest snapshot.
+static APPLETS: Mutex<Vec<(u32, String)>> = Mutex::new(Vec::new());
+
+/// Which applet id a menu command index named, filled in by the same `show_menu`
+/// call that assigned the ids. `WM_COMMAND` only ever hands back a `usize`, so
+/// this is what turns "the third applet item was clicked" back into an id the
+/// coordinator's registry actually uses.
+static MENU_APPLET_ORDER: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Applet ids the menu's "Unload" asked for, drained once per coordinator
+/// iteration by `take_unload_requests`.
+static UNLOAD_QUEUE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const ID_EXIT: usize = 1000;
+/// Where the per-applet unload entries start. Clear of `CAPS` (2000-2005) and
+/// `ID_EXIT`, with room for far more loaded applets than the menu could ever
+/// show usefully before the low word of `WM_COMMAND`'s `wParam` runs out.
+const ID_APPLET_BASE: usize = 3000;
 
 /// The offered caps. `None` is uncapped and is the default.
 ///
@@ -66,6 +91,23 @@ pub fn exit_requested() -> bool {
     EXIT_REQUESTED.load(Ordering::Relaxed) != 0
 }
 
+/// Tell the tray what is currently loaded, by id and display name.
+///
+/// CALLED WHENEVER THE COORDINATOR'S REGISTRY CHANGES -- an applet joining,
+/// leaving, or getting its display name once its manifest has loaded. The menu
+/// itself is only ever built at click time, so this just replaces the snapshot
+/// it will read next.
+pub fn set_applets(applets: Vec<(u32, String)>) {
+    *APPLETS.lock().expect("tray applets") = applets;
+}
+
+/// Applet ids the menu's "Unload" asked for since the last call. Drained, not
+/// peeked -- the coordinator's loop calls this once per iteration and acts on
+/// whatever it finds.
+pub fn take_unload_requests() -> Vec<u32> {
+    std::mem::take(&mut *UNLOAD_QUEUE.lock().expect("tray unload queue"))
+}
+
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
@@ -88,6 +130,14 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 EXIT_REQUESTED.store(1, Ordering::Relaxed);
             } else if let Some((_, _, us)) = CAPS.iter().find(|(cap_id, _, _)| *cap_id == id) {
                 FRAME_BUDGET_US.store(*us, Ordering::Relaxed);
+            } else if id >= ID_APPLET_BASE {
+                let order = MENU_APPLET_ORDER.lock().expect("tray menu order");
+                if let Some(&applet_id) = order.get(id - ID_APPLET_BASE) {
+                    UNLOAD_QUEUE
+                        .lock()
+                        .expect("tray unload queue")
+                        .push(applet_id);
+                }
             }
             LRESULT(0)
         }
@@ -117,6 +167,28 @@ unsafe fn show_menu(hwnd: HWND) {
         fps.0 as usize,
         PCWSTR(wide("Max FPS").as_ptr()),
     );
+
+    // ONE ENTRY PER LOADED APPLET, EACH ITS OWN UNLOAD. No `Manage applets`
+    // window exists yet to browse a longer list from, so a flat entry per
+    // applet is the whole of what this sprint owes the menu -- see the
+    // module doc's note on what else belongs here once one does.
+    let applets = APPLETS.lock().expect("tray applets").clone();
+    if !applets.is_empty() {
+        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+        let mut order = Vec::with_capacity(applets.len());
+        for (i, (id, name)) in applets.iter().enumerate() {
+            let label = format!("Unload {name}");
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING,
+                ID_APPLET_BASE + i,
+                PCWSTR(wide(&label).as_ptr()),
+            );
+            order.push(*id);
+        }
+        *MENU_APPLET_ORDER.lock().expect("tray menu order") = order;
+    }
+
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
     let _ = AppendMenuW(menu, MF_STRING, ID_EXIT, PCWSTR(wide("Exit Dew").as_ptr()));
 
