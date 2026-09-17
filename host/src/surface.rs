@@ -66,6 +66,51 @@ impl Anchor {
     }
 }
 
+/// A window's tier in the desktop's z-order.
+///
+/// THREE VALUES, NOT A BOOL. `Bottom` sits below every normal window and above
+/// the wallpaper — NOT the same as Rainmeter's "OnDesktop", which needs
+/// `WorkerW`-parenting and is out of scope here. `Normal` is ordinary z-order,
+/// which can be covered. `Topmost` is always on top, which is today's only
+/// behaviour and stays the default, so an existing applet's behaviour does not
+/// change by omission.
+///
+/// DEFINED HERE RATHER THAN REUSING `dew_window::ZOrder` DIRECTLY, even though
+/// they say the same three things. `dew_window` is `#[cfg(windows)]` for its
+/// whole crate, so a type living there does not exist on a target that is not
+/// Windows — and `Declared` is not itself platform-gated, because CI type-checks
+/// this host on Linux too (see `.github/workflows/ci.yml`'s `linux` job). Read
+/// the same way `Anchor` already crosses this boundary: as a plain scalar pair,
+/// produced only inside `resolve`, which IS `#[cfg(windows)]`. This mirrors
+/// that — a host-side enum, converted to `dew_window::ZOrder` only at the same
+/// boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ZOrder {
+    Bottom,
+    Normal,
+    #[default]
+    Topmost,
+}
+
+impl ZOrder {
+    fn parse(name: &str) -> Option<ZOrder> {
+        Some(match name {
+            "bottom" => ZOrder::Bottom,
+            "normal" => ZOrder::Normal,
+            "topmost" => ZOrder::Topmost,
+            _ => return None,
+        })
+    }
+
+    fn read(table: &LuaTable) -> ZOrder {
+        table
+            .get::<String>("zOrder")
+            .ok()
+            .and_then(|z| ZOrder::parse(&z))
+            .unwrap_or_default()
+    }
+}
+
 /// What a mod declared, before a screen size is known.
 #[derive(Debug, Clone)]
 pub enum Declared {
@@ -76,9 +121,22 @@ pub enum Declared {
         anchor: Anchor,
         offset: (i32, i32),
         click_through: bool,
+        z_order: ZOrder,
+        /// Grab the widget's body and move it, the way a Rainmeter skin does
+        /// with no title bar of its own. HOST-DRIVEN (see `main.rs`'s frame
+        /// loop), not scriptable — an applet's own code never sees a drag.
+        draggable: bool,
+        /// After a drag, keep the widget's full rectangle within some visible
+        /// display rather than letting it end up off every one of them.
+        keep_on_screen: bool,
+        /// While dragging, snap to a screen edge within a small threshold.
+        snap_to_edges: bool,
+        /// A dragged position survives to the next launch, overriding the
+        /// declared anchor until the widget is dragged again.
+        save_position: bool,
     },
     Overlay {
-        topmost: bool,
+        z_order: ZOrder,
         click_through: bool,
     },
 }
@@ -109,10 +167,10 @@ impl Declared {
 
         let kind: String = surface.get("kind").unwrap_or_else(|_| "widget".to_string());
         match kind.as_str() {
+            //--- ON TOP BY DEFAULT (`ZOrder::read`'s own default), because an
+            //--- overlay behind everything is one you never see.
             "overlay" => Declared::Overlay {
-                //--- ON TOP BY DEFAULT, because an overlay behind everything is one
-                //--- you never see.
-                topmost: surface.get("topmost").unwrap_or(true),
+                z_order: ZOrder::read(&surface),
                 click_through: surface.get("clickThrough").unwrap_or(false),
             },
             "window" => Declared::Window {
@@ -136,6 +194,11 @@ impl Declared {
                     anchor,
                     offset,
                     click_through: surface.get("clickThrough").unwrap_or(false),
+                    z_order: ZOrder::read(&surface),
+                    draggable: surface.get("draggable").unwrap_or(false),
+                    keep_on_screen: surface.get("keepOnScreen").unwrap_or(true),
+                    snap_to_edges: surface.get("snapToEdges").unwrap_or(false),
+                    save_position: surface.get("savePosition").unwrap_or(false),
                 }
             }
         }
@@ -146,33 +209,49 @@ impl Declared {
             anchor: Anchor::TopRight,
             offset: (24, 24),
             click_through: false,
+            z_order: ZOrder::Topmost,
+            draggable: false,
+            keep_on_screen: true,
+            snap_to_edges: false,
+            save_position: false,
         }
     }
 
     /// Turn the declaration into a concrete surface for a screen of this size.
     #[cfg(windows)]
     pub fn resolve(&self, screen: (i32, i32), size: (u32, u32)) -> Surface {
+        fn to_window_z_order(z: ZOrder) -> dew_window::ZOrder {
+            match z {
+                ZOrder::Bottom => dew_window::ZOrder::Bottom,
+                ZOrder::Normal => dew_window::ZOrder::Normal,
+                ZOrder::Topmost => dew_window::ZOrder::Topmost,
+            }
+        }
+
         match self {
             Declared::Window { title } => Surface::Window {
                 title: title.clone(),
             },
             Declared::Overlay {
-                topmost,
+                z_order,
                 click_through,
             } => Surface::Overlay {
-                topmost: *topmost,
+                z_order: to_window_z_order(*z_order),
                 click_through: *click_through,
             },
             Declared::Widget {
                 anchor,
                 offset,
                 click_through,
+                z_order,
+                ..
             } => {
                 let (x, y) = anchor.resolve(screen, (size.0 as i32, size.1 as i32), *offset);
                 Surface::Widget {
                     x,
                     y,
                     click_through: *click_through,
+                    z_order: to_window_z_order(*z_order),
                 }
             }
         }
@@ -201,21 +280,34 @@ impl Declared {
     pub fn describe(&self) -> String {
         match self {
             Declared::Window { .. } => "window".to_string(),
-            Declared::Overlay { topmost, .. } => {
-                format!("overlay{}", if *topmost { ", topmost" } else { "" })
-            }
-            Declared::Widget {
-                anchor,
+            Declared::Overlay {
+                z_order,
                 click_through,
-                ..
             } => format!(
-                "widget {:?}{}",
-                anchor,
+                "overlay {:?}{}",
+                z_order,
                 if *click_through {
                     ", click-through"
                 } else {
                     ""
                 }
+            ),
+            Declared::Widget {
+                anchor,
+                click_through,
+                z_order,
+                draggable,
+                ..
+            } => format!(
+                "widget {:?} {:?}{}{}",
+                anchor,
+                z_order,
+                if *click_through {
+                    ", click-through"
+                } else {
+                    ""
+                },
+                if *draggable { ", draggable" } else { "" }
             ),
         }
     }
@@ -266,10 +358,7 @@ impl Request {
                     .unwrap_or_else(|| fallback_title.to_string()),
             },
             Permission::Overlay => Declared::Overlay {
-                topmost: options
-                    .as_ref()
-                    .and_then(|o| o.get::<bool>("topmost").ok())
-                    .unwrap_or(true),
+                z_order: options.as_ref().map(ZOrder::read).unwrap_or_default(),
                 click_through: options
                     .as_ref()
                     .and_then(|o| o.get::<bool>("clickThrough").ok())
@@ -289,6 +378,23 @@ impl Request {
                 click_through: options
                     .as_ref()
                     .and_then(|o| o.get::<bool>("clickThrough").ok())
+                    .unwrap_or(false),
+                z_order: options.as_ref().map(ZOrder::read).unwrap_or_default(),
+                draggable: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("draggable").ok())
+                    .unwrap_or(false),
+                keep_on_screen: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("keepOnScreen").ok())
+                    .unwrap_or(true),
+                snap_to_edges: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("snapToEdges").ok())
+                    .unwrap_or(false),
+                save_position: options
+                    .as_ref()
+                    .and_then(|o| o.get::<bool>("savePosition").ok())
                     .unwrap_or(false),
             },
         };

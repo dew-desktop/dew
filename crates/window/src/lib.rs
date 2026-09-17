@@ -26,6 +26,22 @@ mod win32;
 
 pub use win32::{screen_size, Pump, SurfaceId, Window};
 
+/// A window's tier in the desktop's z-order.
+///
+/// THREE VALUES, NOT A BOOL. `Bottom` sits below every normal window and above
+/// the wallpaper — a Rainmeter-style desktop widget — but is NOT the same as
+/// Rainmeter's "OnDesktop", which parents into the desktop's `WorkerW` and is
+/// out of scope here. `Normal` behaves like an ordinary window's z-order and can
+/// be covered. `Topmost` is always on top, which was the only behaviour before
+/// this enum existed and stays the default so an existing widget's behaviour
+/// does not change by omission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ZOrder {
+    Bottom,
+    Normal,
+    Topmost,
+}
+
 /// What kind of surface a window is.
 ///
 /// NOT A FLAG ON ONE STRUCT, because the two differ in what they can be asked.
@@ -55,6 +71,8 @@ pub enum Surface {
         /// Let clicks fall through to whatever is behind. A monitor that only
         /// displays wants this; anything with a control does not.
         click_through: bool,
+        /// This widget's tier in the desktop's z-order.
+        z_order: ZOrder,
     },
 
     /// A widget the size of the desktop.
@@ -77,14 +95,15 @@ pub enum Surface {
     /// purely decorative overlay wants exactly that, but it is off by default
     /// here for the opposite reason it is off for a widget.
     Overlay {
-        /// Above every other window. A workspace you cannot see is useless, so
-        /// this defaults on — but it does mean the overlay sits above full-screen
-        /// applications, which is aggressive for anything that is not a shell.
+        /// This overlay's tier in the desktop's z-order. Defaults to `Topmost`
+        /// — a workspace you cannot see is useless — but that does mean the
+        /// overlay sits above full-screen applications by default, which is
+        /// aggressive for anything that is not a shell.
         ///
-        /// Sitting BELOW other windows but above the wallpaper is a different
-        /// technique entirely (parenting into the desktop's `WorkerW`), and not
-        /// this.
-        topmost: bool,
+        /// `Bottom` sits below every other window but above the wallpaper. That
+        /// is NOT the same as Rainmeter's "OnDesktop", which parents into the
+        /// desktop's `WorkerW` — a different technique entirely, and not this.
+        z_order: ZOrder,
         click_through: bool,
     },
 }
