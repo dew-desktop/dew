@@ -108,6 +108,69 @@ fn rgba(c: Rgb, alpha: f32) -> (u8, u8, u8, u8) {
     (c.0, c.1, c.2, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
+/// Break `text` into the lines `TextWrapped` paints, against the same face
+/// `fill_text` draws with -- measurement and painting share `font.width`
+/// rather than a second guess at glyph advances, for the reason `dew_raster`
+/// gives its own layout function: two measures of the same string that can
+/// drift apart is how a wrap that fits at layout time still overflows on
+/// screen.
+///
+/// Paragraphs split on `\n` and survive as their own (possibly empty) line.
+/// Within a paragraph, words are packed greedily against `max_width`; a
+/// single word wider than `max_width` on its own is broken at character
+/// boundaries rather than left to overflow.
+fn wrap_lines(font: Font, text: &str, size: f32, max_width: f32) -> Vec<String> {
+    if max_width <= 0.0 {
+        return text.split('\n').map(str::to_string).collect();
+    }
+
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let before = lines.len();
+        let mut current = String::new();
+
+        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
+            let word_w = font.width(size, word).unwrap_or(0.0);
+            if word_w > max_width {
+                if !current.is_empty() {
+                    lines.push(std::mem::take(&mut current));
+                }
+                for ch in word.chars() {
+                    let candidate = format!("{current}{ch}");
+                    if current.is_empty()
+                        || font.width(size, &candidate).unwrap_or(0.0) <= max_width
+                    {
+                        current = candidate;
+                    } else {
+                        lines.push(std::mem::take(&mut current));
+                        current = ch.to_string();
+                    }
+                }
+                continue;
+            }
+
+            let candidate = if current.is_empty() {
+                word.to_string()
+            } else {
+                format!("{current} {word}")
+            };
+            if current.is_empty() || font.width(size, &candidate).unwrap_or(0.0) <= max_width {
+                current = candidate;
+            } else {
+                lines.push(std::mem::take(&mut current));
+                current = word.to_string();
+            }
+        }
+
+        // A PARAGRAPH THAT NEVER PUSHED A LINE still owes one -- an empty
+        // paragraph between two blank lines is a blank line, not nothing.
+        if !current.is_empty() || lines.len() == before {
+            lines.push(current);
+        }
+    }
+    lines
+}
+
 impl Painter for RasterPainter {
     fn begin(&mut self, _width: f32, _height: f32, background: Option<Rgb>) {
         // `None` MEANS TRANSPARENT, not black.
@@ -161,29 +224,59 @@ impl Painter for RasterPainter {
         let colour = node.text_colour.unwrap_or(Rgb(255, 255, 255));
         let size = node.text_size;
 
-        // ALIGNMENT IS APPLIED HERE AND NOWHERE ELSE. The display list carries
-        // the resolved alignment — including the engine's centre default for an unset
-        // one — so this positions the run and never re-decides what it should be.
-        let width = font.width(size, text).unwrap_or(0.0);
-        let x = match node.text_align_x.unwrap_or(Align::Center) {
-            Align::Start => node.rect.x,
-            Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
-            Align::End => node.rect.x + node.rect.w - width,
-        };
+        // UNWRAPPED IS STILL THE COMMON CASE, so it keeps the single-run path
+        // rather than going through `wrap_lines` for one line every time.
+        if !node.text_wrap {
+            let width = font.width(size, text).unwrap_or(0.0);
+            let x = match node.text_align_x.unwrap_or(Align::Center) {
+                Align::Start => node.rect.x,
+                Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
+                Align::End => node.rect.x + node.rect.w - width,
+            };
+            let y = match node.text_align_y.unwrap_or(Align::Center) {
+                Align::Start => node.rect.y,
+                Align::Center => node.rect.y + (node.rect.h - size) / 2.0,
+                Align::End => node.rect.y + node.rect.h - size,
+            };
+            self.canvas
+                .fill_text(font, size, x, y, rgba(colour, node.text_alpha), text);
+            return;
+        }
+
+        // ONE LINE HEIGHT, EVERYWHERE THIS HOST TALKS ABOUT WRAPPED TEXT: 1.5x
+        // TextSize is `LAYOUT.md` section 7's rule, and `measure_wrapped` sizes
+        // the box this rect came from by the same number. Painting to a
+        // different rhythm than the box was grown by is how a wrap that
+        // measures correctly still clips or overlaps on screen.
+        let line_height = size * 1.5;
+        let lines = wrap_lines(font, text, size, node.rect.w);
+        let total_h = lines.len() as f32 * line_height;
 
         // `fill_text` takes the TOP-LEFT and converts to a baseline itself. An
         // earlier draft here added `font.ascent(size)` on top of that, which the
         // ABI's own comment warns against by name — every run landed about a line
         // too low. The rule lives in one place; this supplies a box, not a
         // baseline.
-        let y = match node.text_align_y.unwrap_or(Align::Center) {
+        let start_y = match node.text_align_y.unwrap_or(Align::Center) {
             Align::Start => node.rect.y,
-            Align::Center => node.rect.y + (node.rect.h - size) / 2.0,
-            Align::End => node.rect.y + node.rect.h - size,
+            Align::Center => node.rect.y + (node.rect.h - total_h) / 2.0,
+            Align::End => node.rect.y + node.rect.h - total_h,
         };
 
-        self.canvas
-            .fill_text(font, size, x, y, rgba(colour, node.text_alpha), text);
+        for (i, line) in lines.iter().enumerate() {
+            if line.is_empty() {
+                continue;
+            }
+            let width = font.width(size, line).unwrap_or(0.0);
+            let x = match node.text_align_x.unwrap_or(Align::Center) {
+                Align::Start => node.rect.x,
+                Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
+                Align::End => node.rect.x + node.rect.w - width,
+            };
+            let y = start_y + i as f32 * line_height;
+            self.canvas
+                .fill_text(font, size, x, y, rgba(colour, node.text_alpha), line);
+        }
     }
 
     /// Both ramps, resolved into the flat `(at, r, g, b, a)` stops the ABI reads.

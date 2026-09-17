@@ -325,6 +325,14 @@ pub struct Node {
     /// painter filled every run at 1.0 and the property reached no pixels. Found
     /// by the gallery's differential pass, not by a test.
     pub text_alpha: f32,
+    /// Whether the painter should break this run onto more than one line to
+    /// stay inside `rect.w`, rather than overflowing it.
+    ///
+    /// HOST FIELD, LIKE `image`, for the same reason: `TextWrapped` is a
+    /// DataModel property Dew reads directly off its own arena. Live.luau
+    /// does not emit it, so a display list built in Luau paints unwrapped
+    /// until Aether's own `buildNode` grows a matching key.
+    pub text_wrap: bool,
     /// What this node draws as an image, if anything.
     ///
     /// NOT DECODED FROM LUA, and it is the first field of which that is true —
@@ -393,7 +401,10 @@ impl Frame {
     /// cannot produce one. That is a real asymmetry rather than an oversight, and
     /// naming it here is what stops the next reader from "fixing" the decoder to
     /// match a list it was never meant to satisfy.
-    pub const HOST_FIELDS: &'static [&'static str] = &["image"];
+    ///
+    /// `text_wrap` IS HERE FOR A DIFFERENT REASON: it CAN be emitted from Lua in
+    /// principle, and simply is not yet -- see its doc comment on `Node`.
+    pub const HOST_FIELDS: &'static [&'static str] = &["image", "text_wrap"];
 }
 
 /// What changed since the last delta.
@@ -503,6 +514,8 @@ impl Node {
             // NOT READ FROM THE TABLE, and `Frame::HOST_FIELDS` says why. A
             // display list built in Luau names an asset; it cannot carry one.
             image: None,
+            // NOT READ FROM THE TABLE EITHER, for now -- see `Node::text_wrap`.
+            text_wrap: false,
         })
     }
 }
@@ -607,6 +620,7 @@ mod tests {
             text_colour: None,
             text_alpha: 1.0,
             image: None,
+            text_wrap: false,
         };
         let Node {
             id: _,
@@ -626,6 +640,7 @@ mod tests {
             text_colour: _,
             text_alpha: _,
             image: _,
+            text_wrap: _,
         } = node;
 
         // `rect` is four keys and the rest are one each; the names are Live.luau's
@@ -651,6 +666,7 @@ mod tests {
             "textColour",
             "textAlpha",
             "image",
+            "text_wrap",
         ];
         for key in named {
             assert!(
