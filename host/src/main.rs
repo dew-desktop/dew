@@ -24,6 +24,8 @@ mod applets;
 #[cfg(windows)]
 mod coordinator;
 #[cfg(windows)]
+mod installed;
+#[cfg(windows)]
 mod positions;
 mod surface;
 #[cfg(windows)]
@@ -558,6 +560,13 @@ pub enum Command {
         /// Directories to check. Empty means the working directory, if it is one.
         targets: Vec<PathBuf>,
     },
+    Install {
+        dir: PathBuf,
+        force: bool,
+    },
+    Uninstall {
+        id: String,
+    },
     Init {
         name: String,
         runtime: manifest::Runtime,
@@ -614,6 +623,8 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "run" => parse_run(&args_vec[1..], is_windows),
         "snapshot" => parse_snapshot(&args_vec[1..]),
         "check" => parse_check(&args_vec[1..]),
+        "install" => parse_install(&args_vec[1..]),
+        "uninstall" => parse_uninstall(&args_vec[1..]),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
@@ -791,6 +802,43 @@ fn parse_check(args: &[String]) -> Result<Command, String> {
         targets.push(PathBuf::from(arg));
     }
     Ok(Command::Check { targets })
+}
+
+fn parse_install(args: &[String]) -> Result<Command, String> {
+    let mut dir: Option<PathBuf> = None;
+    let mut force = false;
+    for arg in args {
+        match arg.as_str() {
+            "--force" => force = true,
+            s if !s.starts_with('-') => {
+                if dir.is_some() {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+                dir = Some(PathBuf::from(s));
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+    let dir = dir.ok_or(
+        "nothing to install: pass an applet directory, e.g. `dew install examples/host/basic-widget`",
+    )?;
+    Ok(Command::Install { dir, force })
+}
+
+fn parse_uninstall(args: &[String]) -> Result<Command, String> {
+    let mut id: Option<String> = None;
+    for arg in args {
+        if arg.starts_with('-') {
+            return Err(format!("unrecognised argument '{arg}'"));
+        }
+        if id.is_some() {
+            return Err(format!("unexpected argument '{arg}'"));
+        }
+        id = Some(arg.clone());
+    }
+    let id =
+        id.ok_or("nothing to uninstall: pass an applet id, e.g. `dew uninstall basic-widget`")?;
+    Ok(Command::Uninstall { id })
 }
 
 fn parse_init(args: &[String]) -> Result<Command, String> {
@@ -1528,6 +1576,57 @@ fn execute_check(targets: Vec<PathBuf>) -> Result<(), String> {
     }
 }
 
+/// Copy an applet directory into the per-user store, keyed by its own
+/// manifest id, and mark it enabled.
+///
+/// THIS ONLY AFFECTS THE NEXT COORDINATOR STARTUP. An already-running Dew
+/// service keeps whatever it loaded when it started; toggling a live one is
+/// not something this sprint answers, and the printed line below says so
+/// rather than leaving that a silent surprise.
+fn execute_install(dir: PathBuf, force: bool) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (dir, force);
+        Err("'install' is Windows-only: an installed applet loads into the coordinator's window, which only runs on Windows".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let id = installed::install(&dir, force)?;
+        println!("[dew] installed '{id}' from {}", dir.display());
+        println!(
+            "[dew] this loads the next time the Dew service starts; a service already running keeps what it started with"
+        );
+        Ok(())
+    }
+}
+
+/// Remove an installed applet from the store. Refuses if that id is
+/// currently running in an active coordinator, so `dew uninstall` never
+/// leaves a running applet with no installed copy behind it.
+fn execute_uninstall(id: String) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = id;
+        Err("'uninstall' is Windows-only: an installed applet loads into the coordinator's window, which only runs on Windows".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        if coordinator::query_running(&id)? {
+            return Err(format!(
+                "'{id}' is currently running; exit it (or exit Dew) before uninstalling"
+            ));
+        }
+        installed::uninstall(&id)?;
+        println!("[dew] uninstalled '{id}'");
+        println!(
+            "[dew] a Dew service already running keeps what it started with until it is restarted"
+        );
+        Ok(())
+    }
+}
+
 /// The `dew.toml` that `dew init` writes.
 ///
 /// TOML, BECAUSE THE FILE IS CALLED `dew.toml`. This emitted JSON for as long as
@@ -2082,6 +2181,29 @@ fn execute_help(subcommand: Option<String>) {
                 "  --dir, -d <PATH>      Directory to search for suites (defaults to current dir)"
             );
         }
+        Some("install") => {
+            println!("Usage: dew install <DIR> [OPTIONS]");
+            println!();
+            println!("Copy an applet into the per-user store, so a Dew service loads it on its next start.");
+            println!();
+            println!("Arguments:");
+            println!("  <DIR>                 Applet directory (its dew.toml names its id)");
+            println!();
+            println!("Options:");
+            println!("  --force               Replace an already-installed applet with this id");
+        }
+        Some("uninstall") => {
+            println!("Usage: dew uninstall <ID>");
+            println!();
+            println!(
+                "Remove an applet from the per-user store. Refuses if it is currently running."
+            );
+            println!();
+            println!("Arguments:");
+            println!(
+                "  <ID>                  The applet's manifest id, as `dew install` reported it"
+            );
+        }
         Some("conformance") => {
             println!("Usage: dew conformance [FILTER] [OPTIONS]");
             println!();
@@ -2112,6 +2234,8 @@ fn execute_help(subcommand: Option<String>) {
             println!("  run <PATH>       Run an applet in a desktop window (Windows only)");
             println!("  snapshot <PATH>  Render an applet or a script to a PNG, no window needed");
             println!("  check [PATH...]  Validate manifests and entry points, or this directory");
+            println!("  install <DIR>    Copy an applet into the per-user store (Windows only)");
+            println!("  uninstall <ID>   Remove an applet from the per-user store (Windows only)");
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
@@ -2182,6 +2306,8 @@ fn run() -> Result<(), String> {
         },
         Command::Snapshot { target, output } => execute_snapshot(target, output),
         Command::Check { targets } => execute_check(targets),
+        Command::Install { dir, force } => execute_install(dir, force),
+        Command::Uninstall { id } => execute_uninstall(id),
         Command::Init {
             name,
             runtime,
