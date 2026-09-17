@@ -21,6 +21,13 @@
 
 type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center"
 
+--- A window's tier in the desktop's z-order. `"bottom"` sits below every
+--- normal window and above the wallpaper -- NOT the same as Rainmeter's
+--- "OnDesktop", which needs `WorkerW`-parenting and Dew does not do that.
+--- `"normal"` is ordinary z-order, which can be covered. `"topmost"` is always
+--- on top, and is the default.
+type ZOrder = "bottom" | "normal" | "topmost"
+
 type WidgetOptions = {
 	width: number?,
 	height: number?,
@@ -32,6 +39,22 @@ type WidgetOptions = {
 	--- Let clicks reach whatever is behind, everywhere. An applet with a control
 	--- wants this false, which is the default.
 	clickThrough: boolean?,
+	--- Defaults to "topmost".
+	zOrder: ZOrder?,
+	--- Grab the widget's body and move it, the way a Rainmeter skin works with
+	--- no title bar of its own. Defaults to false. Host-driven: the applet's
+	--- own code never sees the drag.
+	draggable: boolean?,
+	--- After a drag, keep the widget's full rectangle within some visible
+	--- display rather than letting it end up off every one of them. Defaults
+	--- to true.
+	keepOnScreen: boolean?,
+	--- While dragging, snap to a screen edge within a small threshold.
+	--- Defaults to false.
+	snapToEdges: boolean?,
+	--- A dragged position survives to the next launch, overriding the declared
+	--- anchor until the widget is dragged again. Defaults to false.
+	savePosition: boolean?,
 }
 
 type WindowOptions = {
@@ -51,8 +74,8 @@ type OverlayOptions = {
 	--- size it was designed against, and what a headless render uses.
 	width: number?,
 	height: number?,
-	--- Above every other window. Defaults to true.
-	topmost: boolean?,
+	--- Defaults to "topmost".
+	zOrder: ZOrder?,
 	clickThrough: boolean?,
 }
 

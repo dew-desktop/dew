@@ -1,6 +1,6 @@
 //! The Win32 implementation.
 
-use crate::{Button, Event, Surface};
+use crate::{Button, Event, Surface, ZOrder};
 use std::cell::RefCell;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
@@ -329,19 +329,28 @@ impl Window {
             // taskbar; without it a desktop clock is a window you can tab to,
             // which is not what a widget is. `WS_EX_LAYERED` is what makes
             // `UpdateLayeredWindow` available, and therefore per-pixel alpha.
-            let (style, ex_style, x, y) = match surface {
+            let (style, ex_style, x, y, z_order) = match surface {
                 Surface::Window { .. } => (
                     WS_OVERLAPPEDWINDOW,
                     WINDOW_EX_STYLE::default(),
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
+                    None,
                 ),
                 Surface::Widget {
                     x,
                     y,
                     click_through,
+                    z_order,
                 } => {
-                    let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
+                    let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                    // `WS_EX_TOPMOST` AT CREATION MATCHES THE COMMON CASE, and
+                    // `SetWindowPos` below is what actually enforces all three
+                    // tiers — this extended style alone has no way to express
+                    // "bottom".
+                    if *z_order == ZOrder::Topmost {
+                        ex |= WS_EX_TOPMOST;
+                    }
                     if *click_through {
                         // TRANSPARENT means hit-testing falls through to whatever
                         // is behind. It is a property of the window, not of the
@@ -349,21 +358,21 @@ impl Window {
                         // clicked through.
                         ex |= WS_EX_TRANSPARENT;
                     }
-                    (WS_POPUP, ex, *x, *y)
+                    (WS_POPUP, ex, *x, *y, Some(*z_order))
                 }
                 Surface::Overlay {
-                    topmost,
+                    z_order,
                     click_through,
                 } => {
                     let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
-                    if *topmost {
+                    if *z_order == ZOrder::Topmost {
                         ex |= WS_EX_TOPMOST;
                     }
                     if *click_through {
                         ex |= WS_EX_TRANSPARENT;
                     }
                     // The caller sized this to the screen; it starts at its origin.
-                    (WS_POPUP, ex, 0, 0)
+                    (WS_POPUP, ex, 0, 0, Some(*z_order))
                 }
             };
 
@@ -392,6 +401,28 @@ impl Window {
 
             let _ = ShowWindow(hwnd, SW_SHOW);
 
+            // THE EXTENDED STYLE ALONE CANNOT PLACE A WINDOW AT THE BOTTOM of
+            // the z-order — `WS_EX_TOPMOST` only ever says "above everything
+            // else". `SetWindowPos`'s `hwndInsertAfter` is the one mechanism
+            // that reaches all three tiers, so it runs for every widget and
+            // overlay rather than only the topmost ones.
+            if let Some(z_order) = z_order {
+                let insert_after = match z_order {
+                    ZOrder::Bottom => HWND_BOTTOM,
+                    ZOrder::Normal => HWND_NOTOPMOST,
+                    ZOrder::Topmost => HWND_TOPMOST,
+                };
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(insert_after),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+
             Ok(Window {
                 hwnd,
                 width,
@@ -408,6 +439,27 @@ impl Window {
     /// Which surface this is, for matching against a polled event.
     pub fn id(&self) -> SurfaceId {
         SurfaceId(self.hwnd.0 as isize)
+    }
+
+    /// Move an already-created window to a new screen position, without
+    /// touching its size, z-order or focus.
+    ///
+    /// THE ONLY NEW CAPABILITY THIS CRATE NEEDS for dragging. Threshold
+    /// detection, clamping to the screen and snapping to its edges are all
+    /// policy, and belong in the shell that drives the pump rather than in this
+    /// thin platform layer.
+    pub fn set_position(&self, x: i32, y: i32) {
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
     }
 
     /// Take a size this window was told it now has.
@@ -585,7 +637,7 @@ impl Drop for Window {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Surface;
+    use crate::{Surface, ZOrder};
 
     /// A widget surface parked offscreen, so a test never flashes at the user.
     fn offscreen() -> Surface {
@@ -593,6 +645,7 @@ mod tests {
             x: -4000,
             y: -4000,
             click_through: false,
+            z_order: ZOrder::Topmost,
         }
     }
 

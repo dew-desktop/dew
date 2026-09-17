@@ -258,10 +258,29 @@ let an applet set either and have it silently ignored, which is exactly how
 Omitting `surface` gets a widget. Dew is a desktop applet platform; a default of
 "ordinary window" would make every author opt in to the thing they came for.
 
+### A widget can behave like a desktop skin
+
+```luau
+surface = {
+    kind = "widget",
+    zOrder = "topmost",     -- "bottom" | "normal" | "topmost", defaults to "topmost"
+    draggable = true,       -- grab the body and move it; no title bar needed
+    keepOnScreen = true,    -- default; a dragged widget cannot end up off every display
+    snapToEdges = true,     -- snap to a screen edge while dragging
+    savePosition = true,    -- a dragged position survives to the next launch
+}
+```
+
+`zOrder` also applies to an overlay, below. `draggable`, `keepOnScreen`,
+`snapToEdges` and `savePosition` are widget-only: dragging a screen-filling
+overlay, or a `Window` that the desktop already lets you drag, makes no sense.
+Dragging is entirely host-driven -- an applet's own code never sees the drag,
+the same way it never sees the pump that delivers its pointer events.
+
 ### An overlay is a widget the size of the desktop
 
 ```luau
-surface = { kind = "overlay" }   -- topmost = true, clickThrough = false
+surface = { kind = "overlay" }   -- zOrder = "topmost", clickThrough = false
 ```
 
 The screen supplies the size, so `size` in the declaration is ignored -- a mod

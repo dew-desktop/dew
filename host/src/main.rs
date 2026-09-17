@@ -21,6 +21,8 @@ mod capabilities;
 use dew_host::datamodel;
 use dew_host::manifest;
 mod applets;
+#[cfg(windows)]
+mod positions;
 mod surface;
 #[cfg(windows)]
 mod tray;
@@ -29,7 +31,7 @@ use dew_host::services::{self, SharedClock};
 use dew_raster::Backend;
 use dew_runtime::{RasterPainter, Rgb};
 #[cfg(windows)]
-use dew_window::{Button, Event, Pump, Window};
+use dew_window::{Button, Event, Pump, Surface, Window};
 use mlua::Lua;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1054,6 +1056,73 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
     }
 }
 
+/// A drag in progress on a `draggable` widget.
+///
+/// ARMED BY EVERY PRESS ON A DRAGGABLE WIDGET, not only the ones that turn into
+/// a drag. `dragging` is false until the pointer has moved past the threshold,
+/// which is what lets a press-and-hold button still work: the press dispatches
+/// to the hit-test pipeline exactly as it always has, and only a move that
+/// crosses the threshold diverts from it.
+///
+/// SCREEN-SPACE, NOT A RUNNING CLIENT-RELATIVE DELTA. Once a drag is under way
+/// the window itself moves under a stationary cursor, so a later `PointerMove`'s
+/// client-relative coordinates are reported against a DIFFERENT window origin
+/// than the press was. Converting every reading to screen space with the
+/// window's position at the time keeps "distance moved since the press"
+/// correct regardless of how many times the window has already been
+/// repositioned.
+#[cfg(windows)]
+struct DragState {
+    press_screen: (f32, f32),
+    window_origin: (i32, i32),
+    dragging: bool,
+}
+
+/// Apply `snapToEdges` and then `keepOnScreen` to a candidate window position.
+///
+/// SNAP FIRST, CLAMP SECOND — clamping after snapping is what keeps a widget
+/// near the bottom-right corner from being snapped to an edge and then shoved
+/// back off it by the clamp; running them the other way could undo the snap.
+#[cfg(windows)]
+fn place_widget(
+    candidate: (i32, i32),
+    size: (u32, u32),
+    snap_to_edges: bool,
+    keep_on_screen: bool,
+) -> (i32, i32) {
+    let screen = dew_window::screen_size();
+    let (mut x, mut y) = candidate;
+    let (w, h) = (size.0 as i32, size.1 as i32);
+
+    if snap_to_edges {
+        const THRESHOLD: i32 = 12;
+        if x.abs() <= THRESHOLD {
+            x = 0;
+        }
+        if (screen.0 - (x + w)).abs() <= THRESHOLD {
+            x = screen.0 - w;
+        }
+        if y.abs() <= THRESHOLD {
+            y = 0;
+        }
+        if (screen.1 - (y + h)).abs() <= THRESHOLD {
+            y = screen.1 - h;
+        }
+    }
+
+    if keep_on_screen {
+        // A HARD CLAMP, AFTER SNAPPING. `min`/`max` swap places when the widget
+        // is wider (or taller) than the screen, so the widget still ends up
+        // fully on screen rather than the range becoming empty.
+        let (min_x, max_x) = ((screen.0 - w).min(0), (screen.0 - w).max(0));
+        let (min_y, max_y) = ((screen.1 - h).min(0), (screen.1 - h).max(0));
+        x = x.clamp(min_x, max_x);
+        y = y.clamp(min_y, max_y);
+    }
+
+    (x, y)
+}
+
 fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
@@ -1089,8 +1158,48 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
 
         let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
 
-        let resolved = surface.resolve(screen, (width, height));
+        // WHICH DRAGGABLE BEHAVIOURS THIS SURFACE ASKED FOR, if it is a widget
+        // at all. `None` for everything else, which turns the whole drag state
+        // machine below into dead branches that never arm — a window or an
+        // overlay is never draggable, so this is not a case those surfaces need
+        // to think about.
+        let drag_options = match &surface {
+            surface::Declared::Widget {
+                draggable,
+                keep_on_screen,
+                snap_to_edges,
+                save_position,
+                ..
+            } => Some((*draggable, *keep_on_screen, *snap_to_edges, *save_position)),
+            _ => None,
+        };
+
+        let mut resolved = surface.resolve(screen, (width, height));
+
+        // A SAVED POSITION OVERRIDES THE DECLARED ANCHOR, exactly like a real
+        // Rainmeter skin: the anchor is what a widget that has never been
+        // dragged falls back to, and a drag that happened once wins from then
+        // on until the next drag replaces it.
+        if let (Surface::Widget { x, y, .. }, Some((_, _, _, true))) = (&mut resolved, drag_options)
+        {
+            if let Some(saved) = positions::load(&manifest.id) {
+                (*x, *y) = saved;
+            }
+        }
+
         let mut window = Window::new(&resolved, width, height)?;
+
+        // THE WINDOW'S CURRENT ON-SCREEN POSITION, TRACKED HERE because nothing
+        // else does: `Window` itself only knows its size (`resized` exists for
+        // exactly that reason), and a resolved `Surface` is consumed once at
+        // creation. Dragging needs to know where the window is NOW, both to
+        // compute a candidate position and to convert a future pointer event's
+        // client-relative coordinates back to screen space.
+        let mut position: (i32, i32) = match &resolved {
+            Surface::Widget { x, y, .. } => (*x, *y),
+            _ => (0, 0),
+        };
+        let mut drag: Option<DragState> = None;
 
         let _keep_alive = vm;
 
@@ -1130,9 +1239,91 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
                     continue;
                 }
                 match event {
-                    Event::PointerMove { x, y } => renderer.moved(x, y)?,
-                    Event::PointerDown { x, y, button } => renderer.down(button, x, y)?,
-                    Event::PointerUp { x, y, button } => renderer.up(button, x, y)?,
+                    Event::PointerMove { x, y } => {
+                        // ARMED BUT NOT YET DRAGGING: keep forwarding to the
+                        // hit-test pipeline (hover still works for a press that
+                        // turns out not to be a drag) and watch for the
+                        // threshold. `screen_now` is what keeps the distance
+                        // moved correct across a window that has already been
+                        // repositioned once — see `DragState`'s doc comment.
+                        let mut forward = true;
+                        if let Some(ds) = &mut drag {
+                            let screen_now = (position.0 as f32 + x, position.1 as f32 + y);
+                            if !ds.dragging {
+                                let (dx, dy) = (
+                                    screen_now.0 - ds.press_screen.0,
+                                    screen_now.1 - ds.press_screen.1,
+                                );
+                                if (dx * dx + dy * dy).sqrt() >= 4.0 {
+                                    ds.dragging = true;
+                                }
+                            }
+                            if ds.dragging {
+                                // PAST THE THRESHOLD: the hover pipeline stops
+                                // seeing moves entirely. The window is about to
+                                // slide under a stationary cursor, and
+                                // forwarding that as a hover delta would be
+                                // nonsense.
+                                forward = false;
+                                let dx = (screen_now.0 - ds.press_screen.0).round() as i32;
+                                let dy = (screen_now.1 - ds.press_screen.1).round() as i32;
+                                let candidate = (ds.window_origin.0 + dx, ds.window_origin.1 + dy);
+                                let (_, keep_on_screen, snap_to_edges, _) =
+                                    drag_options.expect("drag only arms for a widget");
+                                let placed = place_widget(
+                                    candidate,
+                                    (width, height),
+                                    snap_to_edges,
+                                    keep_on_screen,
+                                );
+                                window.set_position(placed.0, placed.1);
+                                position = placed;
+                            }
+                        }
+                        if forward {
+                            renderer.moved(x, y)?;
+                        }
+                    }
+                    Event::PointerDown { x, y, button } => {
+                        // DISPATCHED UNCHANGED, EVERY TIME. A press-and-hold
+                        // button must still work even on a draggable widget, so
+                        // arming a drag never replaces this.
+                        renderer.down(button, x, y)?;
+                        if button == Button::Left {
+                            if let Some((draggable, _, _, _)) = drag_options {
+                                if draggable {
+                                    drag = Some(DragState {
+                                        press_screen: (
+                                            position.0 as f32 + x,
+                                            position.1 as f32 + y,
+                                        ),
+                                        window_origin: position,
+                                        dragging: false,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                    Event::PointerUp { x, y, button } => {
+                        let mut suppress = false;
+                        if button == Button::Left {
+                            if let Some(ds) = drag.take() {
+                                if ds.dragging {
+                                    // A REAL DRAG HAPPENED. `OnReleased` will not
+                                    // fire for whatever was pressed underneath —
+                                    // an accepted, cosmetic simplification — and
+                                    // this event is not forwarded at all.
+                                    suppress = true;
+                                    if let Some((_, _, _, true)) = drag_options {
+                                        positions::save(&manifest.id, position);
+                                    }
+                                }
+                            }
+                        }
+                        if !suppress {
+                            renderer.up(button, x, y)?;
+                        }
+                    }
                     Event::Wheel { x, y, delta } => {
                         renderer.wheel(x, y, delta)?;
                     }
