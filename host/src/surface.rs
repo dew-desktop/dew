@@ -124,7 +124,12 @@ pub enum Declared {
         z_order: ZOrder,
         /// Grab the widget's body and move it, the way a Rainmeter skin does
         /// with no title bar of its own. HOST-DRIVEN (see `main.rs`'s frame
-        /// loop), not scriptable — an applet's own code never sees a drag.
+        /// loop): the window's position, the snap and the clamp are the
+        /// host's decisions alone, and no guest code chooses or influences
+        /// where the window goes. The widget's root carries a `Dragging`
+        /// attribute a guest can poll (`root:GetAttribute("Dragging")`) to
+        /// react to one happening, but that is a read of the host's own
+        /// state, not a seam a guest reaches through.
         draggable: bool,
         /// After a drag, keep the widget's full rectangle within some visible
         /// display rather than letting it end up off every one of them.
