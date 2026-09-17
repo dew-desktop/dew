@@ -8,12 +8,11 @@
 //! Luau consumer, and the only two dependents were this host and a CLI that
 //! retires. The crates still carry Aether's names; the rename is its own commit.
 //!
-//! LAYOUT, HIT TESTING AND POINTER ARBITRATION USED TO BE ON THAT LIST, and for
-//! the Aether arm they still are: `Driver::pointer` hands an event to the
-//! framework and the framework decides. Dew's own DataModel has no framework
-//! under it, so the host answers for itself — `datamodel::render` resolves the
-//! geometry and `datamodel::input` says which instance is at (x, y). ADR-001 is
-//! why: a host that owns its DataModel owns the questions asked of it.
+//! LAYOUT, HIT TESTING AND POINTER ARBITRATION USED TO BE ON THAT LIST. Dew's
+//! own DataModel has no framework under it, so the host answers for itself —
+//! `datamodel::render` resolves the geometry and `datamodel::input` says which
+//! instance is at (x, y). ADR-001 is why: a host that owns its DataModel owns
+//! the questions asked of it.
 //!
 //! What IS Dew's: mod discovery, manifests, capabilities, and putting widgets on
 //! a desktop. That is the whole remit.
@@ -28,7 +27,7 @@ mod tray;
 use dew_host::datamodel::input;
 use dew_host::services::{self, SharedClock};
 use dew_raster::Backend;
-use dew_runtime::{Driver, RasterPainter, Rgb};
+use dew_runtime::{RasterPainter, Rgb};
 #[cfg(windows)]
 use dew_window::{Button, Event, Pump, Window};
 use mlua::Lua;
@@ -71,28 +70,17 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     Ok(painter)
 }
 
-/// What the frame loop drives, whichever runtime the active mod declared.
+/// What the frame loop drives, for the one runtime a mod can declare.
 ///
-/// TWO WAYS TO PRODUCE A `Frame`, ONE PAINTER. `Driver` diffs an Aether session
-/// and repaints only when the framework says something changed; a DataModel tree
-/// now answers the same question for itself, because every write a guest can make
-/// goes through the path that fires `Changed`. Both arms end at
-/// `Painter::paint_frame`, which is the seam that has survived four rasterisers.
+/// A DataModel tree answers its own "did anything change" question, because
+/// every write a guest can make goes through the path that fires `Changed`,
+/// and ends at `Painter::paint_frame`, the seam that has survived four
+/// rasterisers.
 ///
-/// NOT A TRAIT. The two do not share a lifecycle — one owns Lua handles the
-/// framework maintains, the other owns ids into a `Dom` — and a trait over them
-/// would exist to make this file shorter rather than to describe anything.
-///
-/// BOTH ARMS CARRY A CLOCK, and it sits outside the enum's two shapes for the
-/// reason `Mod::clock` does: frames are the host's, not the framework's. An
-/// Aether mod subscribing through `Host.Clock` and a DataModel mod subscribing
-/// through `DewHost.Clock` are the same subscription, and a clock that only one
-/// arm drove would make animation a property of the runtime a mod declared.
+/// THE CLOCK SITS OUTSIDE THE RENDERED SHAPE for the reason `Mod::clock` does:
+/// frames are the host's, not the framework's, so it is carried alongside
+/// rather than folded into what gets painted.
 enum Renderer {
-    Aether {
-        driver: Driver<RasterPainter>,
-        clock: SharedClock,
-    },
     DataModel {
         dom: datamodel::SharedDom,
         root: usize,
@@ -121,7 +109,6 @@ impl Renderer {
     /// The frame subscriptions this renderer drives, whichever arm it is.
     fn clock(&self) -> &SharedClock {
         match self {
-            Renderer::Aether { clock, .. } => clock,
             Renderer::DataModel { clock, .. } => clock,
         }
     }
@@ -171,7 +158,6 @@ impl Renderer {
             services::tick(&self.clock().clone(), dt);
         }
         match self {
-            Renderer::Aether { driver, .. } => driver.frame(dt).map_err(|e| e.to_string()),
             //--- WAS ALWAYS TRUE, AND IS NOT ANY MORE. This read "assume so", and
             //--- the comment was honest: a DataModel mod's `mount` ran once, and
             //--- anything it changed afterwards it changed by assigning to a
@@ -247,9 +233,6 @@ impl Renderer {
         // all, which is why it is recorded here rather than only delivered.
         crate::services::pointer_moved(x, y);
         match self {
-            Renderer::Aether { driver, .. } => driver
-                .pointer(dew_runtime::Pointer::Move, x, y)
-                .map_err(|e| e.to_string()),
             Renderer::DataModel {
                 dom,
                 root,
@@ -275,25 +258,13 @@ impl Renderer {
 
     /// A button went down.
     ///
-    /// THE AETHER ARM HAS ONE BUTTON AND THIS ONE HAS THREE. `Driver::pointer`
-    /// takes a `Pointer` with no button in it, so the loop below used to match
-    /// `button: Button::Left` and drop the other two with a bare arm. A DataModel
-    /// mod has `MouseButton2Click` and `SecondaryActivated`, so the button now
-    /// travels — and the Aether arm keeps ignoring anything but the left, which is
-    /// the framework's own limitation and not one to paper over here.
+    /// THE BUTTON TRAVELS, because a DataModel mod has `MouseButton2Click` and
+    /// `SecondaryActivated` and not just a left click.
     #[cfg(windows)]
     fn down(&mut self, button: Button, x: f32, y: f32) -> Result<(), String> {
         crate::services::pointer_moved(x, y);
         crate::services::pointer_button(button as usize, true);
         match self {
-            Renderer::Aether { driver, .. } => {
-                if button != Button::Left {
-                    return Ok(());
-                }
-                driver
-                    .pointer(dew_runtime::Pointer::Down, x, y)
-                    .map_err(|e| e.to_string())
-            }
             Renderer::DataModel {
                 dom,
                 root,
@@ -324,14 +295,6 @@ impl Renderer {
         crate::services::pointer_moved(x, y);
         crate::services::pointer_button(button as usize, false);
         match self {
-            Renderer::Aether { driver, .. } => {
-                if button != Button::Left {
-                    return Ok(());
-                }
-                driver
-                    .pointer(dew_runtime::Pointer::Up, x, y)
-                    .map_err(|e| e.to_string())
-            }
             Renderer::DataModel {
                 dom,
                 root,
@@ -361,7 +324,6 @@ impl Renderer {
         crate::services::pointer_moved(x, y);
         crate::services::pointer_wheel(x, y, delta);
         match self {
-            Renderer::Aether { driver, .. } => driver.wheel(x, y, delta).map_err(|e| e.to_string()),
             Renderer::DataModel {
                 dom,
                 root,
@@ -389,7 +351,6 @@ impl Renderer {
     #[cfg(windows)]
     fn key(&mut self, name: &str) -> Result<(), String> {
         match self {
-            Renderer::Aether { .. } => Ok(()),
             Renderer::DataModel {
                 dom,
                 root,
@@ -422,14 +383,12 @@ impl Renderer {
     #[cfg(windows)]
     fn invalidate(&mut self) {
         match self {
-            Renderer::Aether { driver, .. } => driver.invalidate(),
             Renderer::DataModel { dom, .. } => dom.lock().expect("dom").touch(),
         }
     }
 
     fn painter_mut(&mut self) -> &mut RasterPainter {
         match self {
-            Renderer::Aether { driver, .. } => driver.painter_mut(),
             Renderer::DataModel { painter, .. } => painter,
         }
     }
@@ -448,9 +407,9 @@ impl Renderer {
 /// `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS PATH RATHER THAN ABOUT
 /// the plan. A standalone script parents into a root; `DewRoot` names the root it
 /// was handed. What a guest reaches through `game` on the engine is the SERVICES
-/// behind it, and those are `DewHost`, installed above: the two things a guest
-/// framework genuinely could not compute for itself, and required of a conforming
-/// host by `docs/host_services.md` since 2026-09-04.
+/// behind it, and those are `dew.Text` and `dew.Clock`, installed above: the two
+/// things a guest framework genuinely could not compute for itself, and required
+/// of a conforming host by `docs/host_services.md` since 2026-09-04.
 ///
 /// THIS COMMENT HAS BEEN WRONG IN BOTH DIRECTIONS AND IS NOW SCOPED SO IT CANNOT
 /// BE AGAIN. It first said `game` "arrives when there is enough behind it to be
@@ -487,7 +446,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     dom.lock().expect("dom").assets.set_root(dir.clone());
     datamodel::install(vm.lua(), &dom).map_err(|e| e.to_string())?;
     datamodel::install_vocabulary(vm.lua()).map_err(|e| e.to_string())?;
-    // `DewHost` HERE TOO, so a standalone script measures text the same way a mod
+    // `dew.Text`/`dew.Clock` HERE TOO, so a standalone script measures text the same way a mod
     // does. NOTHING DRIVES THE CLOCK ON THIS PATH and that is honest rather than
     // missing: `--script` draws one frame and exits, so there are no frames to be
     // called on. A script may still subscribe -- it simply never gets a tick,
@@ -537,10 +496,6 @@ fn create_renderer(
         Some(BACKGROUND)
     };
     match mounted {
-        applets::Mounted::Aether(session) => Ok(Renderer::Aether {
-            driver: Driver::new(session, painter(width, height)?, background),
-            clock: clock.clone(),
-        }),
         applets::Mounted::DataModel { dom, root } => Ok(Renderer::DataModel {
             dom,
             root,
@@ -819,12 +774,7 @@ fn parse_init(args: &[String]) -> Result<Command, String> {
                 let val = iter.next().ok_or("missing value for --runtime")?;
                 runtime = match val.to_lowercase().as_str() {
                     "datamodel" => manifest::Runtime::DataModel,
-                    "aether" => manifest::Runtime::Aether,
-                    _ => {
-                        return Err(format!(
-                            "unknown runtime '{val}', expected 'datamodel' or 'aether'"
-                        ))
-                    }
+                    _ => return Err(format!("unknown runtime '{val}', expected 'datamodel'")),
                 };
             }
             "--surface" => {
@@ -1134,9 +1084,8 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
             height = screen.1.max(1) as u32;
         }
 
-        if let applets::Mounted::DataModel { ref dom, .. } = mounted {
-            dom.lock().expect("dom").assets.set_blocking(false);
-        }
+        let applets::Mounted::DataModel { ref dom, .. } = mounted;
+        dom.lock().expect("dom").assets.set_blocking(false);
 
         let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
 
@@ -1478,46 +1427,6 @@ return {{
             size.1,
             surface_grant.name()
         ),
-        manifest::Runtime::Aether => format!(
-            r#"--!strict
---[[
-	{display_name} -- a Dew applet written against Aether.
-]]
-
-local aether = require("@aether/api")
-
-local function mount(_dew: any)
-	return aether.create("Frame", {{
-		Name = "Root",
-		Size = aether.UDim2.fromScale(1, 1),
-		BackgroundColor3 = aether.Color3.fromRGB(30, 30, 35),
-		BorderSizePixel = 0,
-	}}, {{
-		aether.create("TextLabel", {{
-			Name = "Title",
-			Size = aether.UDim2.new(1, 0, 0, 40),
-			Position = aether.UDim2.new(0, 0, 0.5, -20),
-			BackgroundTransparency = 1,
-			Text = "Hello from {display_name}!",
-			TextColor3 = aether.Color3.fromRGB(240, 240, 245),
-			TextSize = 20,
-		}}),
-	}})
-end
-
-return {{
-	size = {{ width = {}, height = {} }},
-	-- THE SURFACE THE MANIFEST GRANTS. These two have to agree: the manifest says
-	-- what this applet may draw into, and this says what it draws into. A mismatch
-	-- is refused at mount rather than quietly resolved in either direction.
-	surface = {{ kind = "{}" }},
-	mount = mount,
-}}
-"#,
-            size.0,
-            size.1,
-            surface_grant.name()
-        ),
     };
 
     let entry_path = target_dir.join(format!("{name}.luau"));
@@ -1749,12 +1658,12 @@ return process
             continue;
         }
 
-        // Test runner provides a steppable clock via DewHost.Clock.Step(dt)
+        // Test runner provides a steppable clock via dew.Clock.Step(dt)
         // so transition tests can step simulated time. This is strictly isolated
         // to `dew test` and absent in guest mods run via `dew run` / `dew snapshot`.
         let step_clock = Arc::clone(&clock);
-        if let Ok(dew_host) = vm.lua().globals().get::<mlua::Table>("DewHost") {
-            if let Ok(dew_clock) = dew_host.get::<mlua::Table>("Clock") {
+        if let Ok(dew) = vm.lua().globals().get::<mlua::Table>("dew") {
+            if let Ok(dew_clock) = dew.get::<mlua::Table>("Clock") {
                 let _ = dew_clock.set(
                     "Step",
                     match vm.lua().create_function(move |_, dt: Option<f32>| {
@@ -1910,7 +1819,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  <NAME>                Mod identifier and directory name");
             println!();
             println!("Options:");
-            println!("  --runtime, -r <RT>    Runtime: 'datamodel' (default) or 'aether'");
+            println!("  --runtime, -r <RT>    Runtime: 'datamodel' (default, and the only one)");
             println!("  --surface <SURFACE>   Surface: 'window' (default), 'overlay', or 'widget'");
             println!("  --size <WxH>          Default size (default: 340x180)");
         }
@@ -2250,19 +2159,18 @@ mod tests {
     /// that would have caught it, because the file was well-formed JSON.
     #[test]
     fn init_writes_a_manifest_that_parses() {
-        for runtime in [manifest::Runtime::DataModel, manifest::Runtime::Aether] {
-            let raw = scaffold_manifest(
-                "my_applet",
-                "My_applet",
-                runtime,
-                manifest::Permission::Window,
-            );
-            let parsed = manifest::Manifest::parse(&raw, "dew.toml")
-                .unwrap_or_else(|e| panic!("init wrote a manifest that will not parse: {e}"));
+        let runtime = manifest::Runtime::DataModel;
+        let raw = scaffold_manifest(
+            "my_applet",
+            "My_applet",
+            runtime,
+            manifest::Permission::Window,
+        );
+        let parsed = manifest::Manifest::parse(&raw, "dew.toml")
+            .unwrap_or_else(|e| panic!("init wrote a manifest that will not parse: {e}"));
 
-            assert_eq!(parsed.id, "my_applet");
-            assert_eq!(parsed.runtime, runtime);
-        }
+        assert_eq!(parsed.id, "my_applet");
+        assert_eq!(parsed.runtime, runtime);
     }
 
     /// The grant `--surface` asked for is the grant that lands in the manifest.

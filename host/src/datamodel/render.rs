@@ -4,16 +4,17 @@
 //! Until this file, `SharedDom` was created, installed into every guest VM, and
 //! never read again. A guest could call `Instance.new("Frame")`, set 136 of 138
 //! properties on it and build a tree, and nothing drew any of it: the frame was
-//! driven by `Driver::new(session, ..)` where the session is Aether's. The
-//! property surface reading 136 of 138 measured a language nothing spoke back.
+//! driven by Aether's own `Session`, on the parity path, which never touches the
+//! DataModel at all. The property surface reading 136 of 138 measured a
+//! language nothing spoke back.
 //!
 //! This gives `dom` its first reader, which is also the precondition the scheme
 //! registry and the permission gate in Sprint 5 were waiting on: there was no
 //! point gating a fetch when nothing consumed the result.
 //!
 //! WHAT IT BYPASSES, AND WHY THAT IS CORRECT
-//! Not `Driver`, and not `Session`. Those are Aether's: a `Session` is a handle
-//! onto Luau objects that Aether's `Live.luau` maintains. Dew's DataModel is a
+//! Not Aether's `Session`. That is a handle onto Luau objects that Aether's
+//! `Live.luau` maintains. Dew's DataModel is a
 //! Rust arena and owes nothing to that path. What both share is the far end --
 //! `Frame`, `Node` and the `Painter` trait -- which is exactly the seam
 //! `hosts/runtime` says has survived four rasterisers without the framework

@@ -127,7 +127,7 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// to whichever it resolves first.
 /// A `dew` global for a VM that is measuring rather than running.
 ///
-/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.widget`, so a VM without one
+/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.Widget`, so a VM without one
 /// cannot load it at all: the call is at module scope and there is nothing to
 /// index. This is the same answer the host gives, narrowed to what a measurement
 /// needs, which is a root to parent into.
@@ -137,7 +137,17 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// VM, and refusing one would make the measurement depend on a manifest it does
 /// not otherwise read.
 fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
-    let dew = lua.create_table()?;
+    // REUSES THE EXISTING `dew` GLOBAL IF ONE IS ALREADY THERE. `services::install`
+    // runs before this and already put `Text`/`Clock`/`Pointer` on it; creating a
+    // fresh table here and reassigning the global clobbered every one of them.
+    let dew: mlua::Table = match lua.globals().get("dew") {
+        Ok(existing) => existing,
+        Err(_) => {
+            let fresh = lua.create_table()?;
+            lua.globals().set("dew", fresh.clone())?;
+            fresh
+        }
+    };
 
     let time = lua.create_table()?;
     time.set(
@@ -149,9 +159,9 @@ fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
                 .unwrap_or(0.0))
         })?,
     )?;
-    dew.set("time", time)?;
+    dew.set("Time", time)?;
 
-    for surface in ["widget", "window", "overlay", "popover"] {
+    for surface in ["Widget", "Window", "Overlay", "popover"] {
         let handed = root.clone();
         dew.set(
             surface,
@@ -159,7 +169,7 @@ fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
         )?;
     }
 
-    lua.globals().set("dew", dew)
+    Ok(())
 }
 
 /// What one example touched, and the framework it touched it in.
@@ -312,9 +322,19 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     let height: f32 = app
         .get("Height")
         .map_err(|e| format!("{name}: Height: {e}"))?;
-    let session = app
-        .session()
-        .map_err(|e| format!("{name}: no session: {e}"))?;
+    let lua = app.vm().lua();
+    let mut input_pointer = datamodel::input::Pointer::default();
+
+    // LAY THE TREE OUT BEFORE AIMING AT IT. A demo that parents itself into its
+    // surface leaves `AbsolutePosition` at the origin until something computes
+    // geometry, and hit-testing against that finds every rectangle stacked at
+    // (0, 0).
+    let settle = |dom: &SharedDom| -> Result<(), String> {
+        let mut guard = dom.lock().map_err(|_| "dom lock")?;
+        datamodel::render::commit_geometry(&mut guard, root_id, width, height);
+        Ok(())
+    };
+    settle(&dom)?;
 
     let before = gallery::paint_dom(&dom, root_id, width, height)?;
 
@@ -324,17 +344,14 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
     for step in script.sequence_values::<LuaTable>() {
         let step = step.map_err(|e| format!("{name}: a Script step: {e}"))?;
         if let Ok(seconds) = step.get::<f32>("step") {
-            // TICK, THEN STEP -- one frame the way Dew's own loop runs one.
+            // TICK, THEN SETTLE -- one frame the way Dew's own loop runs one.
             //
-            // `services::tick` is what drives `DewHost.Clock.OnFrame`, and
+            // `services::tick` is what drives `dew.Clock.OnFrame`, and
             // `PointerRouter` registers its hover pass there when no Heartbeat
-            // exists. Stepping the session alone lays out and routes input but
-            // never advances the clock, so hover never re-evaluates and a tooltip
-            // cannot open. That was the first demo's whole failure.
+            // exists. Committing geometry alone never advances the clock, so
+            // hover would never re-evaluate and a tooltip could not open.
             services::tick(&clock, seconds);
-            session
-                .step(seconds)
-                .map_err(|e| format!("{name}: step: {e}"))?;
+            settle(&dom)?;
             continue;
         }
         let kind: String = step
@@ -362,22 +379,37 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
         };
         // RECORDED AS WELL AS DELIVERED, so a demo that polls the host sees the
         // same pointer the tree was told about. Without this a guest reading
-        // `DewHost.Pointer` headlessly gets nothing while the tree gets events.
+        // `dew.Pointer` headlessly gets nothing while the tree gets events.
         services::pointer_moved(x, y);
         if matches!(pointer, Pointer::Down | Pointer::Up) {
             services::pointer_button(button, matches!(pointer, Pointer::Down));
         }
-        // A SESSION POINTER HAS NO BUTTON, and a framework's router arbitrates
-        // the primary one. So a secondary press is reported through the input
-        // service and stops there: handing it to the session as well would make
-        // the router press whatever the pointer happened to be over, and a
-        // right-click that also left-clicks is not a gesture any host performs.
+        // THE HIT-TEST DISPATCH HAS NO BUTTON, and a framework's router
+        // arbitrates the primary one. So a secondary press is reported through
+        // the input service and stops there: dispatching it as a hit-test press
+        // too would make the router press whatever the pointer happened to be
+        // over, and a right-click that also left-clicks is not a gesture any
+        // host performs.
         if button != 0 {
             continue;
         }
-        session
-            .pointer(pointer, x, y)
-            .map_err(|e| format!("{name}: pointer: {e}"))?;
+        let surface = datamodel::input::Surface {
+            lua,
+            dom: &dom,
+            root: root_id,
+            size: (width, height),
+        };
+        match pointer {
+            Pointer::Move => input_pointer
+                .moved(&surface, x, y)
+                .map_err(|e| format!("{name}: pointer: {e}"))?,
+            Pointer::Down => input_pointer
+                .down(&surface, datamodel::input::Button::Left, x, y)
+                .map_err(|e| format!("{name}: pointer: {e}"))?,
+            Pointer::Up => input_pointer
+                .up(&surface, datamodel::input::Button::Left, x, y)
+                .map_err(|e| format!("{name}: pointer: {e}"))?,
+        }
     }
 
     // WHAT THE DEMO SAW, if it offers to say. A demo may export `Hovered` so a

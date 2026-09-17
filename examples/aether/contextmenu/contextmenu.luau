@@ -18,7 +18,7 @@
 	`PointerRouter` arbitrates the primary button and has no opinion about the
 	secondary one, which is correct -- what a right-click MEANS is an
 	application's decision, and this application's decision is "summon the menu
-	here". Dew reports the button through `DewHost.Input`, the same service it
+	here". Dew reports the button through `dew.Input`, the same service it
 	reports the primary one through, so the gesture below is a real one the host
 	delivered rather than a call this file made to itself.
 
@@ -128,9 +128,9 @@ end
 --- THE APPLET ASKS FOR ITS SURFACE and parents its own tree into it. Nothing
 --- here is handed back for a host to mount on this applet's behalf.
 ---
---- `dew.widget` is nil unless `dew.toml` asked for `widget`, so the assert names
+--- `dew.Widget` is nil unless `dew.toml` asked for `widget`, so the assert names
 --- the manifest line rather than letting a call on nil be the error.
-local widget = assert(dew.widget, "dew.toml must grant `widget`")
+local widget = assert(dew.Widget, "dew.toml must grant `widget`")
 local root = widget({ width = WIDTH, height = HEIGHT })
 
 vide.mount(build, root)
@@ -138,7 +138,7 @@ vide.mount(build, root)
 --- THE HOST'S OWN INPUT SERVICE, connected once per process the way a framework
 --- connects to it. `MouseButton2` is the only thing this listens for; the
 --- primary button belongs to the router and arrives through the session.
-local host = DewHost
+local host = dew
 if host ~= nil and host.Input ~= nil then
 	host.Input.InputBegan:Connect(function(input: any)
 		if tostring(input.UserInputType) ~= "Enum.UserInputType.MouseButton2" then

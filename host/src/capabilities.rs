@@ -26,7 +26,7 @@ pub struct HostState {
 
 pub type Shared = Arc<Mutex<HostState>>;
 
-/// What `dew.widget{ ... }` needs to answer an applet.
+/// What `dew.Widget{ ... }` needs to answer an applet.
 ///
 /// THE ROOT IS MADE BEFORE THE APPLET RUNS, so asking for a surface hands back
 /// something that already exists rather than creating a window from inside a
@@ -40,16 +40,31 @@ pub struct SurfaceGrant {
 
 /// Build the capability table for one mod.
 ///
-/// `time` is ungated on purpose. Reading a clock discloses nothing a mod could
+/// REUSES THE `dew` GLOBAL RATHER THAN CREATING A FRESH ONE, because
+/// `services::install` may already have put `Pointer`, `Input`, `Clock` and
+/// `Text` on it -- the host facts that are always present, on the same terms
+/// `Time` already was. Whichever of the two runs first, the other adds its
+/// members to the same table instead of the two colliding on the global name.
+///
+/// `Time` is ungated on purpose. Reading a clock discloses nothing a mod could
 /// not obtain by counting frames, and gating it would put a permission in every
 /// manifest that exists to say "this mod is allowed to know what time it is".
+///
+/// NOT TO BE CONFUSED WITH `Clock`: `Time.now()` is wall-clock seconds since
+/// the epoch, the way a mod would show the time of day; `Clock` is the
+/// per-frame service installed by `services::install`, with its own `Now()`
+/// that is a monotonic seconds-since-first-frame reading. Same shape, two
+/// different clocks, kept apart on purpose.
 pub fn build(
     lua: &Lua,
     granted: &[Permission],
     state: &Shared,
     surface: &SurfaceGrant,
 ) -> LuaResult<LuaTable> {
-    let dew = lua.create_table()?;
+    let dew: LuaTable = match lua.globals().get("dew") {
+        Ok(existing) => existing,
+        Err(_) => lua.create_table()?,
+    };
 
     let time = lua.create_table()?;
     time.set(
@@ -61,7 +76,7 @@ pub fn build(
                 .unwrap_or(0.0))
         })?,
     )?;
-    dew.set("time", time)?;
+    dew.set("Time", time)?;
 
     for permission in granted {
         // A SURFACE PERMISSION PUTS NOTHING ON `dew` YET.
@@ -73,10 +88,19 @@ pub fn build(
         // hands over.
         if permission.is_surface() {
             //  A GRANTED SURFACE IS A FUNCTION ON `dew`, and an ungranted one is
-            //  absent. An applet calling `dew.overlay{}` without the word in its
+            //  absent. An applet calling `dew.Overlay{}` without the word in its
             //  manifest indexes nil at its own call site, which says where the
             //  mistake is; a permission check somewhere else would not.
-            let name = permission.name();
+            //
+            //  CAPITALIZED LIKE EVERY OTHER MEMBER OF `dew`, matching Aether's
+            //  own PascalCase convention -- except `Permission::Popover`, which
+            //  has no surface kind behind it yet and is left exactly as it was.
+            let name: &str = match permission {
+                Permission::Widget => "Widget",
+                Permission::Window => "Window",
+                Permission::Overlay => "Overlay",
+                _ => permission.name(),
+            };
             let kind = *permission;
             let cell = Arc::clone(&surface.requested);
             let root = surface.root.clone();
@@ -119,7 +143,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("storage", storage)?;
+                dew.set("Storage", storage)?;
             }
 
             Permission::Clipboard => {
@@ -141,7 +165,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("clipboard", clipboard)?;
+                dew.set("Clipboard", clipboard)?;
             }
 
             Permission::Notifications => {
@@ -155,7 +179,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("notifications", notifications)?;
+                dew.set("Notifications", notifications)?;
             }
 
             Permission::Audio => {
@@ -167,7 +191,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("audio", audio)?;
+                dew.set("Audio", audio)?;
             }
 
             Permission::RbxAssetId => {

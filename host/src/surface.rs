@@ -14,7 +14,7 @@
 //! and a settings panel to be two mods.
 //!
 //! A TAGGED UNION, though, and not a bag of optional fields. `resizable` means
-//! nothing to a floating widget and `anchor` means nothing to a window; a flat
+//! nothing to a floating surface and `anchor` means nothing to a window; a flat
 //! table would let a mod set either and have it silently ignored, which is
 //! exactly how `dew.toml`'s permissions were decoration before they were
 //! enforced.
@@ -236,15 +236,15 @@ pub struct Request {
 /// Where a surface request lands between the applet asking and the host reading.
 ///
 /// THE APPLET ASKS WHILE IT RUNS, and the host wants the answer after. A cell
-/// rather than a return value because `dew.widget` has to hand the applet its
+/// rather than a return value because `dew.Widget` has to hand the applet its
 /// root, which is what it is really for; the host reads what was asked out of
 /// here once the module has finished.
 pub type Requested = Arc<Mutex<Option<Request>>>;
 
 impl Request {
-    /// Read `dew.widget{ ... }` and friends, which take one options table.
+    /// Read `dew.Widget{ ... }` and friends, which take one options table.
     ///
-    /// EVERY FIELD IS OPTIONAL. An applet that calls `dew.widget{}` with nothing
+    /// EVERY FIELD IS OPTIONAL. An applet that calls `dew.Widget{}` with nothing
     /// in it has said the only thing that matters, which is that it wants a
     /// widget, and the defaults are the ones a declaration got.
     pub fn from_options(

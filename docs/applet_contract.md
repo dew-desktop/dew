@@ -232,7 +232,7 @@ A mod declares the surface it wants beside its size:
 
 ```luau
 surface = {
-    kind = "widget",              -- floating, no chrome, on the desktop
+    kind = "widget",                -- borderless, floating, on the desktop
     anchor = "top-right",
     offset = { x = 24, y = 24 },
     clickThrough = false,
@@ -251,7 +251,7 @@ window-creation flags, and would force an applet wanting both a HUD and a settin
 panel to be two mods.
 
 **A tagged union, though, not a bag of optional fields.** `title` means nothing
-to a floating widget and `anchor` means nothing to a window. A flat table would
+to a floating surface and `anchor` means nothing to a window. A flat table would
 let an applet set either and have it silently ignored, which is exactly how
 `permissions` was decoration before it was enforced.
 

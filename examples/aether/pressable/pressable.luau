@@ -14,6 +14,7 @@
 ]]
 
 local Aether = require("./roblox_packages/aether")
+local vide = require("./roblox_packages/vide")
 
 local WIDTH, HEIGHT = 200, 100
 local BUTTON = { x = 20, y = 20, width = 120, height = 44 }
@@ -66,9 +67,11 @@ local function build(A: any): any
 	}
 end
 
-local mounted = Aether.Desktop.Mount(function()
-	return build(Aether)
-end, WIDTH, HEIGHT)
+local tree: any
+vide.mount(function()
+	tree = build(Aether)
+	return tree
+end)
 
 --- PARENTED HERE ONLY IF A ROOT IS ALREADY IN SCOPE.
 ---
@@ -76,7 +79,7 @@ end, WIDTH, HEIGHT)
 --- the tree has to reach the surface at load for it. `dew` calls `mount` and
 --- hands the root in, which is the branch below.
 if (DewRoot :: any) ~= nil then
-	(mounted.Tree :: any).Parent = (DewRoot :: any)
+	(tree :: any).Parent = (DewRoot :: any)
 end
 
 return {
@@ -87,7 +90,6 @@ return {
 	--- rendered this at a default and the image was the wrong shape.
 	size = { width = WIDTH, height = HEIGHT },
 
-	Session = mounted.Session,
 	Width = WIDTH,
 	Height = HEIGHT,
 
@@ -95,8 +97,8 @@ return {
 	--- the root the host made. An applet that mounts its own framework needs
 	--- nothing else from the host.
 	mount = function(_dew: any, root: any)
-		(mounted.Tree :: any).Parent = root
-		return mounted.Tree
+		(tree :: any).Parent = root
+		return tree
 	end,
 
 	--- DOWN AND HELD. The press is left down so the last paint differs from the
@@ -114,8 +116,8 @@ return {
 
 	Aether = Aether,
 	Measure = function(A: any)
-		return Aether.Desktop.Mount(function()
+		return vide.mount(function()
 			return build(A)
-		end, WIDTH, HEIGHT)
+		end)
 	end,
 }

@@ -42,9 +42,9 @@ const ID_EXIT: usize = 1000;
 ///
 /// UNCAPPED MEANS UNCAPPED — the loop does not sleep. That is what was asked for
 /// and it is the right default for a machine with headroom, but it is worth
-/// knowing that an idle widget then spins a core: `Driver::frame` returns false
-/// with nothing to paint and the loop immediately asks again. A cap is the only
-/// thing currently standing between Dew and 100% of one core.
+/// knowing that an idle widget then spins a core: `Renderer::frame` returns
+/// false with nothing to paint and the loop immediately asks again. A cap is
+/// the only thing currently standing between Dew and 100% of one core.
 const CAPS: &[(usize, &str, u32)] = &[
     (2000, "Uncapped", 0),
     (2001, "30 FPS", 33_333),

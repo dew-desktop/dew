@@ -40,7 +40,7 @@ pub enum Surface {
     /// or a log viewer should be.
     Window { title: String },
 
-    /// A floating widget: no chrome, always on top, out of the taskbar, and
+    /// A floating surface: no chrome, always on top, out of the taskbar, and
     /// PER-PIXEL TRANSPARENT.
     ///
     /// The Rainmeter shape. The window's visible silhouette is whatever the tree

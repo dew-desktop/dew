@@ -26,7 +26,7 @@ pub trait Painter {
     /// `None` means clear to NOTHING — a surface composited from its own alpha,
     /// where a pixel the tree did not paint is a pixel the window does not
     /// occupy. It does not mean "no colour supplied, pick one": a painter that
-    /// substitutes black there turns every floating widget into a black
+    /// substitutes black there turns every floating surface into a black
     /// rectangle.
     fn begin(&mut self, width: f32, height: f32, background: Option<Rgb>);
 

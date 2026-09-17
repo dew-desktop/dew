@@ -10,6 +10,6 @@ description = "The smallest applet that draws something"
 # directly and imports nothing.
 runtime = "datamodel"
 
-# WHAT THIS APPLET MAY REACH. `widget` is what puts `dew.widget` on the table,
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `dew.Widget` on the table,
 # so an applet that does not ask for it here has no way to open a surface.
 permissions = ["widget"]
