@@ -13,36 +13,29 @@
 //! A registration-style API collapses 4 and 5 into "loading the mod runs the
 //! mod", which puts every one of the earlier steps after the fact.
 //!
-//! TWO FLAVOURS, ONE LOADER. `manifest.runtime` says which framework — if any —
-//! the mod's `mount` was written against, and the branch is narrow on purpose:
+//! ONE LOADER. `manifest.runtime` names the framework — if any — the mod's
+//! `mount` was written against. There is one runtime today, `datamodel`:
 //! discovery, the manifest, the sandbox, the capability table, the size and the
-//! surface are identical for both, because none of them is a property of the
-//! framework the author chose. What differs is exactly three things — which
-//! globals the VM gets, whether Aether's desktop ceremony runs, and what `mount`
-//! is handed — and they are the three things a runtime IS.
+//! surface are all the same regardless, because none of them is a property of
+//! the runtime; what a runtime actually decides is which globals the VM gets
+//! and what `mount` is handed.
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
 use crate::manifest::{Manifest, Runtime};
 use crate::services::{self, Clock, SharedClock};
 use crate::surface::{Declared, Requested};
-use dew_runtime::{modules, Session, Vm};
+use dew_runtime::{modules, Vm};
 use mlua::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// The living half of a mounted mod: what the frame loop drives.
 ///
-/// AN ENUM RATHER THAN A TRAIT, because there are two of these and there will be
-/// two. A `Session` is a handle onto Luau objects Aether's `Live.luau` maintains
-/// and knows how to diff; a DataModel tree is instances in the host's own arena
-/// with nothing watching them. Those are not two implementations of one
-/// abstraction, they are two different things that happen to end at the same
-/// `Frame`, and the seam they genuinely share is the painter.
+/// AN ENUM WITH ONE VARIANT TODAY rather than the DataModel shape on its own,
+/// because `main.rs` and the tests both match on it (`Mounted::DataModel { .. }`)
+/// and a second runtime is the kind of thing this seam exists to make room for.
 pub enum Mounted {
-    /// An Aether component, driven through `Driver` and repainted when the
-    /// framework says something changed.
-    Aether(Session),
     /// A DataModel tree, rendered from the arena with `render::frame_of`.
     ///
     /// NO REACTIVITY, so nothing here can report that a frame is unnecessary.
@@ -58,7 +51,6 @@ impl Mounted {
     /// Which flavour this is, for the load line and for `main`'s dispatch.
     pub fn runtime(&self) -> Runtime {
         match self {
-            Mounted::Aether(_) => Runtime::Aether,
             Mounted::DataModel { .. } => Runtime::DataModel,
         }
     }
@@ -73,19 +65,16 @@ pub struct Applet {
     /// Frame subscriptions this mod made, for the loop to drive.
     ///
     /// ON `Mod` RATHER THAN INSIDE `Mounted`, and that is the point of it. A
-    /// clock is not a property of which framework the author chose -- both
-    /// flavours subscribe through the same `DewHost.Clock`, and sprint 8 has
-    /// Aether reaching it through `Host.Clock` -- so putting it in the enum would
-    /// have made "can this mod animate" depend on the runtime it declared.
+    /// clock is not a property of which runtime the author chose -- so putting
+    /// it in the enum would have made "can this mod animate" depend on that.
     pub clock: SharedClock,
     /// The VM this mod lives in. Held because dropping it takes the mod's Lua
-    /// handles with it — a mod is exactly as alive as its VM. True of both
-    /// flavours: a `Session` is Lua objects, and a `SharedDom` is full of
-    /// `InstanceRef`s the guest also holds.
+    /// handles with it — a mod is exactly as alive as its VM: a `SharedDom` is
+    /// full of `InstanceRef`s the guest also holds.
     pub vm: Vm,
 }
 
-/// Default widget size when a mod declares none.
+/// Default float size when a mod declares none.
 const DEFAULT_SIZE: (u32, u32) = (380, 56);
 
 fn size_from(declaration: &LuaTable) -> (u32, u32) {
@@ -181,15 +170,16 @@ pub fn load(
         }));
     datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
 
-    //      AND `DewHost`, ON THE SAME TERMS AND FOR THE SAME REASON. Text metrics
-    //      and a frame clock are what the host computes and no guest can: they are
-    //      the language of the platform rather than a capability, so they are
-    //      installed as a global here beside `Instance` rather than granted in the
-    //      table built at step 4. `services.rs` carries the full argument, and the
-    //      short version is that a mod refused text metrics cannot lay out -- a
-    //      permission with only one sound answer is not a permission.
+    //      AND `dew.Text`/`dew.Clock`, ON THE SAME TERMS AND FOR THE SAME REASON.
+    //      Text metrics and a frame clock are what the host computes and no guest
+    //      can: they are the language of the platform rather than a capability, so
+    //      they are installed as ungated members of the `dew` global here rather
+    //      than granted in the table built at step 4. `services.rs` carries the
+    //      full argument, and the short version is that a mod refused text metrics
+    //      cannot lay out -- a permission with only one sound answer is not a
+    //      permission.
     //
-    //      FOR BOTH RUNTIMES. A DataModel mod calls `DewHost.Text.Measure`
+    //      FOR BOTH RUNTIMES. A DataModel mod calls `dew.Text.Measure`
     //      directly; an Aether mod reaches the same functions through the
     //      `Host.Text` and `Host.Clock` seams its interface already declares.
     let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
@@ -220,46 +210,15 @@ pub fn load(
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
     // 3 ── whatever the declared runtime needs in place BEFORE the mod's own
-    //      module is loaded. Both arms below produce something step 6 mounts
-    //      with, and neither runs a line of the mod.
+    //      module is loaded. Produces something step 6 mounts with, and does
+    //      not run a line of the mod.
     enum Ceremony {
-        /// Aether's desktop host table, ready to `Mount` through.
-        Aether(LuaTable),
         /// The `ScreenGui` in `dom` that the guest parents into.
         DataModel { root: usize },
     }
 
     let ceremony = match manifest.runtime {
-        // 3a ── the framework's own desktop ceremony. Dew ships no Luau of its
-        //       own: resolving the host, installing the vocabulary, opening a
-        //       reactive scope and opening a session are identical for every
-        //       off-engine host, so they live in Aether where the CLI gets them
-        //       too.
-        Runtime::Aether => {
-            //       THROUGH THE MOD'S OWN INSTALL, not through one of ours. The
-            //       redirect pesde writes beside a mod is an unversioned path
-            //       into the exact Aether that mod declared, so the ceremony and
-            //       the widget are the same copy of the framework. Reaching into
-            //       a host-side checkout instead is what let a mod and its host
-            //       disagree about which Aether they meant.
-            let aether: LuaTable =
-                modules::load_entry(&vm, &dir.join("roblox_packages/aether.luau"))
-                    .and_then(|f| f.call(()))
-                    .map_err(|e| {
-                        format!(
-                            "{}: loading Aether from the mod's own packages: {e}",
-                            manifest.id
-                        )
-                    })?;
-            let desktop: LuaTable = aether.get("Desktop").map_err(|e| {
-                format!(
-                    "{}: this Aether exposes no desktop ceremony: {e}",
-                    manifest.id
-                )
-            })?;
-            Ceremony::Aether(desktop)
-        }
-        // 3b ── no framework: just a root to parent into.
+        // no framework: just a root to parent into.
         //
         //       `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS ARM. A
         //       DataModel mod is handed the root it parents into, and `DewRoot`
@@ -300,11 +259,6 @@ pub fn load(
                     .into_lua(vm.lua())
                     .map_err(|e| format!("{}: {e}", manifest.id))?,
             ),
-            //  AN AETHER APPLET IS HANDED NO ROOT, because its tree is built
-            //  inside a reactive scope `Desktop.Mount` opens, and nothing exists
-            //  to parent into until that scope does. It can still ask for a
-            //  surface; it just gets nil back and keeps its `mount`.
-            Ceremony::Aether(_) => None,
         },
         title: manifest.display_name().to_string(),
     };
@@ -380,14 +334,11 @@ pub fn load(
     }
 
     // THE SIGNATURE IS THE RUNTIME'S, and so is the message when it is missing.
-    // An author who wrote a DataModel mod and forgot `mount` should not be shown
-    // an Aether component's shape to copy.
     let signature = match manifest.runtime {
-        Runtime::Aether => "mount = function(dew) … end",
         Runtime::DataModel => "mount = function(dew, root) … end",
     };
     //  AN APPLET THAT ASKED FOR ITS SURFACE HAS ALREADY BUILT ITS TREE. It was
-    //  handed the root by `dew.widget{}` while it ran, so there is nothing left
+    //  handed the root by `dew.Float{}` while it ran, so there is nothing left
     //  for the host to call and no declaration to read. That is the shape this
     //  is moving to; the returned table is what it is moving from.
     let mount: Option<LuaFunction> = match declaration.get::<LuaFunction>("mount") {
@@ -395,7 +346,7 @@ pub fn load(
         Err(_) if asked.is_some() => None,
         Err(_) => {
             return Err(format!(
-                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
+                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.Float{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
                 manifest.id
             ))
         }
@@ -403,84 +354,6 @@ pub fn load(
 
     // 6 ── build the tree, ONCE.
     let mounted = match ceremony {
-        //      INSIDE A REACTIVE SCOPE THE PRELUDE OPENS. The mount function is
-        //      handed OVER rather than called here: `derive` and `effect` refuse
-        //      to run outside a stable scope, and calling it from Rust would run
-        //      it outside one.
-        //      `dew` is forwarded to the mod's `mount` through Desktop.Mount's
-        //      varargs, so the framework never learns what a capability table is.
-        Ceremony::Aether(desktop) => {
-            let mount_fn: LuaFunction = desktop.get("Mount").map_err(|e| e.to_string())?;
-            let result: LuaTable = mount_fn
-                .call((mount, width, height, dew))
-                .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
-
-            // WHICH HOST THE FRAMEWORK RESOLVED, SAID OUT LOUD.
-            //
-            // `Host.detect()` chooses between the DataModel host and the Luau
-            // test double, and BOTH OF THEM DRAW A CORRECT WIDGET. So "the three
-            // Aether mods still render" is true under either branch and is not
-            // evidence that either was taken -- the exact shape of green number
-            // this project keeps finding. The framework already knows the answer
-            // and had no way to say it; `Host.Name` is what is driven and
-            // `Host.Environment` is where its text metrics and frame clock came
-            // from, so the pair distinguishes every branch that exists.
-            //
-            // A LINE RATHER THAN AN ASSERTION, because it reports rather than
-            // requires: which host a guest framework resolves is the framework's
-            // decision, and a mod that draws correctly through the other one is
-            // not a mod this file should refuse to run.
-            let host_tbl: Option<LuaTable> = result.get("Host").ok();
-            let (host_name, environment) = host_tbl
-                .map(|h| {
-                    (
-                        h.get::<String>("Name").unwrap_or_else(|_| "?".into()),
-                        h.get::<String>("Environment")
-                            .unwrap_or_else(|_| "?".into()),
-                    )
-                })
-                .unwrap_or_else(|| ("?".into(), "?".into()));
-
-            // AND WHAT IT BUILT WITH, WHICH IS A SECOND QUESTION AND THE ONE THIS
-            // HOST CAN ANSWER FOR ITSELF.
-            //
-            // The name above is the framework's own account of its decision, and
-            // sprint 6 measured it being TRUE AND NOT ENOUGH: with Aether's
-            // `Deps.luau` picking its vide by `typeof(game) == "Instance"`,
-            // independently of `Host.detect()`, this line read
-            // `DataModel (Dew services)` over a tree of the test double's mock
-            // instances. Every mod rendered, every suite passed, and the one thing
-            // the sprint existed to change had not changed.
-            //
-            // A tree root that borrows as an `InstanceRef` is a node in THIS
-            // host's arena -- a handle this process issued, holding an id into a
-            // `Dom` this file created. Nothing the guest can construct passes it,
-            // and the test double's mocks are Luau tables, so the two answers
-            // cannot be confused. It is the difference between asking the guest
-            // what it did and reading what arrived.
-            let built = match result.get::<LuaValue>("Tree") {
-                Ok(LuaValue::UserData(ud)) => match ud.borrow::<datamodel::InstanceRef>() {
-                    Ok(node) => match node.class_name() {
-                        Some(class) => format!("a {class} in this host's DataModel"),
-                        None => "a destroyed instance".to_string(),
-                    },
-                    Err(_) => "userdata this host did not issue".to_string(),
-                },
-                Ok(LuaValue::Table(_)) => "a Luau table, not this host's DataModel".to_string(),
-                _ => "nothing this host recognises".to_string(),
-            };
-
-            println!(
-                "[dew] {}: mounted through Aether's {host_name} host ({environment} services), \
-                 built {built}",
-                manifest.id
-            );
-
-            let session_tbl: LuaTable = result.get("Session").map_err(|e| e.to_string())?;
-            let session = Session::from_lua(vm.lua(), &session_tbl)
-                .map_err(|e| format!("{}: {e}", manifest.id))?;
-            Mounted::Aether(session)
-        }
         //      CALLED DIRECTLY, because there is no scope to be inside. A
         //      DataModel mod's `mount` parents instances and returns; its return
         //      value is deliberately ignored, since the tree the host renders is
@@ -489,7 +362,7 @@ pub fn load(
         //      be two answers to the same question.
         Ceremony::DataModel { root } => {
             //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
-            //      `dew.widget{}` handed it this same root while it ran, so the
+            //      `dew.Float{}` handed it this same root while it ran, so the
             //      instances are under there already and calling a second
             //      entry point would ask it to build them twice.
             if let Some(mount) = mount {
@@ -555,24 +428,6 @@ pub mod tests {
             Fixture(dir)
         }
 
-        /// A framework to test against, taken from an example that installs one.
-        ///
-        /// NOT A PIN OF THIS REPOSITORY'S. Dew declares no framework: an applet
-        /// brings its own, so a test wanting one names an applet. `pressable` is the
-        /// one the coverage tool already measures, which makes it the copy most
-        /// likely to be installed.
-        pub fn reference_aether() -> PathBuf {
-            for example in ["examples/aether/pressable", "examples/aether/calculator"] {
-                for prefix in ["", "../"] {
-                    let dir = PathBuf::from(format!("{prefix}{example}"));
-                    if let Some(found) = dew_runtime::installed_package_in(&dir, "aether") {
-                        return found;
-                    }
-                }
-            }
-            panic!("no example has aether installed -- run `pesde install` in examples/aether/pressable")
-        }
-
         /// A second file beside the entry, for an applet that is not one file.
         pub fn write(&self, name: &str, source: &str) {
             std::fs::write(self.0.join(name), source).expect("extra module");
@@ -580,49 +435,9 @@ pub mod tests {
 
         pub fn load(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-            // A DataModel mod never reads Aether's source; the path is still a
-            // require root, and pointing it at the mod's own directory keeps this
-            // test from depending on an install having been run.
+            // The path is still a require root, and pointing it at the mod's own
+            // directory keeps this test from depending on an install having run.
             load(&self.0, &self.0, &Default::default(), &state)
-        }
-
-        /// The same fixture, loaded against the INSTALLED Aether and vide.
-        ///
-        /// This one does depend on `pesde install` having run, which the loader
-        /// above deliberately does not -- and it has to: what it is testing is
-        /// the framework's own behaviour on this host, so there is nothing to
-        /// stand in for the framework. `crates/runtime`'s parity tests take the
-        /// same dependency for the same reason.
-        /// A FIXTURE THAT OWNS ITS FRAMEWORK, because that is now the only way a
-        /// mod gets one. The host injects nothing, so the fixture writes the
-        /// redirect pesde would have written: an unversioned file beside the mod
-        /// naming the Aether this mod declared. Copying the package in would be
-        /// truer still and costs seconds per test; the redirect is the same
-        /// shape a real mod loads through.
-        fn load_aether(&self) -> Result<Applet, String> {
-            let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-            //  AN EXAMPLE'S INSTALL, because this repository has none of its own.
-            //  Each applet brings the framework it declared, so a fixture that
-            //  wants one borrows from an applet rather than from a pin Dew keeps
-            //  for the purpose.
-            let root = Self::reference_aether();
-
-            let packages = self.0.join("roblox_packages");
-            std::fs::create_dir_all(&packages).expect("fixture roblox_packages");
-            let api = root.join("src/api.luau");
-            std::fs::write(
-                packages.join("aether.luau"),
-                format!(
-                    "return require(\"@fixture_aether/api\")
--- {}",
-                    api.display()
-                ),
-            )
-            .expect("fixture aether redirect");
-
-            let mut aliases = std::collections::HashMap::new();
-            aliases.insert("fixture_aether".to_string(), root.join("src"));
-            load(&self.0, &root, &aliases, &state)
         }
     }
 
@@ -653,7 +468,7 @@ runtime = \"datamodel\"
         };
 
         assert!(
-            err.contains("widget") && err.contains("permissions"),
+            err.contains("float") && err.contains("permissions"),
             "the refusal should name the permission to add, got: {err}"
         );
     }
@@ -672,7 +487,7 @@ runtime = \"datamodel\"
     fn a_mod_cannot_reach_a_framework_it_did_not_declare() {
         let fixture = Fixture::new(
             "undeclared",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             r#"
                 local Aether = require("@aether/api")
                 return { id = "plain", size = { width = 10, height = 10 } }
@@ -714,7 +529,7 @@ runtime = \"datamodel\"
     fn a_datamodel_mod_mounts_and_the_renderer_finds_what_it_parented() {
         let fixture = Fixture::new(
             "mounts",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             PLAIN,
         );
         let loaded = fixture.load().expect("the mod loads");
@@ -722,9 +537,7 @@ runtime = \"datamodel\"
         assert_eq!(loaded.mounted.runtime(), Runtime::DataModel);
         assert_eq!((loaded.width, loaded.height), (100, 60));
 
-        let Mounted::DataModel { dom, root } = &loaded.mounted else {
-            panic!("a datamodel manifest must not produce an Aether session");
-        };
+        let Mounted::DataModel { dom, root } = &loaded.mounted;
         // The tree is reachable from the root the host made and handed over —
         // which is the claim, rather than "mount ran without erroring".
         let frame = datamodel::render::frame_of(dom, *root, 100.0, 60.0);
@@ -739,7 +552,7 @@ runtime = \"datamodel\"
         // the root the host made, and the VM a mod is actually given.
         let fixture = Fixture::new(
             "clickable",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -758,9 +571,7 @@ runtime = \"datamodel\"
             "#,
         );
         let loaded = fixture.load().expect("the mod loads");
-        let Mounted::DataModel { dom, root } = &loaded.mounted else {
-            panic!("a datamodel manifest must not produce an Aether session");
-        };
+        let Mounted::DataModel { dom, root } = &loaded.mounted;
 
         let surface = datamodel::input::Surface {
             lua: loaded.vm.lua(),
@@ -792,21 +603,21 @@ runtime = \"datamodel\"
     #[test]
     fn a_mod_can_measure_a_string_and_subscribe_to_frames() {
         // THE SPRINT'S TWO SERVICES, THROUGH THE ORDINARY LOADER. The unit tests
-        // in `datamodel::services` prove them on a bare VM; this proves `DewHost`
-        // survives the manifest, the sandbox and the capability table -- and that
-        // it is a GLOBAL, since a mod is handed `dew` and `root` and nothing else.
+        // in `datamodel::services` prove them on a bare VM; this proves `dew.Text`
+        // and `dew.Clock` survive the manifest, the sandbox and the capability
+        // table -- ungated members of the same `dew` a mod is handed, on the same
+        // terms as `dew.Time`.
         let fixture = Fixture::new(
             "services",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             r#"
                 return {
                     id = "plain",
                     mount = function(dew, root)
-                        assert(DewHost ~= nil, "DewHost is a global")
-                        assert(dew.text == nil, "text metrics are not a capability")
-                        local w, h = DewHost.Text.Measure("hello", 14)
+                        assert(dew.Text ~= nil, "dew.Text is present")
+                        local w, h = dew.Text.Measure("hello", 14)
                         assert(type(w) == "number" and type(h) == "number", "two numbers")
-                        local stop = DewHost.Clock.OnFrame(function(dt) end)
+                        local stop = dew.Clock.OnFrame(function(dt) end)
                         assert(type(stop) == "function", "OnFrame returns an unsubscribe")
                         stop()
                     end,
@@ -826,7 +637,7 @@ runtime = \"datamodel\"
         // sees it as `take_dirty` answering true for a mod that changed nothing.
         let fixture = Fixture::new(
             "idleclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             r#"
                 ticks = 0
                 return {
@@ -835,15 +646,13 @@ runtime = \"datamodel\"
                         local frame = Instance.new("Frame")
                         frame.Name = "Body"
                         frame.Parent = root
-                        DewHost.Clock.OnFrame(function(dt) ticks += 1 end)
+                        dew.Clock.OnFrame(function(dt) ticks += 1 end)
                     end,
                 }
             "#,
         );
         let loaded = fixture.load().expect("the mod loads");
-        let Mounted::DataModel { dom, .. } = &loaded.mounted else {
-            panic!("a datamodel manifest must not produce an Aether session");
-        };
+        let Mounted::DataModel { dom, .. } = &loaded.mounted;
 
         // The mount itself dirtied the tree, correctly: a new tree has to reach
         // the screen once. Clear it the way the first painted frame would.
@@ -871,7 +680,7 @@ runtime = \"datamodel\"
         // listener must repaint -- the paint follows the change, not the tick.
         let fixture = Fixture::new(
             "animclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -879,7 +688,7 @@ runtime = \"datamodel\"
                         local frame = Instance.new("Frame")
                         frame.Name = "Body"
                         frame.Parent = root
-                        DewHost.Clock.OnFrame(function(dt)
+                        dew.Clock.OnFrame(function(dt)
                             frame.BackgroundTransparency = 0.5
                         end)
                     end,
@@ -887,9 +696,7 @@ runtime = \"datamodel\"
             "#,
         );
         let loaded = fixture.load().expect("the mod loads");
-        let Mounted::DataModel { dom, .. } = &loaded.mounted else {
-            panic!("a datamodel manifest must not produce an Aether session");
-        };
+        let Mounted::DataModel { dom, .. } = &loaded.mounted;
         assert!(dom.lock().expect("dom").take_dirty());
 
         services::tick(&loaded.clock, 1.0 / 60.0);
@@ -903,10 +710,11 @@ runtime = \"datamodel\"
     fn an_aether_mod_gets_the_same_services() {
         // NOT A DIFFERENT PLATFORM PER RUNTIME. `install_vocabulary` genuinely is
         // conditional -- Aether carries its own and a partial host one blocks it --
-        // and the risk was that `DewHost` picked up the same conditionality by
-        // habit. It must not: sprint 8 has Aether's DataModel host filling
-        // `Host.Text` and `Host.Clock` from exactly these, so an Aether mod that
-        // could not see them would be sprint 8 failing a sprint early.
+        // and the risk was that `dew.Text`/`dew.Clock` picked up the same
+        // conditionality by habit. They must not: sprint 8 has Aether's DataModel
+        // host filling `Host.Text` and `Host.Clock` from exactly these, so an
+        // Aether mod that could not see them would be sprint 8 failing a sprint
+        // early.
         //
         // NO AETHER INSTALL IS NEEDED to assert this, and that is deliberate: the
         // install happens before the runtime branch, so this reads the globals of
@@ -915,194 +723,10 @@ runtime = \"datamodel\"
         let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
         services::install(&lua, &clock).expect("install");
         let got: bool = lua
-            .load("return DewHost.Text.Measure ~= nil and DewHost.Clock.OnFrame ~= nil")
+            .load("return dew.Text.Measure ~= nil and dew.Clock.OnFrame ~= nil")
             .eval()
             .expect("eval");
         assert!(got);
-    }
-
-    /// An Aether mod that leaves the one node it built where the host can read
-    /// it back. Deliberately minimal: what is under test is the seam, not a
-    /// widget.
-    ///
-    /// `_G` IS THE FIXTURE'S OWN DOING, not a hole in the loader. Each mod gets
-    /// its own VM, this one is built and dropped inside a single test, and the
-    /// alternative -- teaching `load` to hand back the tree -- would be
-    /// production code shaped by a test. `Desktop.Mount` does return it, and
-    /// `mods.rs` reads it for the mount line; what it does not do is keep it.
-    const AETHER_MOD: &str = r##"
-        local Aether = require("./roblox_packages/aether")
-        local create = Aether.create
-
-        return {
-            id = "plain",
-            size = { width = 100, height = 60 },
-            mount = function(dew)
-                local node = create "Frame" {
-                    Name = "Body",
-                    Size = UDim2.new(0.5, 4, 0.25, -2),
-                    BackgroundColor3 = Color3.fromHex("#336699"),
-                }
-                _G.__dew_test_tree = node
-                --- READ BACK HERE AND NOT LATER, because `Live.Session` commits a
-                --- layout pass before `Desktop.Mount` returns and `Host.SetBounds`
-                --- overwrites `Size` with the solved rectangle. That is the solver
-                --- doing its job; it is also the only window in which the AUTHORED
-                --- value is still the stored one.
-                _G.__dew_test_size = node.Size
-                return node
-            end,
-        }
-    "##;
-
-    #[test]
-    fn an_aether_mod_mounts_through_the_datamodel_host() {
-        // THE COMPLETION TEST OF STEP G, AS A TEST RATHER THAN AS A LOG LINE.
-        //
-        // `Host.Name` alone is not enough and this project has the measurement:
-        // with Aether's `Deps.luau` choosing its vide by `typeof(game)`,
-        // independently of `Host.detect()`, the framework reported `DataModel`
-        // over a tree of the test double's mock instances. Both halves are
-        // asserted here for that reason -- which host was resolved, AND that what
-        // it built is in this host's own arena.
-        let fixture = Fixture::new(
-            "aetherhost",
-            "id = \"plain\"\nruntime = \"aether\"\npermissions = [\"widget\"]\n",
-            AETHER_MOD,
-        );
-        let loaded = fixture.load_aether().expect("the mod loads");
-        assert_eq!(loaded.mounted.runtime(), Runtime::Aether);
-
-        // WHICH HOST THE FRAMEWORK RESOLVED, asked of the framework in the mod's
-        // own VM. `Host.detect` is memoised per process, so this is the decision
-        // the mount above was made under rather than a fresh one.
-        let (host_name, environment): (String, String) = loaded
-            .vm
-            .lua()
-            .load(
-                r#"
-                local host = require("@fixture_aether/api").Host.detect()
-                return host.Name, host.Environment
-            "#,
-            )
-            .eval()
-            .expect("asking the framework which host it chose");
-        assert_eq!(
-            host_name, "DataModel",
-            "the test double is still on the path"
-        );
-        assert_eq!(environment, "Dew");
-
-        // AND THAT IT BUILT WITH IT. The pair is the point: the name above was
-        // true and insufficient once already.
-        let built_here: bool = loaded
-            .vm
-            .lua()
-            .load(r#"return typeof(_G.__dew_test_tree) == "Instance""#)
-            .eval()
-            .expect("reading the built node back");
-        assert!(built_here, "the framework built with something else");
-
-        let globals = loaded.vm.lua().globals();
-        // REPOINTED, NOT DELETED. This asserted `game` was a boolean `true`,
-        // which was the whole of what the gate ever was. centau/vide#89 and
-        // aether#3 removed the need for it, so the assertion turns round: the
-        // global must NOT be there.
-        //
-        // Kept as a guard rather than dropped, because `game` came back once
-        // already -- dropped from step F on 2026-09-04 and reinstated the same
-        // day -- and the next thing to reach for it should fail here rather than
-        // quietly reintroduce a sentinel nothing reads.
-        let gate: LuaValue = globals.get("game").expect("reading `game`");
-        assert!(
-            matches!(gate, LuaValue::Nil),
-            "`game` is not installed any more and nothing should reintroduce it, got {gate:?}"
-        );
-    }
-
-    #[test]
-    fn a_udim2_this_host_built_survives_aether_create() {
-        // VERIFIED RATHER THAN ASSUMED, and it is the reason this was deferred
-        // through the whole of milestone 1: Aether's own vocabulary is Luau
-        // TABLES that its `create` consumes, and this host's are USERDATA. The
-        // worry was that substituting one for the other was the hard part.
-        //
-        // It is not, and the reason is worth stating because it retires the
-        // worry rather than confirming it: under the DataModel host `create` is
-        // vide's own, vide's `create` writes properties onto instances the
-        // environment made, and this host's instances take this host's userdata.
-        // There was never a translation step on that path -- only on the test
-        // double's, which builds Luau tables and therefore needs Luau values.
-        //
-        // ALL FOUR NUMBERS, AND A NEGATIVE OFFSET. `as_f32` once refused an
-        // integer here, so every literal offset in every UDim2 was zero and no
-        // test noticed, because none read one back.
-        let fixture = Fixture::new(
-            "aethervalues",
-            "id = \"plain\"\nruntime = \"aether\"\npermissions = [\"widget\"]\n",
-            AETHER_MOD,
-        );
-        let loaded = fixture.load_aether().expect("the mod loads");
-
-        let survived: bool = loaded
-            .vm
-            .lua()
-            .load(
-                r##"
-                local node = _G.__dew_test_tree
-                local size = _G.__dew_test_size
-                return typeof(node) == "Instance"
-                    and node.ClassName == "Frame"
-                    and node.Name == "Body"
-                    and typeof(size) == "UDim2"
-                    and size.X.Scale == 0.5 and size.X.Offset == 4
-                    and size.Y.Scale == 0.25 and size.Y.Offset == -2
-                    and node.BackgroundColor3 == Color3.fromHex("#336699")
-            "##,
-            )
-            .eval()
-            .expect("reading the built node back");
-        assert!(
-            survived,
-            "a value this host built did not survive Aether's create"
-        );
-
-        // AND LAYOUT RAN WITHOUT EATING ITS OWN INPUT, which is the other half and
-        // is the bug this sprint actually found.
-        //
-        // `Live.Session` commits a layout pass during the mount, and the framework
-        // reports the solved rectangle through `Host.SetBounds`. That used to
-        // write it into `Position` and `Size` -- the properties the solver READS
-        // -- so every frame it added the parent's offset to an offset it had
-        // already made absolute. On `examples/aether/timetracker` a label walked 286 pixels
-        // right per frame and the widget repainted 305 times a second doing
-        // nothing. It passed every test in both repositories, because nothing
-        // off-engine had ever driven that host before.
-        //
-        // BOTH HALVES, because either alone is satisfied by something broken. A
-        // rectangle with area says layout ran; the authored `Size` still reading
-        // `(0.5, 4, 0.25, -2)` says it ran without overwriting what it was
-        // solving from.
-        let (w, h, intact): (f32, f32, bool) = loaded
-            .vm
-            .lua()
-            .load(
-                r##"
-                local node = _G.__dew_test_tree
-                local host = require("@fixture_aether/api").Host.detect()
-                local _, _, w, h = host.Scene.Bounds(node)
-                local size = node.Size
-                return w, h, size.X.Scale == 0.5 and size.X.Offset == 4
-                    and size.Y.Scale == 0.25 and size.Y.Offset == -2
-            "##,
-            )
-            .eval()
-            .expect("reading the solved rectangle back");
-        assert!(w > 0.0 && h > 0.0, "layout produced no rectangle: {w}x{h}");
-        assert!(
-            intact,
-            "the layout pass overwrote the authored Size it solves from"
-        );
     }
 
     #[test]
@@ -1113,7 +737,7 @@ runtime = \"datamodel\"
         // count being wrong.
         let fixture = Fixture::new(
             "vocabulary",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             PLAIN,
         );
         assert!(fixture.load().is_ok());
@@ -1143,13 +767,13 @@ runtime = \"datamodel\"
         // manifest granted.
         let fixture = Fixture::new(
             "caps",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
                     mount = function(dew, root)
-                        assert(dew.storage ~= nil, "storage was granted")
-                        assert(dew.clipboard == nil, "clipboard was not asked for")
+                        assert(dew.Storage ~= nil, "storage was granted")
+                        assert(dew.Clipboard == nil, "clipboard was not asked for")
                         assert(root.Name == "DewRoot", "the root is named DewRoot")
                     end,
                 }
@@ -1162,7 +786,7 @@ runtime = \"datamodel\"
     fn a_datamodel_mod_without_mount_is_told_the_signature_it_needed() {
         let fixture = Fixture::new(
             "nomount",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             r#"return { id = "plain" }"#,
         );
         let Err(message) = fixture.load() else {
@@ -1187,7 +811,7 @@ runtime = \"datamodel\"
     fn a_mod_resolves_an_image_through_rbxassetid_with_grant() {
         let fixture = Fixture::new(
             "rbxgrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"rbxassetid\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\", \"rbxassetid\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1203,9 +827,7 @@ runtime = \"datamodel\"
             "#,
         );
         let loaded = fixture.load().expect("the mod loads");
-        let Mounted::DataModel { dom, root } = &loaded.mounted else {
-            panic!("expected DataModel");
-        };
+        let Mounted::DataModel { dom, root } = &loaded.mounted;
 
         let png_bytes = test_png();
         let expected_hash = dew_host::assets::hash_bytes(&png_bytes);
@@ -1235,7 +857,7 @@ runtime = \"datamodel\"
     fn a_mod_is_refused_an_image_through_rbxassetid_without_grant() {
         let fixture = Fixture::new(
             "rbxnogrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"float\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1251,9 +873,7 @@ runtime = \"datamodel\"
             "#,
         );
         let loaded = fixture.load().expect("the mod loads");
-        let Mounted::DataModel { dom, root } = &loaded.mounted else {
-            panic!("expected DataModel");
-        };
+        let Mounted::DataModel { dom, root } = &loaded.mounted;
 
         // Transport must NEVER be called without grant
         dom.lock()
@@ -1277,7 +897,7 @@ mod asking_for_a_surface {
     use super::tests::Fixture;
 
     const ASKS: &str = r#"
-local root = dew.widget({ width = 120, height = 60 })
+local root = dew.Float({ width = 120, height = 60 })
 local frame = Instance.new("Frame")
 frame.Name = "Asked"
 frame.Size = UDim2.new(1, 0, 1, 0)
@@ -1294,7 +914,7 @@ frame.Parent = root
     fn an_applet_that_asks_returns_nothing() {
         let fixture = Fixture::new(
             "asks",
-            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             ASKS,
         );
         let applet = fixture.load().expect("an applet that asks should load");
@@ -1310,10 +930,10 @@ frame.Parent = root
     fn an_ungranted_surface_is_not_on_the_table() {
         let fixture = Fixture::new(
             "asks-ungranted",
-            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
-            "assert(dew.widget ~= nil, \"widget was granted\")\n\
-             assert(dew.overlay == nil, \"overlay was not granted and must be absent\")\n\
-             local root = dew.widget({ width = 10, height = 10 })\n",
+            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "assert(dew.Float ~= nil, \"float was granted\")\n\
+             assert(dew.Overlay == nil, \"overlay was not granted and must be absent\")\n\
+             local root = dew.Float({ width = 10, height = 10 })\n",
         );
         fixture
             .load()
@@ -1325,7 +945,7 @@ frame.Parent = root
     fn an_applet_that_does_neither_is_told_both_ways_out() {
         let fixture = Fixture::new(
             "asks-neither",
-            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
             "return { size = { width = 10, height = 10 } }\n",
         );
         let error = match fixture.load() {
@@ -1333,7 +953,7 @@ frame.Parent = root
             Ok(_) => panic!("an applet with no surface and no mount should not load"),
         };
         assert!(
-            error.contains("dew.widget") && error.contains("mount"),
+            error.contains("dew.Float") && error.contains("mount"),
             "the message should name both ways out, got: {error}"
         );
     }
@@ -1350,7 +970,7 @@ frame.Parent = root
             "asks-submodule",
             "id = \"sub\"
 runtime = \"datamodel\"
-permissions = [\"widget\"]
+permissions = [\"float\"]
 ",
             "local helper = require(\"./helper\")
 helper()
@@ -1360,7 +980,7 @@ helper()
             "helper.luau",
             "return function()
   assert(dew ~= nil, \"a required module should see dew\")
-             local root = dew.widget({ width = 12, height = 12 })
+             local root = dew.Float({ width = 12, height = 12 })
              assert(root ~= nil, \"and should be answered by it\")
 end
 ",
@@ -1375,8 +995,8 @@ end
     fn asking_wins_over_a_stale_declaration() {
         let fixture = Fixture::new(
             "asks-both",
-            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
-            "local root = dew.widget({ width = 33, height = 44 })\n\
+            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"float\"]\n",
+            "local root = dew.Float({ width = 33, height = 44 })\n\
              return { size = { width = 999, height = 999 }, mount = function() end }\n",
         );
         let applet = fixture.load().expect("loads");
@@ -1425,11 +1045,7 @@ mod a_pressable_responds {
         let loaded =
             load(&dir, &aether_root, &Default::default(), &state).expect("timetracker should load");
 
-        let Mounted::DataModel { dom, root } = &loaded.mounted else {
-            panic!(
-                "this reproduction wants an applet that mounts itself;                  timetracker is back on the host's ceremony until the gap is closed"
-            );
-        };
+        let Mounted::DataModel { dom, root } = &loaded.mounted;
 
         let label_before = button_label(dom, *root);
 

@@ -19,6 +19,7 @@
 ]]
 
 local Aether = require("./roblox_packages/aether")
+local vide = require("./roblox_packages/vide")
 local PointerRouter = Aether.PointerRouter
 --- The pointer's current position. `PointerRouter` routes presses; `InputScope`
 --- is where "where is the pointer right now" actually lives.
@@ -155,70 +156,67 @@ local function VirtualWindow(props: WindowProps)
 	}
 end
 
-return {
-	id = "workspace",
-	size = { width = 720, height = 440 },
+--- AN OVERLAY: a float the size of the desktop.
+---
+--- The virtual windows below then appear to sit directly on the desktop with
+--- nothing around them, and the surface is indistinguishable from a host that
+--- owns three real windows — while the tree stays exactly the tree an engine
+--- place would mount.
+---
+--- CLICKS FALL THROUGH WHERE NOTHING IS PAINTED, which is why the ScreenSpace
+--- below must NOT have a background. Windows hit-tests a layered window
+--- against its alpha, so a transparent pixel passes the click to the desktop;
+--- a filled backdrop would make this a full-screen wall that swallows every
+--- click on the machine.
+---
+--- `width`/`height` are ignored for an overlay -- the screen supplies them --
+--- and are kept only as the size this was designed against.
+local overlay = assert(dew.Overlay, "dew.toml must grant `overlay`")
+local root = overlay({ width = 720, height = 440 })
 
-	--- AN OVERLAY: a widget the size of the desktop.
-	---
-	--- The virtual windows below then appear to sit directly on the desktop with
-	--- nothing around them, and the surface is indistinguishable from a host that
-	--- owns three real windows — while the tree stays exactly the tree an engine
-	--- place would mount.
-	---
-	--- CLICKS FALL THROUGH WHERE NOTHING IS PAINTED, which is why the ScreenSpace
-	--- below must NOT have a background. Windows hit-tests a layered window
-	--- against its alpha, so a transparent pixel passes the click to the desktop;
-	--- a filled backdrop would make this a full-screen wall that swallows every
-	--- click on the machine.
-	surface = { kind = "overlay" },
+local function build(): any
+	--- `ScreenSpace` in the Studio package's sense: the full-bleed container
+	--- every virtual window is positioned inside. Its own coordinates are the
+	--- windows' coordinate system.
+	return create "Frame" {
+		Name = "ScreenSpace",
+		Size = UDim2.new(1, 0, 1, 0),
+		--- FULLY TRANSPARENT, and this is load-bearing rather than cosmetic.
+		--- Every pixel this does not paint is a pixel the window does not
+		--- occupy and does not receive clicks on. Give it a background and the
+		--- overlay becomes a screen-sized sheet of glass over the desktop.
+		BackgroundTransparency = 1,
 
-	--- `size` is ignored for an overlay -- the screen supplies it -- and is kept
-	--- only as the size this was designed against.
-	designedFor = { width = 720, height = 440 },
+		VirtualWindow({
+			title = "Editor",
+			x = 40,
+			y = 40,
+			width = 300,
+			height = 150,
+			accent = Color3.fromHex("#38bdf8"),
+			body = "drag my titlebar",
+		}),
 
-	mount = function(_dew: any)
-		--- `ScreenSpace` in the Studio package's sense: the full-bleed container
-		--- every virtual window is positioned inside. Its own coordinates are the
-		--- windows' coordinate system.
-		return create "Frame" {
-			Name = "ScreenSpace",
-			Size = UDim2.new(1, 0, 1, 0),
-			--- FULLY TRANSPARENT, and this is load-bearing rather than cosmetic.
-			--- Every pixel this does not paint is a pixel the window does not
-			--- occupy and does not receive clicks on. Give it a background and the
-			--- overlay becomes a screen-sized sheet of glass over the desktop.
-			BackgroundTransparency = 1,
+		VirtualWindow({
+			title = "Console",
+			x = 170,
+			y = 150,
+			width = 300,
+			height = 150,
+			accent = Color3.fromHex("#f59e0b"),
+			body = "press to raise",
+		}),
 
-			VirtualWindow({
-				title = "Editor",
-				x = 40,
-				y = 40,
-				width = 300,
-				height = 150,
-				accent = Color3.fromHex("#38bdf8"),
-				body = "drag my titlebar",
-			}),
+		VirtualWindow({
+			title = "Inspector",
+			x = 320,
+			y = 240,
+			width = 300,
+			height = 150,
+			accent = Color3.fromHex("#a78bfa"),
+			body = "stacked by LayerManager",
+		}),
+	}
+end
 
-			VirtualWindow({
-				title = "Console",
-				x = 170,
-				y = 150,
-				width = 300,
-				height = 150,
-				accent = Color3.fromHex("#f59e0b"),
-				body = "press to raise",
-			}),
-
-			VirtualWindow({
-				title = "Inspector",
-				x = 320,
-				y = 240,
-				width = 300,
-				height = 150,
-				accent = Color3.fromHex("#a78bfa"),
-				body = "stacked by LayerManager",
-			}),
-		}
-	end,
-}
+vide.mount(build, root)

@@ -226,13 +226,13 @@ author would check all three before suspecting the asset. An engine application
 moved to Dew with an asset it cannot reach is a correct application missing an
 image, not a broken one.
 
-## Widgets and windows are one API, not two
+## Floats and windows are one API, not two
 
 A mod declares the surface it wants beside its size:
 
 ```luau
 surface = {
-    kind = "widget",              -- floating, no chrome, on the desktop
+    kind = "float",                -- floating, no chrome, on the desktop
     anchor = "top-right",
     offset = { x = 24, y = 24 },
     clickThrough = false,
@@ -245,20 +245,20 @@ surface = { kind = "window", title = "Time Tracker Settings" }
 
 **One `mount`, because the applet builds the same tree either way.** Chrome or none,
 in the taskbar or not, blitted into a rectangle or composited from its own alpha
--- every one of those is a property of the WINDOW, not of the widget. Two entry
+-- every one of those is a property of the WINDOW, not of the float. Two entry
 points would mean two paths through the loader for a difference that is entirely
 window-creation flags, and would force an applet wanting both a HUD and a settings
 panel to be two mods.
 
 **A tagged union, though, not a bag of optional fields.** `title` means nothing
-to a floating widget and `anchor` means nothing to a window. A flat table would
+to a floating surface and `anchor` means nothing to a window. A flat table would
 let an applet set either and have it silently ignored, which is exactly how
 `permissions` was decoration before it was enforced.
 
-Omitting `surface` gets a widget. Dew is a desktop applet platform; a default of
+Omitting `surface` gets a float. Dew is a desktop applet platform; a default of
 "ordinary window" would make every author opt in to the thing they came for.
 
-### An overlay is a widget the size of the desktop
+### An overlay is a float the size of the desktop
 
 ```luau
 surface = { kind = "overlay" }   -- topmost = true, clickThrough = false
@@ -278,9 +278,9 @@ Which makes one rule absolute: **the root frame must be
 `BackgroundTransparency = 1`.** A filled backdrop turns the overlay into a
 screen-sized sheet of glass that swallows every click on the machine.
 
-### A widget's shape is its own alpha
+### A float's shape is its own alpha
 
-On a widget surface the frame is cleared to NOTHING, so a pixel the tree did not
+On a float surface the frame is cleared to NOTHING, so a pixel the tree did not
 paint is a pixel the window does not occupy -- the desktop shows through it and
 receives the click. A `UICorner` on the root frame is therefore the window's real
 silhouette, not a rounded shape drawn on a dark rectangle.

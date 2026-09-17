@@ -34,7 +34,7 @@ An applet is a directory holding a `dew.toml` and a `<id>.luau`:
 return {
     id = "clock",
     size = { width = 220, height = 56 },
-    surface = { kind = "widget", anchor = "top-right" },
+    surface = { kind = "float", anchor = "top-right" },
 
     mount = function(dew, root)
         -- build a tree under `root`

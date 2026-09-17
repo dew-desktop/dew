@@ -1,4 +1,5 @@
-//! `DewHost`: the two services a guest framework needs and no guest can compute.
+//! `dew.Text`, `dew.Clock`, `dew.Pointer`, `dew.Input`: the host facts a guest
+//! framework needs and no guest can compute.
 //!
 //! WHERE THIS FILE LIVES, AND WHY IT MOVED BEFORE IT WAS EVER COMMITTED HERE
 //! It was written as `datamodel/services.rs` and `verify_boundaries` refused it,
@@ -13,10 +14,10 @@
 //!
 //! WHAT THESE ARE, AND WHY THEY ARE NOT PROPERTIES
 //! Everything else in this module is a DataModel: instances, properties, events,
-//! a tree. These two are not. "How wide is this string in the face this host will
+//! a tree. These are not. "How wide is this string in the face this host will
 //! actually draw with" and "call me when the host draws a frame" are questions
 //! ABOUT THE HOST, and no amount of tree makes them answerable from Luau. On
-//! The engine they are `TextService:GetTextSize` and `RunService.Heartbeat`, reached
+//! the engine they are `TextService:GetTextSize` and `RunService.Heartbeat`, reached
 //! through `game`, and Dew has to spell them itself -- `game` would not help even
 //! if it were here, because these are services behind it rather than the tree it
 //! names. (`game` itself came back into scope on 2026-09-04, for vide's gate and
@@ -24,33 +25,24 @@
 //! it came back". This comment used to cite the half of that section that was
 //! later corrected, for a claim the section never had to carry.)
 //!
-//! WHY A GLOBAL, AND NOT THE `dew` TABLE -- the design question this sprint owned
-//! Three homes were possible and the argument is in the sprint record; the fact
-//! that settled it is mechanical. Aether's host modules NEVER SEE `dew`.
-//! `Host.detect(vide)` takes the reactive core and nothing else, and
-//! `Desktop.Mount` forwards the capability table through its varargs straight to
-//! the mod's own `build` -- deliberately, so the framework never learns what a
-//! capability is. Put text metrics on `dew` and the DataModel host cannot reach
-//! them: sprint 8 would have to thread a capability table into a framework entry
-//! point, for a reason that is entirely Dew's.
-//!
-//! The principled half agrees with the mechanical one. `capabilities.rs` is a
-//! security boundary, and a capability is a thing a mod may be DENIED. There is
-//! no coherent "no" here: a layout pass refused text metrics cannot lay out, and
-//! a mod refused frames cannot animate -- neither degrades, both stop. A
+//! WHY MEMBERS OF `dew`, AND UNGATED ONES. `capabilities.rs` is a security
+//! boundary, and a capability is a thing a mod may be DENIED. There is no
+//! coherent "no" here: a layout pass refused text metrics cannot lay out, and a
+//! mod refused frames cannot animate -- neither degrades, both stop. A
 //! permission with only one sound answer is not a permission, it is ceremony. So
-//! these go where `Instance` goes, for the reason `Instance` goes there: the
-//! language of the platform, present for every guest, ungated.
+//! `install` and `install_pointer` below add their members directly to the same
+//! `dew` table `capabilities::build` returns, on the same terms `Time` was
+//! always on: present for every guest, whichever of the two functions runs
+//! first, ungated.
 //!
-//! WHY `DewHost` AND NOT `TextService` -- and this is the parity trap, declined.
-//! Installing globals called `TextService` and `RunService` would LOOK like
-//! The engine and be a lie in the direction that costs most: on the engine those are
-//! not globals, so code written against them would run HERE and nowhere else.
-//! That is parity theatre, which is what the rescope removed from this step. A
-//! name that is honestly Dew's cannot be mistaken for portable, and it sits
-//! beside `DewRoot`, which was named the same way for the same reason.
+//! WHY DEW'S OWN NAMES, AND NOT `TextService`/`RunService`. Naming these
+//! `TextService` and `RunService` would LOOK like the engine and be a lie in the
+//! direction that costs most: on the engine those are not globals, so code
+//! written against them would run HERE and nowhere else. That is parity
+//! theatre. `Text` and `Clock`, read off `dew` the way `Time` already is, cannot
+//! be mistaken for portable.
 //!
-//! THE STANDARD QUESTION IS ANSWERED, AND THE NAME IS STILL DEW'S. Whether a
+//! THE STANDARD QUESTION IS ANSWERED, AND THE SHAPE IS STILL DEW'S. Whether a
 //! conforming host MUST expose text metrics and a frame clock was flagged here
 //! and answered YES on 2026-09-04, in `docs/host_services.md` -- its own
 //! hand-written half of the standard, not a section of the generated
@@ -60,8 +52,8 @@
 //! What the standard requires is the SHAPE: synchronous measurement, a frame
 //! subscription that returns a disposer, a monotonic `now`, and no way for a
 //! guest to step a host that drives its own frames. It requires no name, so
-//! `DewHost` conforms as it stands and is still expected to be revisited only if
-//! the standard ever does specify one.
+//! `dew.Text` and `dew.Clock` conform as they stand and are still expected to
+//! be revisited only if the standard ever does specify one.
 
 use dew_raster::Font;
 use mlua::prelude::*;
@@ -458,18 +450,18 @@ impl PointerState {
     }
 }
 
-/// Put the pointer on `DewHost` so a guest can poll it.
+/// Put the pointer on `dew` so a guest can poll it.
 ///
 /// SEPARATE FROM `install` BECAUSE THE STATE HAS A DIFFERENT OWNER. The clock is
 /// the host's; the pointer belongs to whatever is feeding input, which is the
 /// window loop on Windows and a test driver everywhere else. Both call this with
 /// the cell they are updating.
 fn install_pointer(lua: &Lua, pointer: &SharedPointer) -> LuaResult<()> {
-    let host: LuaTable = match lua.globals().get("DewHost") {
+    let dew: LuaTable = match lua.globals().get("dew") {
         Ok(existing) => existing,
         Err(_) => {
             let fresh = lua.create_table()?;
-            lua.globals().set("DewHost", fresh.clone())?;
+            lua.globals().set("dew", fresh.clone())?;
             fresh
         }
     };
@@ -498,7 +490,7 @@ fn install_pointer(lua: &Lua, pointer: &SharedPointer) -> LuaResult<()> {
         })?,
     )?;
 
-    host.set("Pointer", api)?;
+    dew.set("Pointer", api)?;
 
     //  AND THE SERVICE THAT DELIVERS, beside the one that answers.
     //
@@ -514,7 +506,7 @@ fn install_pointer(lua: &Lua, pointer: &SharedPointer) -> LuaResult<()> {
     ] {
         input.set(name, signal(lua, pointer, which)?)?;
     }
-    host.set("Input", input)?;
+    dew.set("Input", input)?;
 
     Ok(())
 }
@@ -646,7 +638,7 @@ pub fn tick(clock: &SharedClock, dt: f32) {
 
 // -- Installation ------------------------------------------------------------
 
-/// Install `DewHost` into a guest VM.
+/// Install `dew.Text` and `dew.Clock` into a guest VM.
 ///
 /// FOR EVERY GUEST, whichever runtime it declared. A DataModel mod reaches these
 /// directly; an Aether mod reaches them through the `Host.Text` and `Host.Clock`
@@ -658,10 +650,23 @@ pub fn tick(clock: &SharedClock, dt: f32) {
 /// `UDim2` and the rest with `if rawget(g, name) == nil` -- first writer wins --
 /// so a partial host vocabulary BLOCKS it rather than merging with it, which is
 /// why `install_vocabulary` is still not called for an Aether mod. Nothing in
-/// Aether or vide is called `DewHost`, and a name unmistakably this host's is the
+/// Aether or vide is called `dew`, and a name unmistakably this host's is the
 /// reason there is nothing to collide with.
+///
+/// REUSES THE EXISTING `dew` GLOBAL IF ONE IS ALREADY THERE, the same
+/// get-or-create `install_pointer` below already did for the pointer: this may
+/// run before or after `capabilities::build` set `dew` up with a mod's granted
+/// permissions, and either order has to add its members to the one table
+/// rather than each clobbering the other's.
 pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
-    let host = lua.create_table()?;
+    let dew: LuaTable = match lua.globals().get("dew") {
+        Ok(existing) => existing,
+        Err(_) => {
+            let fresh = lua.create_table()?;
+            lua.globals().set("dew", fresh.clone())?;
+            fresh
+        }
+    };
 
     // ---- Text ----
     let text = lua.create_table()?;
@@ -692,7 +697,7 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
             },
         )?,
     )?;
-    host.set("Text", text)?;
+    dew.set("Text", text)?;
 
     // ---- Clock ----
     let dew_clock = lua.create_table()?;
@@ -740,7 +745,7 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     let reader = Arc::clone(clock);
     dew_clock.set(
         "Now",
-        // MONOTONIC SECONDS SINCE THE FIRST FRAME, AND NOT `dew.time.now`. That
+        // MONOTONIC SECONDS SINCE THE FIRST FRAME, AND NOT `dew.Time.now`. That
         // one is wall-clock seconds since the epoch, which is what a mod showing
         // the time of day wants. This is what Aether's the engine host answers with
         // `os.clock()`: a process clock that never steps backwards and whose zero
@@ -758,9 +763,7 @@ pub fn install(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     // it touched. Sprint 8 fills the member with the engine host's own no-op,
     // which is the truthful implementation on any host that drives its own frames.
 
-    host.set("Clock", dew_clock)?;
-
-    lua.globals().set("DewHost", host)?;
+    dew.set("Clock", dew_clock)?;
 
     // THE POINTER COMES WITH THE HOST, not from a second call every caller has to
     // remember. The cell is process level, so there is nothing to thread and
@@ -804,7 +807,7 @@ mod tests {
         install(&lua, &clock).expect("install");
 
         let before: Option<f32> = lua
-            .load("local x, y = DewHost.Pointer.Position(); return x")
+            .load("local x, y = dew.Pointer.Position(); return x")
             .eval()
             .expect("read");
         assert!(
@@ -814,18 +817,18 @@ mod tests {
 
         pointer_moved(12.0, 34.0);
         let (x, y): (f32, f32) = lua
-            .load("local x, y = DewHost.Pointer.Position(); return x, y")
+            .load("local x, y = dew.Pointer.Position(); return x, y")
             .eval()
             .expect("read");
         assert_eq!((x, y), (12.0, 34.0));
 
         assert!(!lua
-            .load("return DewHost.Pointer.IsDown(0)")
+            .load("return dew.Pointer.IsDown(0)")
             .eval::<bool>()
             .unwrap());
         pointer_button(0, true);
         assert!(lua
-            .load("return DewHost.Pointer.IsDown(0)")
+            .load("return dew.Pointer.IsDown(0)")
             .eval::<bool>()
             .unwrap());
         pointer_button(0, false);
@@ -854,7 +857,7 @@ mod tests {
         }
         let (lua, _clock) = vm();
         let (w, h): (f32, f32) = lua
-            .load(r#"return DewHost.Text.Measure("hello", 14)"#)
+            .load(r#"return dew.Text.Measure("hello", 14)"#)
             .eval()
             .expect("measure");
         assert!(w > 0.0, "width was {w}");
@@ -870,8 +873,8 @@ mod tests {
         let got: bool = lua
             .load(
                 r#"
-                local short = DewHost.Text.Measure("i", 14)
-                local long = DewHost.Text.Measure("iiiiiiiiii", 14)
+                local short = dew.Text.Measure("i", 14)
+                local long = dew.Text.Measure("iiiiiiiiii", 14)
                 return long > short
             "#,
             )
@@ -890,7 +893,7 @@ mod tests {
         }
         let (lua, _clock) = vm();
         let (w, h): (f32, f32) = lua
-            .load(r#"return DewHost.Text.Measure("", 14)"#)
+            .load(r#"return dew.Text.Measure("", 14)"#)
             .eval()
             .expect("measure");
         assert_eq!(w, 0.0);
@@ -908,8 +911,8 @@ mod tests {
         let got: bool = lua
             .load(
                 r#"
-                local a, b = DewHost.Text.Measure("Dew", 18)
-                local c, d = DewHost.Text.Measure("Dew", 18)
+                local a, b = dew.Text.Measure("Dew", 18)
+                local c, d = dew.Text.Measure("Dew", 18)
                 return a == c and b == d
             "#,
             )
@@ -965,7 +968,7 @@ mod tests {
         lua.load(
             r#"
             seen = {}
-            DewHost.Clock.OnFrame(function(dt) table.insert(seen, dt) end)
+            dew.Clock.OnFrame(function(dt) table.insert(seen, dt) end)
         "#,
         )
         .exec()
@@ -984,7 +987,7 @@ mod tests {
         lua.load(
             r#"
             calls = 0
-            stop = DewHost.Clock.OnFrame(function() calls += 1 end)
+            stop = dew.Clock.OnFrame(function() calls += 1 end)
         "#,
         )
         .exec()
@@ -1011,7 +1014,7 @@ mod tests {
             r#"
             calls = 0
             local stop
-            stop = DewHost.Clock.OnFrame(function()
+            stop = dew.Clock.OnFrame(function()
                 calls += 1
                 stop()
             end)
@@ -1037,8 +1040,8 @@ mod tests {
             r#"
             second = 0
             local stopSecond
-            DewHost.Clock.OnFrame(function() stopSecond() end)
-            stopSecond = DewHost.Clock.OnFrame(function() second += 1 end)
+            dew.Clock.OnFrame(function() stopSecond() end)
+            stopSecond = dew.Clock.OnFrame(function() second += 1 end)
         "#,
         )
         .exec()
@@ -1063,10 +1066,10 @@ mod tests {
             r#"
             late = 0
             local added = false
-            DewHost.Clock.OnFrame(function()
+            dew.Clock.OnFrame(function()
                 if not added then
                     added = true
-                    DewHost.Clock.OnFrame(function() late += 1 end)
+                    dew.Clock.OnFrame(function() late += 1 end)
                 end
             end)
         "#,
@@ -1090,8 +1093,8 @@ mod tests {
             r#"
             calls = 0
             local function f() calls += 1 end
-            first = DewHost.Clock.OnFrame(f)
-            DewHost.Clock.OnFrame(f)
+            first = dew.Clock.OnFrame(f)
+            dew.Clock.OnFrame(f)
         "#,
         )
         .exec()
@@ -1111,8 +1114,8 @@ mod tests {
         lua.load(
             r#"
             order = {}
-            DewHost.Clock.OnFrame(function() table.insert(order, "a") end)
-            DewHost.Clock.OnFrame(function() table.insert(order, "b") end)
+            dew.Clock.OnFrame(function() table.insert(order, "a") end)
+            dew.Clock.OnFrame(function() table.insert(order, "b") end)
         "#,
         )
         .exec()
@@ -1130,8 +1133,8 @@ mod tests {
         lua.load(
             r#"
             reached = false
-            DewHost.Clock.OnFrame(function() error("deliberate") end)
-            DewHost.Clock.OnFrame(function() reached = true end)
+            dew.Clock.OnFrame(function() error("deliberate") end)
+            dew.Clock.OnFrame(function() reached = true end)
         "#,
         )
         .exec()
@@ -1150,7 +1153,7 @@ mod tests {
         let (lua, clock) = vm();
         assert!(clock.lock().expect("clock").idle());
 
-        lua.load("stop = DewHost.Clock.OnFrame(function() end)")
+        lua.load("stop = dew.Clock.OnFrame(function() end)")
             .exec()
             .expect("subscribe");
         assert!(!clock.lock().expect("clock").idle());
@@ -1163,12 +1166,12 @@ mod tests {
     fn now_advances_and_never_goes_backwards() {
         let (lua, clock) = vm();
         // Zero before the first frame: the clock starts when frames do.
-        let before: f64 = lua.load("return DewHost.Clock.Now()").eval().expect("now");
+        let before: f64 = lua.load("return dew.Clock.Now()").eval().expect("now");
         assert_eq!(before, 0.0);
 
         tick(&clock, 0.016);
-        let a: f64 = lua.load("return DewHost.Clock.Now()").eval().expect("now");
-        let b: f64 = lua.load("return DewHost.Clock.Now()").eval().expect("now");
+        let a: f64 = lua.load("return dew.Clock.Now()").eval().expect("now");
+        let b: f64 = lua.load("return dew.Clock.Now()").eval().expect("now");
         assert!(b >= a, "{b} < {a}");
     }
 
@@ -1180,7 +1183,7 @@ mod tests {
         // it for symmetry with the Lune host.
         let (lua, _clock) = vm();
         let got: bool = lua
-            .load("return DewHost.Clock.Step == nil")
+            .load("return dew.Clock.Step == nil")
             .eval()
             .expect("step");
         assert!(got);
@@ -1189,7 +1192,7 @@ mod tests {
     #[test]
     fn the_clock_names_itself() {
         let (lua, _clock) = vm();
-        let got: String = lua.load("return DewHost.Clock.Name").eval().expect("name");
+        let got: String = lua.load("return dew.Clock.Name").eval().expect("name");
         assert_eq!(got, "DewFrame");
     }
 }
@@ -1212,7 +1215,7 @@ mod input_is_delivered {
         lua.load(
             r#"
             seen = {}
-            DewHost.Input.InputBegan:Connect(function(input)
+            dew.Input.InputBegan:Connect(function(input)
                 table.insert(seen, {
                     kind = tostring(input.UserInputType),
                     x = input.Position.X,
@@ -1258,7 +1261,7 @@ mod input_is_delivered {
         lua.load(
             r#"
             matched = false
-            DewHost.Input.InputBegan:Connect(function(input)
+            dew.Input.InputBegan:Connect(function(input)
                 matched = input.UserInputType == Enum.UserInputType.MouseButton1
             end)
             "#,
@@ -1286,7 +1289,7 @@ mod input_is_delivered {
         lua.load(
             r#"
             calls = 0
-            connection = DewHost.Input.InputBegan:Connect(function() calls += 1 end)
+            connection = dew.Input.InputBegan:Connect(function() calls += 1 end)
             connection:Disconnect()
             "#,
         )

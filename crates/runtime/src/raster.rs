@@ -114,7 +114,7 @@ impl Painter for RasterPainter {
         //
         // It read as "no colour given, use a default" and cleared to opaque
         // black, which on a layered window is a black rectangle rather than a
-        // shaped widget — the alpha channel said 255 everywhere and the rounded
+        // shaped float — the alpha channel said 255 everywhere and the rounded
         // corners the tree drew had nothing to cut out of.
         //
         // The distinction is the whole reason the parameter is an Option: a

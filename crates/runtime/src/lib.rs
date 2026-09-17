@@ -35,7 +35,6 @@
 //! installs by name, which is the property that makes a permission model possible
 //! at all.
 
-pub mod driver;
 pub mod font;
 pub mod frame;
 pub mod modules;
@@ -47,7 +46,6 @@ pub mod raster;
 pub mod session;
 pub mod vm;
 
-pub use driver::Driver;
 pub use frame::{Bitmap, Delta, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale};
 pub use painter::Painter;
 #[cfg(feature = "raster")]

@@ -7,9 +7,10 @@
 	`game` is one in the engine this host is shaped after, and without this file
 	an editor reports "Unknown global 'dew'" on every applet.
 
-	Kept beside the host that produces it: `host/src/capabilities.rs` builds the
-	table this describes and `host/src/applets.rs` installs it. If those two and
-	this file disagree, they are wrong and this is stale.
+	Kept beside the host that produces it: `host/src/capabilities.rs` and
+	`host/src/services.rs` both add members to the table this describes, and
+	`host/src/applets.rs` installs it. If those three and this file disagree,
+	they are wrong and this is stale.
 
 	A surface returns `any` and should return `Instance`. Definition files are
 	parsed one at a time and share no types with each other, so naming `Instance`
@@ -20,7 +21,7 @@
 
 type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center"
 
-type WidgetOptions = {
+type FloatOptions = {
 	width: number?,
 	height: number?,
 	--- Defaults to "topRight". An anchor rather than coordinates, because a
@@ -40,7 +41,7 @@ type WindowOptions = {
 	title: string?,
 }
 
---- A widget the size of the desktop.
+--- A float the size of the desktop.
 ---
 --- Clicks fall through wherever nothing was painted, so the root frame must set
 --- `BackgroundTransparency = 1` or the overlay becomes a screen-sized sheet of
@@ -73,50 +74,9 @@ type Audio = {
 	chime: (name: string) -> (),
 }
 
-type Clock = {
+type Time = {
 	--- Seconds since the epoch, as a float.
 	now: () -> number,
-}
-
---- The capability table an applet is given.
----
---- EVERY FIELD BUT `time` IS OPTIONAL, and present only if `dew.toml` declared
---- the matching permission. That is the point: what an applet cannot name it
---- cannot reach, and one declaring nothing gets a table carrying only the clock.
----
---- A SURFACE IS A FUNCTION HERE, not a block an applet returns. Calling it is
---- how the applet asks, and what comes back is the root to parent into. An
---- ungranted surface is nil, so `dew.overlay{}` without the word in the manifest
---- is a nil call at the line that wanted it.
-declare dew: {
-	--- Ungated. Reading a clock discloses nothing an applet could not get by
-	--- counting frames, and gating it would put a permission in every manifest
-	--- that exists to say "this applet is allowed to know what time it is".
-	time: Clock,
-
-	--- Requires "widget". A floating, borderless, always-on-top surface, which
-	--- is what Dew is for.
-	widget: ((WidgetOptions?) -> any)?,
-
-	--- Requires "window". An ordinary window: caption, border, taskbar.
-	window: ((WindowOptions?) -> any)?,
-
-	--- Requires "overlay".
-	overlay: ((OverlayOptions?) -> any)?,
-
-	--- Requires "storage". Persists for the life of the host process; not yet
-	--- written to disk.
-	storage: Storage?,
-
-	--- Requires "clipboard".
-	clipboard: Clipboard?,
-
-	--- Requires "notifications". Prints to the host's console until there is a
-	--- tray to raise these through.
-	notifications: Notifications?,
-
-	--- Requires "audio".
-	audio: Audio?,
 }
 
 --- A signal a host fires, shaped the way the engine shapes one.
@@ -124,13 +84,39 @@ type Signal = {
 	Connect: (self: Signal, listener: (input: any) -> ()) -> { Disconnect: (self: any) -> () },
 }
 
---- What the host answers about itself, beside the capability table.
+--- Frames, for anything that has to run per frame rather than per event.
 ---
---- SEPARATE FROM `dew` BECAUSE IT IS NOT A CAPABILITY. Nothing here is granted
---- or withheld by a manifest: a clock and a pointer are what any host has, and a
---- framework reaches for them the way it reaches for the engine's own services.
-declare DewHost: {
-	--- Where the pointer is, asked of whichever host can answer.
+--- NOT `Time`. `Time.now()` is wall-clock seconds since the epoch, the way an
+--- applet would show the time of day; `Clock.Now()` is a monotonic reading
+--- since the host's first frame, for animation to subtract two of. Same shape,
+--- two different clocks, kept apart on purpose.
+type Clock = {
+	Name: string,
+	OnFrame: (listener: (dt: number) -> ()) -> () -> (),
+	Now: () -> number,
+}
+
+--- The capability table an applet is given.
+---
+--- `Time`, `Pointer`, `Input`, `Clock` and `Text` ARE NOT CAPABILITIES. Nothing
+--- here is granted or withheld by a manifest: a clock, a pointer and text
+--- metrics are what any host has, and a framework reaches for them the way it
+--- reaches for the engine's own services. Every other field is OPTIONAL, and
+--- present only if `dew.toml` declared the matching permission -- what an
+--- applet cannot name it cannot reach, and one declaring nothing still gets a
+--- table carrying the ungated members.
+---
+--- A SURFACE IS A FUNCTION HERE, not a block an applet returns. Calling it is
+--- how the applet asks, and what comes back is the root to parent into. An
+--- ungranted surface is nil, so `dew.Overlay{}` without the word in the manifest
+--- is a nil call at the line that wanted it.
+declare dew: {
+	--- Ungated. Reading a clock discloses nothing an applet could not get by
+	--- counting frames, and gating it would put a permission in every manifest
+	--- that exists to say "this applet is allowed to know what time it is".
+	Time: Time,
+
+	--- Where the pointer is, asked of whichever host can answer. Ungated.
 	Pointer: {
 		Position: () -> (number?, number?),
 		IsDown: (button: number?) -> boolean,
@@ -138,21 +124,43 @@ declare DewHost: {
 
 	--- What the host delivers through, the way the engine delivers through
 	--- `UserInputService`. A press and its release inside one frame cannot be
-	--- recovered by polling, so they arrive here.
+	--- recovered by polling, so they arrive here. Ungated.
 	Input: {
 		InputBegan: Signal,
 		InputEnded: Signal,
 		InputChanged: Signal,
 	},
 
-	--- Frames, for anything that has to run per frame rather than per event.
-	Clock: {
-		Name: string,
-		OnFrame: (listener: (dt: number) -> ()) -> () -> (),
-	},
+	--- Ungated.
+	Clock: Clock,
 
 	--- Measuring text, which needs the face the host will actually draw with.
+	--- Ungated.
 	Text: {
 		Measure: (text: string, size: number, font: string?) -> (number, number),
 	},
+
+	--- Requires "float". A floating, borderless, always-on-top surface, which
+	--- is what Dew is for.
+	Float: ((FloatOptions?) -> any)?,
+
+	--- Requires "window". An ordinary window: caption, border, taskbar.
+	Window: ((WindowOptions?) -> any)?,
+
+	--- Requires "overlay".
+	Overlay: ((OverlayOptions?) -> any)?,
+
+	--- Requires "storage". Persists for the life of the host process; not yet
+	--- written to disk.
+	Storage: Storage?,
+
+	--- Requires "clipboard".
+	Clipboard: Clipboard?,
+
+	--- Requires "notifications". Prints to the host's console until there is a
+	--- tray to raise these through.
+	Notifications: Notifications?,
+
+	--- Requires "audio".
+	Audio: Audio?,
 }

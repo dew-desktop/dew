@@ -564,7 +564,7 @@ pub extern "C" fn ar_begin(ptr: *mut Surface, r: u8, g: u8, b: u8) {
 /// Start a frame on a background that is not opaque.
 ///
 /// `a` of 0 clears to nothing at all, which is what a LAYERED window wants: the
-/// desktop shows through wherever the widget did not paint, and the rounded
+/// desktop shows through wherever the float did not paint, and the rounded
 /// corners and soft edges the tree draws become the window's real silhouette
 /// rather than a shape cut out of a rectangle of background colour.
 ///
@@ -656,7 +656,7 @@ pub extern "C" fn ar_begin_rect(
 /// The same, on a background that is not opaque.
 ///
 /// A LAYERED SURFACE NEEDS THIS. Clearing the damaged region to opaque black
-/// would repaint a black rectangle over the desktop wherever a widget moved
+/// would repaint a black rectangle over the desktop wherever a float moved
 /// away from — the region has to be cleared to NOTHING for the pixels the tree
 /// no longer covers to become pixels the window no longer occupies.
 #[no_mangle]
@@ -1618,7 +1618,7 @@ pub extern "C" fn ar_bgra(ptr: *mut Surface) -> *const u8 {
     // window consumes, so the alpha is carried through rather than forced to 255.
     // For an opaque surface every pixel is already 255 and this is identical to
     // what it replaced; for a transparent one it is the difference between a
-    // widget with a real silhouette and a rectangle.
+    // float with a real silhouette and a rectangle.
     let src: &[u8] = if *which == Which::VelloCpu {
         match vello.as_ref() {
             Some(v) => v.pixmap.data_as_u8_slice(),

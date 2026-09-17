@@ -14,12 +14,12 @@
 ]]
 
 --- `dew` is a global, and it carries exactly the capabilities `dew.toml`
---- granted. `dew.widget` is nil unless the manifest asked for `widget`, so this
+--- granted. `dew.Float` is nil unless the manifest asked for `float`, so this
 --- line turns a missing permission into a sentence naming the word to add.
-local widget = assert(dew.widget, "dew.toml must grant `widget`")
+local float = assert(dew.Float, "dew.toml must grant `float`")
 
 --- Opening the surface hands back the instance to build under.
-local root = widget({
+local root = float({
 	width = 260,
 	height = 120,
 	--- Corner of the screen to sit in, and how far in from it.

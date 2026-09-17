@@ -32,13 +32,13 @@ end
 
 local WIDTH, HEIGHT = 380, 56
 
---- A floating widget: no chrome, always on top, out of the taskbar, and shaped
+--- A floating surface: no chrome, always on top, out of the taskbar, and shaped
 --- by its own alpha, so the rounded card below is the window's real silhouette
 --- rather than a shape drawn on a dark rectangle.
 ---
 --- `clickThrough` stays false because the START button is a control.
-local widget = assert(dew.widget, "dew.toml must grant `widget`")
-local root = widget({
+local float = assert(dew.Float, "dew.toml must grant `float`")
+local root = float({
 	width = WIDTH,
 	height = HEIGHT,
 	anchor = "topRight",
@@ -71,11 +71,11 @@ local function build()
 		local function toggle()
 			local running = not isRunning()
 			isRunning(running)
-			if dew.audio then
-				dew.audio.chime(if running then "tick" else "subtle")
+			if dew.Audio then
+				dew.Audio.chime(if running then "tick" else "subtle")
 			end
-			if dew.notifications then
-				dew.notifications.show(
+			if dew.Notifications then
+				dew.Notifications.show(
 					if running then `Started: {task()}` else `Paused: {task()} ({display()})`
 				)
 			end
@@ -92,9 +92,9 @@ local function build()
 		--- `Live.Session` already steps it once per frame — so this is the engine's
 		--- own frame signal on both hosts rather than a Dew convention.
 		local clock = Aether.Host.detect().Clock
-		local lastTick = dew.time.now()
+		local lastTick = dew.Time.now()
 		clock.OnFrame(function()
-			local now = dew.time.now()
+			local now = dew.Time.now()
 			if isRunning() then
 				elapsed(elapsed() + (now - lastTick))
 			end
