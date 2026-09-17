@@ -26,6 +26,8 @@ mod coordinator;
 #[cfg(windows)]
 mod installed;
 #[cfg(windows)]
+mod manage;
+#[cfg(windows)]
 mod package;
 #[cfg(windows)]
 mod positions;

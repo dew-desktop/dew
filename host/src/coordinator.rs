@@ -226,11 +226,27 @@ fn spawn_pipe_server(tx: mpsc::Sender<PathBuf>) {
     });
 }
 
-/// Answer `query_running` calls forever. `running` is read fresh on every
-/// request rather than owned by this thread, because the set of loaded
-/// applet ids changes on the coordinator's own thread and this is the only
-/// other thread that needs to see it.
-fn spawn_query_server(running: Arc<Mutex<HashSet<String>>>) {
+/// The manifest ids of every applet this coordinator currently has loaded.
+/// Written by `sync_running` whenever the registry changes, and read by
+/// `query_running`'s pipe server, and by `manage.rs`'s management window on
+/// its own thread -- both need the same fact and neither is the coordinator
+/// thread that actually knows it first-hand.
+static RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+/// The manifest ids currently running under this coordinator, as of the last
+/// registry change. Read by the management window to decide whether toggling
+/// an entry on or off is a live spawn/unload or just a disk write.
+pub fn running_snapshot() -> HashSet<String> {
+    RUNNING
+        .lock()
+        .map(|guard| guard.iter().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Answer `query_running` calls forever, from `RUNNING` rather than anything
+/// passed in -- the set of loaded applet ids changes on the coordinator's own
+/// thread and this is only ever a reader of it.
+fn spawn_query_server() {
     thread::spawn(move || loop {
         let name = wide(QUERY_PIPE_NAME);
         let handle = unsafe {
@@ -258,7 +274,10 @@ fn spawn_query_server(running: Arc<Mutex<HashSet<String>>>) {
             let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
             if got.is_ok() && read > 0 {
                 if let Ok(id) = std::str::from_utf8(&buf[..read as usize]) {
-                    let is_running = running.lock().map(|set| set.contains(id)).unwrap_or(false);
+                    let is_running = RUNNING
+                        .lock()
+                        .map(|list| list.iter().any(|running_id| running_id == id))
+                        .unwrap_or(false);
                     let response: &[u8] = if is_running { b"1" } else { b"0" };
                     let _ = unsafe { WriteFile(handle, Some(response), None, None) };
                 }
@@ -351,16 +370,13 @@ fn sync_tray(registry: &std::collections::HashMap<u32, Loaded>) {
     crate::tray::set_applets(list);
 }
 
-/// Refresh the set `query_running` answers from, after the registry changes.
-fn sync_running(
-    registry: &std::collections::HashMap<u32, Loaded>,
-    running: &Arc<Mutex<HashSet<String>>>,
-) {
-    let ids: HashSet<String> = registry
+/// Refresh `RUNNING` after the registry changes.
+fn sync_running(registry: &std::collections::HashMap<u32, Loaded>) {
+    let ids: Vec<String> = registry
         .values()
         .filter_map(|a| a.applet_id.clone())
         .collect();
-    if let Ok(mut guard) = running.lock() {
+    if let Ok(mut guard) = RUNNING.lock() {
         *guard = ids;
     }
 }
@@ -375,13 +391,11 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
     let (load_tx, load_rx) = mpsc::channel::<PathBuf>();
     spawn_pipe_server(load_tx);
 
-    let running: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
-    spawn_query_server(Arc::clone(&running));
+    spawn_query_server();
 
     // A TRAY THAT FAILS TO CREATE DOES NOT STOP THE SERVICE. `crate::run_applet`
     // used to make the same choice for the single-applet tray it created;
-    // the coordinator's one tray inherits it; a `Manage applets` window is
-    // sprint 3's answer to reaching settings without one at all.
+    // the coordinator's one tray inherits it.
     let _tray = match crate::tray::Tray::new(
         crate::icon_path().as_deref(),
         "Dew — a desktop applet platform",
@@ -424,7 +438,7 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
     }
 
     sync_tray(&registry);
-    sync_running(&registry, &running);
+    sync_running(&registry);
 
     // THE TRAY'S OWN PUMP, ON THIS THREAD. `Tray::new` created a message-only
     // window here, on the coordinator thread, and a window's messages are
@@ -460,9 +474,25 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
             }
         }
 
+        // THE MANAGE-APPLETS WINDOW'S OWN TWO QUEUES, drained the same way as
+        // the tray's -- see `manage.rs` for why toggling a row there never
+        // spawns or closes an applet directly.
+        for dir in crate::manage::take_load_requests() {
+            spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
+            next_id += 1;
+            changed = true;
+        }
+        for applet_id in crate::manage::take_unload_requests() {
+            for loaded in registry.values() {
+                if loaded.applet_id.as_deref() == Some(applet_id.as_str()) {
+                    loaded.close.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+
         if changed {
             sync_tray(&registry);
-            sync_running(&registry, &running);
+            sync_running(&registry);
         }
 
         if crate::tray::exit_requested() {
