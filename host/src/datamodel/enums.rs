@@ -43,14 +43,21 @@ pub struct LuaEnumCategory {
 #[derive(Clone, Copy)]
 pub struct LuaEnums;
 
-fn database() -> LuaResult<&'static rbx_reflection::ReflectionDatabase<'static>> {
-    rbx_reflection_database::get()
-        .map_err(|e| LuaError::runtime(format!("the reflection database is unavailable: {e}")))
-}
-
 /// The descriptor for one enum, by name.
+///
+/// THE ONE PLACE EVERY LOOKUP IN THIS FILE FUNNELS THROUGH, which is why
+/// `super::extensions` needs touching here and nowhere else: `item_by_value`,
+/// `item_by_name`, `value_is_valid`, `LuaEnumCategory`'s `__index` and
+/// `GetEnumItems` all call this rather than the reflection database
+/// directly, so a synthesized enum (invisible unless its tier says so) is
+/// visible to all of them the moment it is visible here.
 fn category(name: &str) -> Option<&'static rbx_reflection::EnumDescriptor<'static>> {
-    rbx_reflection_database::get().ok()?.enums.get(name)
+    if let Ok(db) = rbx_reflection_database::get() {
+        if let Some(descriptor) = db.enums.get(name) {
+            return Some(descriptor);
+        }
+    }
+    super::extensions::describe_enum(name)
 }
 
 /// The member of `ty` with this value, if the value is one this enum has.
@@ -200,9 +207,15 @@ impl UserData for LuaEnums {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::ToString, |_, _, ()| Ok("Enums"));
         methods.add_meta_method(MetaMethod::Index, |lua, _, key: String| {
-            let db = database()?;
-            match db.enums.get_key_value(key.as_str()) {
-                Some((name, _)) => LuaEnumCategory { name }.into_lua(lua),
+            // THROUGH `category`, NOT THE DATABASE DIRECTLY, so a future
+            // synthesized enum resolves here on the same terms as
+            // `Enum.AutomaticSize` once its flag is enabled -- see
+            // `category`'s own comment.
+            match category(key.as_str()) {
+                Some(descriptor) => LuaEnumCategory {
+                    name: descriptor.name,
+                }
+                .into_lua(lua),
                 None => Err(LuaError::runtime(format!("Enum.{key} does not exist"))),
             }
         });

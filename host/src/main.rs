@@ -475,6 +475,12 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     };
     let vm = dew_runtime::Vm::new(caps).map_err(|e| e.to_string())?;
 
+    // NO MANIFEST HERE, SO NO EXPERIMENTAL SURFACE. Cleared rather than left
+    // alone, because this thread may have run a mod with flags enabled a
+    // moment earlier -- the thread-local `extensions` state is per-thread,
+    // not per-call, and a standalone script never gets to opt into anything.
+    datamodel::extensions::set_enabled_flags(&[]);
+
     let dom = datamodel::SharedDom::default();
     // `mod://` RESOLVES BESIDE THE SCRIPT, which is the same directory the
     // requirer was just given. A standalone script has no mod directory and no
@@ -1564,6 +1570,15 @@ fn run_applet(
 
 fn check_mod_dir(dir: &Path) -> Result<(manifest::Manifest, PathBuf, Vec<String>), String> {
     let manifest = manifest::Manifest::load(dir)?;
+
+    // SAME RESOLUTION `applets::load` DOES, so a bad `experimentalDatamodel`
+    // entry is caught by `dew check` rather than only at the moment an author
+    // tries to run the mod. Printed unconditionally, like every other run of
+    // this registry -- `dew check` is a run too.
+    let declared_flags = manifest.experimental_flags()?;
+    let effective_flags = datamodel::extensions::effective_flags(&declared_flags);
+    datamodel::extensions::print_effective(&effective_flags);
+
     let entry = manifest
         .entry(dir)
         .ok_or_else(|| format!("{}: no {}.luau or main.luau", dir.display(), manifest.id))?;

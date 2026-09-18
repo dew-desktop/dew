@@ -159,6 +159,14 @@ pub struct Manifest {
     #[serde(default)]
     pub hotkeys: BTreeMap<String, String>,
 
+    /// `"Class.Property"` entries this mod wants unlocked, e.g.
+    /// `["SomeClass.SomeProperty"]`. Each must name a real `Tier::Experimental`
+    /// property in `datamodel::extensions::PROPERTIES` -- see
+    /// `experimental_flags`, which is what actually resolves and validates
+    /// this list.
+    #[serde(default, rename = "experimentalDatamodel")]
+    pub experimental_datamodel: Vec<String>,
+
     /// Keys in `dew.toml` that this struct does not model.
     ///
     /// Serde drops an unknown key without a word, which is how `timetracker`'s
@@ -182,6 +190,7 @@ const KNOWN: &[&str] = &[
     "runtime",
     "permissions",
     "hotkeys",
+    "experimentalDatamodel",
 ];
 
 impl Manifest {
@@ -247,6 +256,29 @@ impl Manifest {
         } else {
             &self.name
         }
+    }
+
+    /// Resolve `experimentalDatamodel` against the registry, deduplicated.
+    ///
+    /// REFUSES TO LOAD ON AN UNKNOWN ENTRY rather than ignoring it, the same
+    /// choice `Permission` and `Runtime` already make for an unknown value --
+    /// a typo or a feature that graduated out of this registry must be caught
+    /// here, not discovered later as a property that silently never unlocks.
+    pub fn experimental_flags(&self) -> Result<Vec<(&'static str, u32)>, String> {
+        let mut flags: Vec<(&'static str, u32)> = Vec::new();
+        for key in &self.experimental_datamodel {
+            let Some(flag) = crate::datamodel::extensions::flag_for(key) else {
+                return Err(format!(
+                    "{}: experimentalDatamodel declares {key:?}, which is not a known \
+                     experimental property",
+                    self.id
+                ));
+            };
+            if !flags.contains(&flag) {
+                flags.push(flag);
+            }
+        }
+        Ok(flags)
     }
 
     /// The module implementing this mod: `<dir>/<id>.luau`, else `<dir>/main.luau`.
@@ -343,5 +375,39 @@ mod tests {
     #[test]
     fn a_leading_bom_still_parses() {
         assert_eq!(parse("\u{feff}id = \"t\"\n").id, "t");
+    }
+
+    #[test]
+    fn experimental_datamodel_is_read_rather_than_reported_unknown() {
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"InputActionLabel.InputAction\"]\n");
+        assert_eq!(
+            m.experimental_datamodel,
+            vec!["InputActionLabel.InputAction"]
+        );
+        assert!(m.unknown.is_empty());
+    }
+
+    /// A REAL PROPERTY, BUT NOT AN EXPERIMENTAL ONE. `InputActionLabel.InputAction`
+    /// is a genuine row in the registry, and is still refused here: it is
+    /// `Tier::DewOnly`, always on, with no flag to resolve to -- declaring it
+    /// experimental would ask for a flag that does not exist.
+    #[test]
+    fn a_dew_only_entry_cannot_be_declared_experimental() {
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"InputActionLabel.InputAction\"]\n");
+        let err = m.experimental_flags().unwrap_err();
+        assert!(err.contains("InputActionLabel.InputAction"), "{err}");
+    }
+
+    #[test]
+    fn an_unknown_experimental_entry_is_refused_rather_than_ignored() {
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"NotAThing.Nope\"]\n");
+        let err = m.experimental_flags().unwrap_err();
+        assert!(err.contains("NotAThing.Nope"), "{err}");
+    }
+
+    #[test]
+    fn no_experimental_declaration_resolves_to_no_flags() {
+        let m = parse("id = \"t\"\n");
+        assert!(m.experimental_flags().unwrap().is_empty());
     }
 }
