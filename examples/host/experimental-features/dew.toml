@@ -1,0 +1,20 @@
+# Experimental Features
+#
+# Unlocks GuiObject.BlendingMode, an experimental Dew extension with no
+# Roblox equivalent, and shows what each of its three modes looks like.
+
+id = "experimental-features"
+name = "Experimental Features"
+description = "GuiObject.BlendingMode: Alpha, Additive and Multiply side by side"
+
+# Which runtime `mount` is written against. This one uses the DataModel
+# directly and imports nothing.
+runtime = "datamodel"
+
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `dew.Widget` on the table.
+permissions = ["widget"]
+
+# THE ONE LINE THAT UNLOCKS THE PROPERTY. Without it, `BlendingMode` is not a
+# valid member of `GuiObject` and setting it refuses to load -- see
+# `dew_host::datamodel::extensions` for what the registry and the flag mean.
+experimentalDatamodel = ["GuiObject.BlendingMode"]

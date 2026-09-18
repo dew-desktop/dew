@@ -12,7 +12,7 @@
 //! A windowed painter reuses the same node traversal from `painter.rs` and swaps
 //! only how the canvas is obtained and presented.
 
-use crate::frame::{Align, Delta, Gradient, Image, Node, Rect, Rgb};
+use crate::frame::{Align, BlendMode, Delta, Gradient, Image, Node, Rect, Rgb};
 use crate::painter::Painter;
 use dew_raster::{Backend, Bitmap, Canvas, Font};
 use std::collections::HashMap;
@@ -108,6 +108,18 @@ fn rgba(c: Rgb, alpha: f32) -> (u8, u8, u8, u8) {
     (c.0, c.1, c.2, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
+/// [`BlendMode`] as the small integer `dew_raster`'s ABI reads, matching
+/// `tiny_skia::BlendMode`'s own numbering closely enough to be readable but
+/// defined here rather than borrowed from it -- this crate has no reason to
+/// know tiny-skia's discriminants, only the rasteriser's.
+fn blend_code(blend: BlendMode) -> u8 {
+    match blend {
+        BlendMode::Alpha => 0,
+        BlendMode::Additive => 1,
+        BlendMode::Multiply => 2,
+    }
+}
+
 /// Break `text` into the lines `TextWrapped` paints, against the same face
 /// `fill_text` draws with -- measurement and painting share `font.width`
 /// rather than a second guess at glyph advances, for the reason `dew_raster`
@@ -189,9 +201,23 @@ impl Painter for RasterPainter {
         }
     }
 
-    fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, colour: Rgb, alpha: f32) {
-        self.canvas
-            .fill_rect(rect.x, rect.y, rect.w, rect.h, radius, rgba(colour, alpha));
+    fn fill_rounded_rect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        colour: Rgb,
+        alpha: f32,
+        blend: BlendMode,
+    ) {
+        self.canvas.fill_rect(
+            rect.x,
+            rect.y,
+            rect.w,
+            rect.h,
+            radius,
+            rgba(colour, alpha),
+            blend_code(blend),
+        );
     }
 
     fn stroke_rounded_rect(
@@ -329,7 +355,7 @@ impl Painter for RasterPainter {
 
         if stops.is_empty() {
             if let Some(colour) = fallback {
-                self.fill_rounded_rect(rect, radius, colour, alpha);
+                self.fill_rounded_rect(rect, radius, colour, alpha, BlendMode::Alpha);
             }
             return;
         }

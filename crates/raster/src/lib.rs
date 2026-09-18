@@ -51,7 +51,8 @@ use vello_cpu::kurbo::{
     BezPath, Point as VPoint, Rect as VRect, RoundedRect, Shape, Stroke as VStroke,
 };
 use vello_cpu::peniko::{
-    ColorStop, Extend as VExtend, Gradient as VGradient, ImageQuality, ImageSampler,
+    BlendMode as VBlendMode, ColorStop, Compose as VCompose, Extend as VExtend,
+    Gradient as VGradient, ImageQuality, ImageSampler, Mix as VMix,
 };
 use vello_cpu::{
     CompositeMode, Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap,
@@ -332,6 +333,36 @@ pub struct Surface {
     /// BGRA scratch for the blit. Windows DIBs are BGRA; tiny-skia is RGBA. Kept
     /// here so the caller gets a stable pointer and we do not allocate per frame.
     bgra: Vec<u8>,
+}
+
+/// `ar_fill_rect`'s `blend` parameter, translated to the real
+/// `tiny_skia::BlendMode` it means: 0 for normal ("source over") compositing,
+/// 1 for additive (`Plus`), 2 for multiply. A PLAIN INTEGER AT THE ABI
+/// BOUNDARY, matching every other value this file passes across it (colour
+/// channels, gradient kind); an unrecognised code falls back to normal rather
+/// than panicking, the same tolerance `poisoned` gives an unknown gate name.
+fn blend_mode_of(blend: u8) -> tiny_skia::BlendMode {
+    match blend {
+        1 => tiny_skia::BlendMode::Plus,
+        2 => tiny_skia::BlendMode::Multiply,
+        _ => tiny_skia::BlendMode::SourceOver,
+    }
+}
+
+/// The same translation for the vello_cpu backend, which is a separate crate
+/// with its own blend type (`Mix` combined with `Compose`) rather than
+/// tiny-skia's flat enum. `dew snapshot` and every example render THROUGH
+/// THIS BRANCH, not tiny-skia's -- vello_cpu is the only backend with text, so
+/// it is the one every real applet uses (`RasterPainter::with_font` requires
+/// it). A blend implementation that only reached `blend_mode_of` above would
+/// compile, pass a tiny-skia-only unit test, and still paint every real
+/// applet identically regardless of `BlendingMode`.
+fn vello_blend_mode_of(blend: u8) -> VBlendMode {
+    match blend {
+        1 => VBlendMode::new(VMix::Normal, VCompose::Plus),
+        2 => VBlendMode::new(VMix::Multiply, VCompose::SrcOver),
+        _ => VBlendMode::default(),
+    }
 }
 
 fn rounded_path(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<tiny_skia::Path> {
@@ -752,6 +783,7 @@ pub extern "C" fn ar_fill_rect(
     g: u8,
     b: u8,
     alpha: u8,
+    blend: u8,
 ) {
     let s = match unsafe { ptr.as_mut() } {
         Some(s) => s,
@@ -769,9 +801,15 @@ pub extern "C" fn ar_fill_rect(
     if s.which == Which::VelloCpu {
         if let Some(path) = Surface::vello_path(x, y, w, h, radius) {
             if let Some(v) = s.vello.as_mut() {
+                v.ctx.set_blend_mode(vello_blend_mode_of(blend));
                 v.ctx
                     .set_paint(AlphaColor::<Srgb>::from_rgba8(r, g, b, alpha));
                 v.ctx.fill_path(&path);
+                // BACK TO NORMAL, or the next fill on this context silently
+                // inherits it -- the same trap the gradient fills below reset
+                // their paint for, and the reason `blend` is not simply left
+                // set for the rest of the frame.
+                v.ctx.set_blend_mode(VBlendMode::default());
             }
         }
         return;
@@ -780,6 +818,11 @@ pub extern "C" fn ar_fill_rect(
     let mut paint = Paint::default();
     paint.set_color_rgba8(r, g, b, alpha);
     paint.anti_alias = true;
+    // 0 IS NORMAL COMPOSITING and everything that painted before this
+    // parameter existed still gets exactly `Paint::default()`'s
+    // `BlendMode::SourceOver` -- see `blend_mode_of`'s doc comment on which
+    // integer means what.
+    paint.blend_mode = blend_mode_of(blend);
 
     let cuts = s.clip_cuts(x, y, w, h, 0.0);
     if cuts {
@@ -1019,6 +1062,7 @@ pub extern "C" fn ar_fill_gradient(
                 raw[2] as u8,
                 raw[3] as u8,
                 raw[4] as u8,
+                0,
             );
             return;
         }
@@ -1137,6 +1181,7 @@ pub extern "C" fn ar_fill_radial_gradient(
                 raw[2] as u8,
                 raw[3] as u8,
                 raw[4] as u8,
+                0,
             );
             return;
         }
@@ -1175,6 +1220,7 @@ pub extern "C" fn ar_fill_radial_gradient(
                 raw[2] as u8,
                 raw[3] as u8,
                 raw[4] as u8,
+                0,
             );
             return;
         }
@@ -2474,7 +2520,7 @@ mod tests {
             let s = ar_surface_new_backend(64, 64, backend);
             assert!(!s.is_null(), "backend {backend} did not allocate");
             ar_begin(s, 11, 13, 18);
-            ar_fill_rect(s, 8.0, 8.0, 40.0, 40.0, 0.0, 200, 100, 50, 255);
+            ar_fill_rect(s, 8.0, 8.0, 40.0, 40.0, 0.0, 200, 100, 50, 255, 0);
             let inside = ar_pixel(s, 24, 24);
             let outside = ar_pixel(s, 2, 2);
             ar_surface_free(s);
@@ -2485,6 +2531,51 @@ mod tests {
             assert_eq!(
                 outside, 0x000B_0D12,
                 "backend {backend}: the background should be (11,13,18), got {outside:#08x}"
+            );
+        }
+    }
+
+    /// A GENUINE PIXEL DIFFERENCE, NOT JUST "DID NOT CRASH". Red painted first,
+    /// then opaque green over it with each blend mode: normal compositing
+    /// discards the backdrop entirely (green wins outright), additive sums the
+    /// channels (yellow, since red and green add), and multiply combines them
+    /// toward black (every channel pairs a zero with a non-zero). Three
+    /// different colours out of the same two input fills is what proves the
+    /// mode actually reached the backend's paint, rather than merely
+    /// compiling.
+    ///
+    /// BOTH BACKENDS, not just tiny-skia. `dew snapshot` and every real applet
+    /// render through `Backend::VelloCpu` -- it is the only one with text --
+    /// so a blend implementation that only reached tiny-skia would pass this
+    /// test on backend 0 and still paint every real applet identically
+    /// regardless of `BlendingMode`. See `vello_blend_mode_of`'s doc comment.
+    #[test]
+    fn fill_rect_blend_modes_produce_different_overlap_pixels() {
+        for backend in [0u32, 1u32] {
+            let paint_with = |blend: u8| {
+                let s = ar_surface_new_backend(32, 32, backend);
+                ar_begin(s, 0, 0, 0);
+                ar_fill_rect(s, 0.0, 0.0, 32.0, 32.0, 0.0, 200, 0, 0, 255, 0);
+                ar_fill_rect(s, 0.0, 0.0, 32.0, 32.0, 0.0, 0, 200, 0, 255, blend);
+                let px = ar_pixel(s, 16, 16);
+                ar_surface_free(s);
+                px
+            };
+            let alpha = paint_with(0);
+            let additive = paint_with(1);
+            let multiply = paint_with(2);
+
+            assert_eq!(
+                alpha, 0x0000_C800,
+                "backend {backend} normal: green wins outright, got {alpha:#08x}"
+            );
+            assert_eq!(
+                additive, 0x00C8_C800,
+                "backend {backend} additive: red and green channels sum to yellow, got {additive:#08x}"
+            );
+            assert_eq!(
+                multiply, 0x0000_0000,
+                "backend {backend} multiply: every channel pairs a zero, so the result is black, got {multiply:#08x}"
             );
         }
     }

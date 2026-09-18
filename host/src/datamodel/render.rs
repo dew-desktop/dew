@@ -49,7 +49,8 @@
 //! So: enough to put a real tree on screen, and no claim beyond that.
 
 use dew_runtime::frame::{
-    Align, AlphaStop, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale, Stop, Stroke,
+    Align, AlphaStop, BlendMode, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale,
+    Stop, Stroke,
 };
 use rbx_types::{Variant, Vector2};
 use std::collections::HashMap;
@@ -375,6 +376,23 @@ fn stroke_of(dom: &Dom, id: usize) -> Option<Stroke> {
         }
     }
     None
+}
+
+/// `GuiObject.BlendingMode`, an experimental Dew extension
+/// (`datamodel::extensions`) with no Roblox equivalent -- see that module for
+/// why. Reading it needs no flag check of its own: the property does not
+/// exist on `dom` at all until `FFlagDewGuiObjectBlendingMode` is enabled for
+/// this applet, so `dom.property` answers `None` and every node keeps the
+/// ordinary `Alpha` compositing it always had.
+fn blend_mode_of(dom: &Dom, id: usize) -> BlendMode {
+    match dom.property(id, "BlendingMode") {
+        Some(Variant::Enum(raw)) => match raw.to_u32() {
+            1 => BlendMode::Additive,
+            2 => BlendMode::Multiply,
+            _ => BlendMode::Alpha,
+        },
+        _ => BlendMode::Alpha,
+    }
 }
 
 fn gradient_kind(dom: &Dom, id: usize) -> GradientKind {
@@ -1354,6 +1372,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
                 .clamp(0.0, 1.0),
         text_wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
         image,
+        blend_mode: blend_mode_of(dom, id),
     }
 }
 

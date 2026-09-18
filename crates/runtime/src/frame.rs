@@ -74,6 +74,26 @@ pub enum GradientKind {
     Radial,
 }
 
+/// How a node's own paint combines with whatever is already on the surface
+/// beneath it.
+///
+/// HOST FIELD, LIKE `image` -- see [`Frame::HOST_FIELDS`]. Dew's own DataModel
+/// reads `GuiObject.BlendingMode`, an experimental Dew extension with no
+/// Roblox equivalent (`dew_host::datamodel::extensions`), and converts it to
+/// this three-member enum in `render.rs`; Live.luau emits no matching key, so
+/// a display list built in Luau always paints `Alpha`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlendMode {
+    /// Ordinary "paint over" compositing -- what every node did before this
+    /// existed, and what a node with no opinion still does.
+    #[default]
+    Alpha,
+    /// Colours add: overlapping paint brightens and can saturate to white.
+    Additive,
+    /// Colours multiply: overlapping paint darkens toward black.
+    Multiply,
+}
+
 /// A UIGradient.
 ///
 /// `stops` is a COLOUR ramp and `alpha_stops` an ALPHA ramp, and a gradient may
@@ -339,6 +359,11 @@ pub struct Node {
     /// see [`Frame::HOST_FIELDS`]. Pixels do not travel through a display-list
     /// table, so a host that resolves an asset itself builds this directly.
     pub image: Option<Image>,
+    /// How this node's own fill composites over what is already painted.
+    ///
+    /// NOT DECODED FROM LUA, like `image` -- see [`BlendMode`] and
+    /// [`Frame::HOST_FIELDS`].
+    pub blend_mode: BlendMode,
 }
 
 #[derive(Debug, Clone)]
@@ -404,7 +429,7 @@ impl Frame {
     ///
     /// `text_wrap` IS HERE FOR A DIFFERENT REASON: it CAN be emitted from Lua in
     /// principle, and simply is not yet -- see its doc comment on `Node`.
-    pub const HOST_FIELDS: &'static [&'static str] = &["image", "text_wrap"];
+    pub const HOST_FIELDS: &'static [&'static str] = &["image", "text_wrap", "blend_mode"];
 }
 
 /// What changed since the last delta.
@@ -516,6 +541,8 @@ impl Node {
             image: None,
             // NOT READ FROM THE TABLE EITHER, for now -- see `Node::text_wrap`.
             text_wrap: false,
+            // NOR THIS -- see `BlendMode`'s own doc comment.
+            blend_mode: BlendMode::Alpha,
         })
     }
 }
@@ -621,6 +648,7 @@ mod tests {
             text_alpha: 1.0,
             image: None,
             text_wrap: false,
+            blend_mode: BlendMode::Alpha,
         };
         let Node {
             id: _,
@@ -641,6 +669,7 @@ mod tests {
             text_alpha: _,
             image: _,
             text_wrap: _,
+            blend_mode: _,
         } = node;
 
         // `rect` is four keys and the rest are one each; the names are Live.luau's
@@ -667,6 +696,7 @@ mod tests {
             "textAlpha",
             "image",
             "text_wrap",
+            "blend_mode",
         ];
         for key in named {
             assert!(

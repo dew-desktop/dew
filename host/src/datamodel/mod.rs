@@ -1935,4 +1935,51 @@ mod tests {
         .expect("eval");
         assert_eq!(got, "Interact");
     }
+
+    /// PROVES THE ANCESTOR WALK, NOT JUST THE REGISTRY ROW. `BlendingMode` is
+    /// declared on `GuiObject`, and nothing inherits `GuiObject` directly --
+    /// `describe`/`default_for` must climb from the CONCRETE class a guest
+    /// actually instantiates. Two unrelated descendants, not one, because a
+    /// walk that happens to work for `Frame` alone would not prove the climb
+    /// is real rather than a coincidence of `Frame` being the first class the
+    /// reflection database's superclass chain reaches.
+    #[test]
+    fn blending_mode_resolves_through_two_different_guiobject_descendants() {
+        // RESET BEFORE `expect`, NOT AFTER: the flag is thread-local and this
+        // test's worker thread is reused by later tests, so a panic on the
+        // `expect` below must not leave it enabled for whichever test runs
+        // next on the same thread.
+        extensions::set_enabled_flags(&[("FFlagDewGuiObjectBlendingMode", 1)]);
+        let result: LuaResult<Vec<String>> = eval(
+            r#"
+            local frame = Instance.new("Frame")
+            frame.BlendingMode = Enum.BlendMode.Additive
+            local button = Instance.new("TextButton")
+            button.BlendingMode = Enum.BlendMode.Multiply
+            return { tostring(frame.BlendingMode), tostring(button.BlendingMode) }
+        "#,
+        );
+        extensions::set_enabled_flags(&[]);
+        assert_eq!(
+            result.expect("eval"),
+            vec!["Enum.BlendMode.Additive", "Enum.BlendMode.Multiply"]
+        );
+    }
+
+    /// THE GATE ITSELF, on the same property. Unflagged, `BlendingMode` is not
+    /// a member of `GuiObject` at all -- not merely stuck at its default.
+    ///
+    /// ASSIGNED A PLAIN NUMBER, NOT `Enum.BlendMode.Additive`: unflagged, the
+    /// enum category itself does not exist either, and referencing it would
+    /// fail on `Enum.BlendMode` before the property assignment this test is
+    /// actually about ever ran.
+    #[test]
+    fn blending_mode_is_not_a_member_of_frame_without_its_flag() {
+        extensions::set_enabled_flags(&[]);
+        let err = run(r#"Instance.new("Frame").BlendingMode = 0"#)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("BlendingMode"), "{err}");
+        assert!(err.contains("not a valid member"), "{err}");
+    }
 }
