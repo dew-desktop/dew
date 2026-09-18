@@ -403,6 +403,15 @@ jobs:
       - name: Lint, with warnings treated as errors
         run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
 
+      # `types/datamodel.d.luau` IS GENERATED, matching the discipline
+      # `docs/datamodel_scope.md` already asks for in its own header comment.
+      # `--check` regenerates into memory and diffs against the checked-in
+      # file without writing, so a PR that changes `extensions.rs` or lands on
+      # a newer `rbx_reflection_database` without regenerating fails here
+      # instead of silently going stale.
+      - name: Check the generated DataModel editor types are current
+        run: cargo run --manifest-path host/Cargo.toml --bin generate-datamodel-types -- --check
+
   linux:
     name: Linux, build and render headlessly
     runs-on: ubuntu-latest
