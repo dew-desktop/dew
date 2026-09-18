@@ -18,7 +18,7 @@
 #![cfg(feature = "raster")]
 
 use dew_raster::{Backend, Canvas};
-use dew_runtime::frame::{Bitmap, Image, Scale};
+use dew_runtime::frame::{Bitmap, BlendMode, Image, Scale};
 use dew_runtime::{Frame, Node, Painter, RasterPainter, Rect, Rgb};
 use std::sync::Arc;
 
@@ -72,6 +72,7 @@ fn node(image: Option<Image>) -> Node {
         text_alpha: 1.0,
         image,
         text_wrap: false,
+        blend_mode: BlendMode::Alpha,
     }
 }
 
@@ -262,7 +263,7 @@ struct Bare {
 
 impl Painter for Bare {
     fn begin(&mut self, _: f32, _: f32, _: Option<Rgb>) {}
-    fn fill_rounded_rect(&mut self, rect: Rect, _: f32, colour: Rgb, alpha: f32) {
+    fn fill_rounded_rect(&mut self, rect: Rect, _: f32, colour: Rgb, alpha: f32, _: BlendMode) {
         self.fills.push((rect, colour, alpha));
     }
     fn stroke_rounded_rect(&mut self, _: Rect, _: f32, _: f32, _: Rgb, _: f32) {
@@ -387,6 +388,7 @@ fn a_rounded_clip_masks_the_corner_and_keeps_the_middle() {
         text_alpha: 1.0,
         image: None,
         text_wrap: false,
+        blend_mode: BlendMode::Alpha,
     };
     let mut painter = painted(bar);
     let canvas = painter.canvas_mut();

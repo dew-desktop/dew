@@ -11,7 +11,7 @@
 //! DirectComposition for per-pixel window transparency changes how a painter is
 //! CONSTRUCTED and nothing about this trait.
 
-use crate::frame::{Delta, Frame, Gradient, Image, Node, Rect, Rgb};
+use crate::frame::{BlendMode, Delta, Frame, Gradient, Image, Node, Rect, Rgb};
 
 /// A display that paints frames.
 ///
@@ -30,7 +30,17 @@ pub trait Painter {
     /// rectangle.
     fn begin(&mut self, width: f32, height: f32, background: Option<Rgb>);
 
-    fn fill_rounded_rect(&mut self, rect: Rect, radius: f32, colour: Rgb, alpha: f32);
+    /// `blend` is the node's own [`BlendMode`], applied to the fill only -- not
+    /// to whatever gradient, image or stroke may paint over it, which keep the
+    /// ordinary "paint over" compositing every backend already had.
+    fn fill_rounded_rect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        colour: Rgb,
+        alpha: f32,
+        blend: BlendMode,
+    );
 
     fn stroke_rounded_rect(
         &mut self,
@@ -63,7 +73,7 @@ pub trait Painter {
     ) {
         let _ = gradient;
         if let Some(colour) = fallback {
-            self.fill_rounded_rect(rect, radius, colour, alpha);
+            self.fill_rounded_rect(rect, radius, colour, alpha, BlendMode::Alpha);
         }
     }
 
@@ -88,6 +98,7 @@ pub trait Painter {
             0.0,
             image.tint.unwrap_or(Rgb(128, 128, 128)),
             image.alpha,
+            BlendMode::Alpha,
         );
     }
 
@@ -110,7 +121,7 @@ pub trait Painter {
     fn draw_missing_image(&mut self, image: &Image, rect: Rect, radius: f32) {
         let colour = image.tint.unwrap_or(Rgb(148, 158, 176));
         let alpha = image.alpha * 0.25;
-        self.fill_rounded_rect(rect, radius, colour, alpha * 0.4);
+        self.fill_rounded_rect(rect, radius, colour, alpha * 0.4, BlendMode::Alpha);
         self.stroke_rounded_rect(rect, radius, 1.0, colour, alpha);
     }
 
@@ -179,7 +190,13 @@ pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
             }
             None => {
                 if let Some(fill) = node.fill {
-                    painter.fill_rounded_rect(node.rect, node.radius, fill, node.alpha);
+                    painter.fill_rounded_rect(
+                        node.rect,
+                        node.radius,
+                        fill,
+                        node.alpha,
+                        node.blend_mode,
+                    );
                 }
             }
         }

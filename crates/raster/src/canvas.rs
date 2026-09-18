@@ -186,6 +186,9 @@ impl Canvas {
         ar_begin_alpha(self.ptr, r, g, b, a);
     }
 
+    /// `blend` is 0 for normal ("source over") compositing, 1 for additive, 2
+    /// for multiply -- see `ar_fill_rect`'s own doc comment for why this is a
+    /// plain integer rather than a Rust enum at the ABI boundary.
     pub fn fill_rect(
         &mut self,
         x: f32,
@@ -194,8 +197,11 @@ impl Canvas {
         h: f32,
         radius: f32,
         rgba: (u8, u8, u8, u8),
+        blend: u8,
     ) {
-        ar_fill_rect(self.ptr, x, y, w, h, radius, rgba.0, rgba.1, rgba.2, rgba.3);
+        ar_fill_rect(
+            self.ptr, x, y, w, h, radius, rgba.0, rgba.1, rgba.2, rgba.3, blend,
+        );
     }
 
     pub fn stroke_rect(

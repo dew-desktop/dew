@@ -561,6 +561,89 @@ runtime = \"datamodel\"
         assert!(err.contains("UIGradient.Typo"), "{err}");
     }
 
+    /// THE GATE, PROVEN ON THE REAL EXPERIMENTAL PROPERTY, not the generic
+    /// `Tier` mechanism `extensions`'s own tests exercise. An applet that never
+    /// declared `GuiObject.BlendingMode` gets the ordinary "not a valid
+    /// member" refusal a misspelled property gets -- not a special error, and
+    /// not silence.
+    ///
+    /// ASSIGNED A PLAIN NUMBER, NOT `Enum.BlendMode.Additive` -- unflagged,
+    /// the enum category itself does not exist either, and referencing it
+    /// would fail on `Enum.BlendMode` before the property assignment this
+    /// test is actually about ever ran.
+    ///
+    /// `datamodel::extensions::set_enabled_flags` IS THREAD-LOCAL, and this
+    /// test runs on its own worker thread reused across the suite -- reset it
+    /// before mounting, in case a prior test on this thread left a flag set.
+    #[test]
+    fn an_applet_that_never_declared_blending_mode_cannot_set_it() {
+        datamodel::extensions::set_enabled_flags(&[]);
+        let fixture = Fixture::new(
+            "blend-undeclared",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 100, height = 60 },
+                    mount = function(_dew, root)
+                        local frame = Instance.new("Frame")
+                        frame.BlendingMode = 0
+                        frame.Parent = root
+                    end,
+                }
+            "#,
+        );
+
+        let err = match fixture.load() {
+            Err(e) => e,
+            Ok(_) => panic!("BlendingMode must not be settable without declaring it"),
+        };
+        assert!(err.contains("BlendingMode"), "{err}");
+        assert!(err.contains("not a valid member"), "{err}");
+    }
+
+    /// THE SAME PROPERTY, DECLARED. It becomes settable, and the value round
+    /// trips through the DataModel it was written to -- not merely accepted
+    /// and discarded.
+    #[test]
+    fn an_applet_that_declares_blending_mode_can_set_and_read_it_back() {
+        let fixture = Fixture::new(
+            "blend-declared",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n\
+             experimentalDatamodel = [\"GuiObject.BlendingMode\"]\n",
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 100, height = 60 },
+                    mount = function(_dew, root)
+                        local frame = Instance.new("Frame")
+                        frame.Name = "Body"
+                        frame.Size = UDim2.new(1, 0, 1, 0)
+                        frame.BlendingMode = Enum.BlendMode.Multiply
+                        assert(frame.BlendingMode == Enum.BlendMode.Multiply, "did not round-trip")
+                        frame.Parent = root
+                    end,
+                }
+            "#,
+        );
+
+        let result = fixture.load();
+        // RESET BEFORE UNWRAPPING: a successful `load` leaves the flag enabled
+        // on this thread via the real `set_enabled_flags` call inside it (see
+        // `applets::load`), and this worker thread is reused by later tests
+        // that assume no flags are set.
+        datamodel::extensions::set_enabled_flags(&[]);
+        let loaded = result.expect("a declared experimental entry loads");
+
+        let Mounted::DataModel { dom, root } = &loaded.mounted;
+        let frame = datamodel::render::frame_of(dom, *root, 100.0, 60.0);
+        assert_eq!(
+            frame.nodes.first().map(|n| n.blend_mode),
+            Some(dew_runtime::frame::BlendMode::Multiply),
+            "the value set in Luau reached the display list the painter reads"
+        );
+    }
+
     const PLAIN: &str = r#"
         return {
             id = "plain",

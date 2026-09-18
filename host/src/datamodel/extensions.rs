@@ -10,14 +10,15 @@
 //! governs EXISTENCE -- whether `describe` finds the property at all -- never
 //! the value a guest chooses once it is unlocked.
 //!
-//! NO EXPERIMENTAL ROW EXISTS YET. A `UIGradient.Type`/`Enum.GradientType`
-//! entry was drafted here and pulled before landing: `rbx_reflection_database`
-//! 3.0.0+roblox-728, the version this workspace actually pins, already ships
-//! `UIGradient.Type` as a real, `ReadWrite`, unflagged property with a
-//! three-member `GradientType` enum. There is nothing to gate. This file's
-//! `Tier::Experimental` arm is exercised by its own tests until a real
-//! pre-implementation candidate exists to occupy it -- see `PROPERTIES` and
-//! `ENUMS` below, which today carry only the one `Tier::DewOnly` entry.
+//! `GuiObject.BlendingMode` IS THE FIRST EXPERIMENTAL ROW. A `UIGradient.Type`/
+//! `Enum.GradientType` entry was drafted here and pulled before landing:
+//! `rbx_reflection_database` 3.0.0+roblox-728, the version this workspace
+//! actually pins, already ships `UIGradient.Type` as a real, `ReadWrite`,
+//! unflagged property with a three-member `GradientType` enum. `BlendingMode`
+//! was checked the same way and is genuinely absent: no property or enum by
+//! that name or a similar one exists anywhere in 3.0.0+roblox-728. It is
+//! gated behind `FFlagDewGuiObjectBlendingMode` until Roblox ships the real
+//! thing, at which point this row is deleted rather than renamed.
 //!
 //! ONE REGISTRY, NOT TWO. `InputActionLabel`/`InputAction` used to be three
 //! `if class == "InputActionLabel"` blocks hand-written into
@@ -37,7 +38,7 @@
 //! keeps two applets' DataModels apart.
 
 use rbx_reflection::{DataType, EnumDescriptor, PropertyDescriptor, Scriptability};
-use rbx_types::{Variant, VariantType};
+use rbx_types::{Enum, Variant, VariantType};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
@@ -86,9 +87,6 @@ pub struct ExtensionClass {
 }
 
 /// Every extension property, Dew-only and experimental together.
-///
-/// ONE ROW TODAY, AND IT IS `DewOnly`. An experimental candidate belongs here
-/// the day one is real -- see this module's top comment for why none is yet.
 pub static PROPERTIES: &[ExtensionProperty] = &[
     // InputActionLabel is introduced in the engine 0.736 and is not yet in
     // rbx_reflection_database 0.728. It inherits from GuiObject and declares
@@ -104,10 +102,33 @@ pub static PROPERTIES: &[ExtensionProperty] = &[
         scriptability: Scriptability::ReadWrite,
         tier: Tier::DewOnly,
     },
+    // Declared on GuiObject, the base every visual class inherits from, so
+    // `describe`'s ancestor walk (`datamodel::mod`'s `describe`) finds it for
+    // `Frame`, `TextLabel`, `ImageLabel` and everything else that descends
+    // from it -- the same walk that already resolves `Instance.Name` for
+    // `Frame` without a row of its own.
+    ExtensionProperty {
+        class: "GuiObject",
+        name: "BlendingMode",
+        data_type: DataType::Enum("BlendMode"),
+        default: Variant::Enum(Enum::from_u32(0)),
+        scriptability: Scriptability::ReadWrite,
+        tier: Tier::Experimental {
+            flag: "FFlagDewGuiObjectBlendingMode",
+            revision: 1,
+        },
+    },
 ];
 
-/// Every extension enum. Empty today -- see this module's top comment.
-pub static ENUMS: &[ExtensionEnum] = &[];
+/// Every extension enum.
+pub static ENUMS: &[ExtensionEnum] = &[ExtensionEnum {
+    name: "BlendMode",
+    items: &[("Alpha", 0), ("Additive", 1), ("Multiply", 2)],
+    tier: Tier::Experimental {
+        flag: "FFlagDewGuiObjectBlendingMode",
+        revision: 1,
+    },
+}];
 
 /// Every class synthesized whole.
 pub static CLASSES: &[ExtensionClass] = &[ExtensionClass {
@@ -354,6 +375,27 @@ mod tests {
         assert_eq!(flag_for("no-dot-here"), None);
         // A DewOnly entry has no flag to resolve to -- it is always visible.
         assert_eq!(flag_for("InputActionLabel.InputAction"), None);
+    }
+
+    /// A REAL EXPERIMENTAL ROW, exercised directly against the registry rather
+    /// than through the generic `Tier` value the test above uses.
+    #[test]
+    fn blending_mode_is_invisible_until_its_flag_is_set() {
+        reset();
+        assert!(describe("GuiObject", "BlendingMode").is_none());
+        assert!(describe_enum("BlendMode").is_none());
+        assert_eq!(
+            flag_for("GuiObject.BlendingMode"),
+            Some(("FFlagDewGuiObjectBlendingMode", 1))
+        );
+
+        set_enabled_flags(&[("FFlagDewGuiObjectBlendingMode", 1)]);
+        assert!(describe("GuiObject", "BlendingMode").is_some());
+        let items = describe_enum("BlendMode").expect("enum visible once flagged");
+        assert_eq!(items.items.get("Alpha"), Some(&0));
+        assert_eq!(items.items.get("Additive"), Some(&1));
+        assert_eq!(items.items.get("Multiply"), Some(&2));
+        reset();
     }
 
     #[test]
