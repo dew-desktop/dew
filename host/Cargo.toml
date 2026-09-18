@@ -52,6 +52,10 @@ name = "conformance"
 path = "src/bin/conformance.rs"
 
 [[bin]]
+name = "generate-datamodel-types"
+path = "src/bin/generate_datamodel_types.rs"
+
+[[bin]]
 name = "gallery-coverage"
 path = "src/bin/gallery_coverage.rs"
 
