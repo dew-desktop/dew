@@ -133,6 +133,21 @@ pub fn load(
     for problem in manifest.unhonoured() {
         eprintln!("[dew] {}: {problem}", manifest.id);
     }
+
+    //      EXPERIMENTAL FLAGS, RESOLVED AND SET BEFORE ANY OF THE MOD'S LUAU
+    //      RUNS. `experimental_flags` refuses to load on an unknown entry, so
+    //      that surfaces here rather than as a property that silently never
+    //      unlocks. The effective set -- manifest UNION the local
+    //      `DewAppSettings.json` override -- is printed unconditionally and
+    //      then set on THIS thread: an applet runs entirely on the thread
+    //      that called `load` (its own, once `coordinator::spawn_applet`
+    //      exists), so the thread-local this sets is read by the same
+    //      `describe`/`class_exists`/enum lookups the mod's own code drives.
+    let declared_flags = manifest.experimental_flags()?;
+    let effective_flags = datamodel::extensions::effective_flags(&declared_flags);
+    datamodel::extensions::print_effective(&effective_flags);
+    datamodel::extensions::set_enabled_flags(&effective_flags);
+
     let entry = manifest
         .entry(dir)
         .ok_or_else(|| format!("{}: no {}.luau or main.luau", dir.display(), manifest.id))?;
@@ -526,6 +541,24 @@ runtime = \"datamodel\"
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing
+    /// nothing -- the same choice an unknown permission or runtime makes.
+    #[test]
+    fn an_unknown_experimental_entry_refuses_to_load() {
+        let fixture = Fixture::new(
+            "gradient-typo",
+            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n\
+             experimentalDatamodel = [\"UIGradient.Typo\"]\n",
+            PLAIN,
+        );
+
+        let err = match fixture.load() {
+            Err(e) => e,
+            Ok(_) => panic!("an unknown experimentalDatamodel entry must not load"),
+        };
+        assert!(err.contains("UIGradient.Typo"), "{err}");
     }
 
     const PLAIN: &str = r#"

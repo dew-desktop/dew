@@ -36,6 +36,7 @@
 
 mod content;
 pub mod enums;
+pub mod extensions;
 pub mod input;
 pub mod members;
 pub mod render;
@@ -422,27 +423,26 @@ fn describe(class: &str, property: &str) -> Option<&'static PropertyDescriptor<'
     let db = rbx_reflection_database::get().ok()?;
     let mut cursor = Some(class);
     while let Some(c) = cursor {
+        // THE EXTENSION REGISTRY IS CHECKED FIRST ON EVERY STEP of the walk,
+        // whether `c` is a class the reflection database also knows about or
+        // one this host synthesizes whole (`InputActionLabel.InputAction`
+        // below). It is invisible unless its tier says so -- see
+        // `extensions::describe`.
+        if let Some(descriptor) = extensions::describe(c, property) {
+            return Some(descriptor);
+        }
         if let Some(current) = db.classes.get(c) {
             if let Some(descriptor) = current.properties.get(property) {
                 return Some(descriptor);
             }
             cursor = current.superclass;
-        } else if c == "InputActionLabel" {
+        } else if extensions::class_exists(c) {
             // InputActionLabel is introduced in the engine 0.736 and is not yet in
             // rbx_reflection_database 0.728. It inherits from GuiObject and declares
-            // text and image properties matching TextLabel and ImageLabel.
-            if property == "InputAction" {
-                static INPUT_ACTION: std::sync::OnceLock<PropertyDescriptor<'static>> =
-                    std::sync::OnceLock::new();
-                return Some(INPUT_ACTION.get_or_init(|| {
-                    let mut desc = PropertyDescriptor::new(
-                        "InputAction",
-                        DataType::Value(VariantType::String),
-                    );
-                    desc.scriptability = Scriptability::ReadWrite;
-                    desc
-                }));
-            }
+            // text and image properties matching TextLabel and ImageLabel. Its own
+            // `InputAction` property is a row in `extensions::PROPERTIES`, checked
+            // above; what is left here is the fallback through two sibling classes
+            // the registry does not need to know about.
             if let Some(desc) = db
                 .classes
                 .get("TextLabel")
@@ -466,7 +466,7 @@ fn describe(class: &str, property: &str) -> Option<&'static PropertyDescriptor<'
 }
 
 fn class_exists(class: &str) -> bool {
-    if class == "InputActionLabel" {
+    if extensions::class_exists(class) {
         return true;
     }
     rbx_reflection_database::get()
@@ -479,15 +479,15 @@ fn default_for(class: &str, property: &str) -> Option<Variant> {
     let db = rbx_reflection_database::get().ok()?;
     let mut cursor = Some(class);
     while let Some(c) = cursor {
+        if let Some(value) = extensions::default_for(c, property) {
+            return Some(value);
+        }
         if let Some(current) = db.classes.get(c) {
             if let Some(value) = current.default_properties.get(property) {
                 return Some(value.clone());
             }
             cursor = current.superclass;
-        } else if c == "InputActionLabel" {
-            if property == "InputAction" {
-                return Some(Variant::String(String::new()));
-            }
+        } else if extensions::class_exists(c) {
             if let Some(val) = db
                 .classes
                 .get("TextLabel")
