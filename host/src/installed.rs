@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 /// excludes them, rather than a second list that can drift from it -- see
 /// the root `.gitignore`'s `roblox_packages/`, `luau_packages/` and
 /// `.pesde/` entries.
-const SKIP_DIRS: &[&str] = &["roblox_packages", "luau_packages", ".pesde"];
+pub(crate) const SKIP_DIRS: &[&str] = &["roblox_packages", "luau_packages", ".pesde"];
 
 fn dew_dir() -> Option<PathBuf> {
     let dir = dirs::data_local_dir()?.join("Dew");

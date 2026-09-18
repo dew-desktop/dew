@@ -28,6 +28,8 @@ mod installed;
 #[cfg(windows)]
 mod manage;
 #[cfg(windows)]
+mod package;
+#[cfg(windows)]
 mod positions;
 mod surface;
 #[cfg(windows)]
@@ -563,8 +565,13 @@ pub enum Command {
         targets: Vec<PathBuf>,
     },
     Install {
-        dir: PathBuf,
+        /// An applet directory, or a `.dewpkg` file produced by `dew package`.
+        path: PathBuf,
         force: bool,
+    },
+    Package {
+        dir: PathBuf,
+        output: Option<PathBuf>,
     },
     Uninstall {
         id: String,
@@ -626,6 +633,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "snapshot" => parse_snapshot(&args_vec[1..]),
         "check" => parse_check(&args_vec[1..]),
         "install" => parse_install(&args_vec[1..]),
+        "package" => parse_package(&args_vec[1..]),
         "uninstall" => parse_uninstall(&args_vec[1..]),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
@@ -807,11 +815,36 @@ fn parse_check(args: &[String]) -> Result<Command, String> {
 }
 
 fn parse_install(args: &[String]) -> Result<Command, String> {
-    let mut dir: Option<PathBuf> = None;
+    let mut path: Option<PathBuf> = None;
     let mut force = false;
     for arg in args {
         match arg.as_str() {
             "--force" => force = true,
+            s if !s.starts_with('-') => {
+                if path.is_some() {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+                path = Some(PathBuf::from(s));
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+    let path = path.ok_or(
+        "nothing to install: pass an applet directory or a .dewpkg file, e.g. `dew install examples/host/basic-widget`",
+    )?;
+    Ok(Command::Install { path, force })
+}
+
+fn parse_package(args: &[String]) -> Result<Command, String> {
+    let mut dir: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--output" | "-o" => {
+                let val = iter.next().ok_or("missing value for --output")?;
+                output = Some(PathBuf::from(val));
+            }
             s if !s.starts_with('-') => {
                 if dir.is_some() {
                     return Err(format!("unexpected argument '{s}'"));
@@ -822,9 +855,9 @@ fn parse_install(args: &[String]) -> Result<Command, String> {
         }
     }
     let dir = dir.ok_or(
-        "nothing to install: pass an applet directory, e.g. `dew install examples/host/basic-widget`",
+        "nothing to package: pass an applet directory, e.g. `dew package examples/host/basic-widget`",
     )?;
-    Ok(Command::Install { dir, force })
+    Ok(Command::Package { dir, output })
 }
 
 fn parse_uninstall(args: &[String]) -> Result<Command, String> {
@@ -1604,27 +1637,54 @@ fn execute_check(targets: Vec<PathBuf>) -> Result<(), String> {
     }
 }
 
-/// Copy an applet directory into the per-user store, keyed by its own
-/// manifest id, and mark it enabled.
+/// Copy an applet into the per-user store, keyed by its own manifest id, and
+/// mark it enabled. `path` is either a directory or a `.dewpkg` file --
+/// `package::install_from_archive` extracts the latter to a temporary
+/// directory and hands it to the exact same `installed::install` a directory
+/// reaches, so the two never diverge in what they produce.
 ///
 /// THIS ONLY AFFECTS THE NEXT COORDINATOR STARTUP. An already-running Dew
 /// service keeps whatever it loaded when it started; toggling a live one is
 /// not something this sprint answers, and the printed line below says so
 /// rather than leaving that a silent surprise.
-fn execute_install(dir: PathBuf, force: bool) -> Result<(), String> {
+fn execute_install(path: PathBuf, force: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
-        let _ = (dir, force);
+        let _ = (path, force);
         Err("'install' is Windows-only: an installed applet loads into the coordinator's window, which only runs on Windows".to_string())
     }
 
     #[cfg(windows)]
     {
-        let id = installed::install(&dir, force)?;
-        println!("[dew] installed '{id}' from {}", dir.display());
+        let id = if path.is_dir() {
+            installed::install(&path, force)?
+        } else if path.is_file() {
+            package::install_from_archive(&path, force)?
+        } else {
+            return Err(format!("{}: no such file or directory", path.display()));
+        };
+        println!("[dew] installed '{id}' from {}", path.display());
         println!(
             "[dew] this loads the next time the Dew service starts; a service already running keeps what it started with"
         );
+        Ok(())
+    }
+}
+
+/// Zip an applet directory into a `.dewpkg` file that `dew install` accepts
+/// as a source. The manifest sits at the archive's own root, and the same
+/// directories `installed::install` never copies are excluded here too.
+fn execute_package(dir: PathBuf, output: Option<PathBuf>) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (dir, output);
+        Err("'package' is Windows-only for now, alongside 'install'".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let out = package::package(&dir, output)?;
+        println!("[dew] wrote {}", out.display());
         Ok(())
     }
 }
@@ -2210,15 +2270,28 @@ fn execute_help(subcommand: Option<String>) {
             );
         }
         Some("install") => {
-            println!("Usage: dew install <DIR> [OPTIONS]");
+            println!("Usage: dew install <PATH> [OPTIONS]");
             println!();
             println!("Copy an applet into the per-user store, so a Dew service loads it on its next start.");
+            println!();
+            println!("Arguments:");
+            println!(
+                "  <PATH>                Applet directory or .dewpkg file (its dew.toml names its id)"
+            );
+            println!();
+            println!("Options:");
+            println!("  --force               Replace an already-installed applet with this id");
+        }
+        Some("package") => {
+            println!("Usage: dew package <DIR> [OPTIONS]");
+            println!();
+            println!("Zip an applet directory into a .dewpkg file that dew install accepts.");
             println!();
             println!("Arguments:");
             println!("  <DIR>                 Applet directory (its dew.toml names its id)");
             println!();
             println!("Options:");
-            println!("  --force               Replace an already-installed applet with this id");
+            println!("  --output, -o <PATH>   Output file (defaults to <manifest id>.dewpkg)");
         }
         Some("uninstall") => {
             println!("Usage: dew uninstall <ID>");
@@ -2262,7 +2335,12 @@ fn execute_help(subcommand: Option<String>) {
             println!("  run <PATH>       Run an applet in a desktop window (Windows only)");
             println!("  snapshot <PATH>  Render an applet or a script to a PNG, no window needed");
             println!("  check [PATH...]  Validate manifests and entry points, or this directory");
-            println!("  install <DIR>    Copy an applet into the per-user store (Windows only)");
+            println!(
+                "  install <PATH>   Copy an applet (directory or .dewpkg) into the per-user store (Windows only)"
+            );
+            println!(
+                "  package <DIR>    Zip an applet directory into a .dewpkg file (Windows only)"
+            );
             println!("  uninstall <ID>   Remove an applet from the per-user store (Windows only)");
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
@@ -2334,7 +2412,8 @@ fn run() -> Result<(), String> {
         },
         Command::Snapshot { target, output } => execute_snapshot(target, output),
         Command::Check { targets } => execute_check(targets),
-        Command::Install { dir, force } => execute_install(dir, force),
+        Command::Install { path, force } => execute_install(path, force),
+        Command::Package { dir, output } => execute_package(dir, output),
         Command::Uninstall { id } => execute_uninstall(id),
         Command::Init {
             name,
