@@ -82,7 +82,13 @@ fn main() {
 
     if check_only {
         let on_disk = std::fs::read_to_string(&output_path).unwrap_or_default();
-        if on_disk == generated {
+        // `\r\n` NORMALIZED AWAY BEFORE COMPARING. This generator writes `\n`
+        // only, but a checkout can still hand back `\r\n` -- Windows CI hit
+        // this directly: the file this binary had just written locally
+        // matched byte-for-byte, but the SAME committed content, checked out
+        // fresh by a Windows runner, came back CRLF and failed the check for
+        // a reason that has nothing to do with the generator being stale.
+        if on_disk.replace("\r\n", "\n") == generated {
             println!("{OUTPUT_PATH} is up to date.");
         } else {
             eprintln!(
