@@ -140,8 +140,9 @@ jobs:
   # beside them, which keeps the property the note on commitlint describes: a
   # malformed subject line fails in half a minute instead of after a GPU build.
   #
-  # THIS JOB HAS NO `if:`. verify_ascii covers documentation, so the one kind of
-  # commit that skips every Rust job is exactly the kind this job exists for.
+  # THIS JOB HAS NO `if:`. verify_boundaries is the one check a documentation-only
+  # commit still runs, so the kind of commit that skips every Rust job is exactly
+  # the kind this job exists for.
   checks:
     name: architecture boundaries
     runs-on: ubuntu-latest

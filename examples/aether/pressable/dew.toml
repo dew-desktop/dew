@@ -7,11 +7,8 @@ id = "pressable"
 name = "Pressable"
 description = "A pressable that changes colour under a press"
 
-# THIS APPLET MOUNTS ITS OWN FRAMEWORK, so the host should hand it a root and stay
-# out of the way. The `aether` arm would have Dew call `Desktop.Mount` on the
-# applet's behalf, which is the arrangement milestone 9 removes; this demo is
-# already written the way everything will be.
-runtime = "datamodel"
+# THIS APPLET MOUNTS ITS OWN FRAMEWORK, so the host hands it a root and stays
+# out of the way.
 
 # NO PERMISSIONS. It does arithmetic on its own state and touches nothing.
 permissions = ["widget"]

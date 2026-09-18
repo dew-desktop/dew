@@ -233,7 +233,44 @@ if rasterManifest ~= "" then
 	end
 end
 
--- 5 - THE DEBT, NAMED AND COUNTED --------------------------------------------
+-- 5 - THE LOADER NAMES NO FRAMEWORK ------------------------------------------
+--
+-- Milestone 9 deleted `Runtime`, its manifest field, and the branch in
+-- `applets::load` that mounted Aether on a mod's behalf. `applets.rs` and
+-- `manifest.rs` are the mod-loading path, and the vision they closed on says
+-- it plainly: "grep -ri aether host/src finds nothing in the loading path."
+--
+-- PRODUCTION CODE ONLY. A `#[cfg(test)]` module is verification, not the
+-- loader -- `a_mod_cannot_reach_a_framework_it_did_not_declare` deliberately
+-- requires `@aether/api` from a fixture to prove the loader refuses it, and a
+-- gate that failed on that proof would be asking the test to stop testing the
+-- boundary. Everything before the file's first `#[cfg(test)]` is production
+-- code, so that is where the cut falls.
+--
+-- COMMENTS ARE EXEMPT FOR THE SAME REASON AS SECTION 1'S: a comment recording
+-- why `game` is not a sentinel, or that a mod once got `@aether` for free, is
+-- history, not a framework the loader still names.
+
+local LOADING_PATH = { "host/src/applets.rs", "host/src/manifest.rs" }
+
+for _, path in ipairs(LOADING_PATH) do
+	if fs.isFile(path) then
+		local body = stripComments(fs.readFile(path))
+		local testStart = string.find(body, "#%[cfg%(test%)%]")
+		if testStart then
+			body = string.sub(body, 1, testStart - 1)
+		end
+		if string.find(string.lower(body), "aether", 1, true) then
+			fail(
+				`{path}: names Aether in its loading path. The host gives a mod a root and the `
+					.. `\`dew\` table and knows nothing else about what the mod is built from -- `
+					.. `see docs/applet_contract.md.`
+			)
+		end
+	end
+end
+
+-- 6 - THE DEBT, NAMED AND COUNTED --------------------------------------------
 
 local outstanding: { string } = {}
 

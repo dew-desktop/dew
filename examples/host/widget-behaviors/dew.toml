@@ -7,9 +7,5 @@ id = "widget-behaviors"
 name = "Widget Behaviors"
 description = "Drag me, snap me to an edge, and relaunch to see me stay put"
 
-# Which runtime `mount` is written against. This one uses the DataModel
-# directly and imports nothing.
-runtime = "datamodel"
-
 # WHAT THIS APPLET MAY REACH. `widget` is what puts `dew.Widget` on the table.
 permissions = ["widget"]

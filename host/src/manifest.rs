@@ -83,44 +83,13 @@ impl Permission {
     }
 }
 
-/// The runtime a mod is written against.
-///
-/// DECLARED BY THE AUTHOR, NEVER GUESSED BY THE HOST. There is one runtime, but
-/// the key stays explicit rather than inferred, so that adding a second one
-/// later does not have to guess at what today's mods meant.
-///
-/// A CLOSED SET, like `Permission`, and for the same reason. `"runtime": "solid"`
-/// is refused at parse rather than silently falling back to a default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Runtime {
-    /// No framework. `mount(dew, root)` parents instances into the root the host
-    /// made, and the host renders that tree directly.
-    ///
-    /// THE DEFAULT, and the only runtime there is. A manifest written before this
-    /// key existed, or one that never sets it, keeps working, and the absent key
-    /// means this.
-    #[default]
-    #[serde(rename = "datamodel")]
-    DataModel,
-}
-
-impl Runtime {
-    pub fn name(self) -> &'static str {
-        match self {
-            Runtime::DataModel => "datamodel",
-        }
-    }
-}
-
 /// What a mod declares about itself.
 ///
 /// EVERY FIELD HERE IS READ BY SOMETHING. `id` names the mod and picks its entry
-/// module, `runtime` picks the branch `applets::load` takes, `permissions` builds
-/// the capability table, `name` titles the window and the tray, `description`
-/// fills the tray tooltip. `hotkeys` is the one exception, and it is a LOUD one:
-/// nothing in the host registers a global hotkey yet, so `unhonoured()` names
-/// every binding a mod declared, at load.
+/// module, `permissions` builds the capability table, `name` titles the window
+/// and the tray, `description` fills the tray tooltip. `hotkeys` is the one
+/// exception, and it is a LOUD one: nothing in the host registers a global
+/// hotkey yet, so `unhonoured()` names every binding a mod declared, at load.
 ///
 /// The rule this struct is built around is that a mod author is never met with
 /// silence. A field Dew accepts and ignores, and a key Dew has never heard of,
@@ -132,15 +101,6 @@ pub struct Manifest {
     pub name: String,
     #[serde(default)]
     pub description: String,
-
-    /// Which runtime this mod's `mount` is written against.
-    ///
-    /// There is one runtime today, `datamodel`, so this field currently has one
-    /// valid value. It stays a field rather than being dropped because a manifest
-    /// may still say so explicitly, and because a second runtime is the kind of
-    /// thing this format needs to be able to add without a breaking change.
-    #[serde(default)]
-    pub runtime: Runtime,
 
     /// What this mod may reach. Absent means NOTHING, which is the correct
     /// default and the one a mod author is least likely to have intended by
@@ -187,7 +147,6 @@ const KNOWN: &[&str] = &[
     "id",
     "name",
     "description",
-    "runtime",
     "permissions",
     "hotkeys",
     "experimentalDatamodel",
@@ -261,9 +220,9 @@ impl Manifest {
     /// Resolve `experimentalDatamodel` against the registry, deduplicated.
     ///
     /// REFUSES TO LOAD ON AN UNKNOWN ENTRY rather than ignoring it, the same
-    /// choice `Permission` and `Runtime` already make for an unknown value --
-    /// a typo or a feature that graduated out of this registry must be caught
-    /// here, not discovered later as a property that silently never unlocks.
+    /// choice `Permission` already makes for an unknown value -- a typo or a
+    /// feature that graduated out of this registry must be caught here, not
+    /// discovered later as a property that silently never unlocks.
     pub fn experimental_flags(&self) -> Result<Vec<(&'static str, u32)>, String> {
         let mut flags: Vec<(&'static str, u32)> = Vec::new();
         for key in &self.experimental_datamodel {
@@ -346,25 +305,16 @@ mod tests {
         assert_eq!(parse("id = \"t\"\nname = \"T\"\n").display_name(), "T");
     }
 
+    /// `runtime` NAMED NO FRAMEWORK EVEN WHEN IT EXISTED -- `mount(dew, root)`
+    /// was the only signature there ever was -- and milestone 9 retired the
+    /// field along with the ceremony that branched on it. A `dew.toml` written
+    /// before that still parses: the key falls out of `KNOWN` and into
+    /// `unknown`, reported rather than silently dropped, the same as any other
+    /// field the host has stopped reading.
     #[test]
-    fn runtime_defaults_to_datamodel_and_is_not_reported_as_unknown() {
-        let m = parse("id = \"t\"\n");
-        assert_eq!(m.runtime, Runtime::DataModel);
-        assert!(m.unhonoured().is_empty());
-    }
-
-    #[test]
-    fn a_datamodel_mod_declares_its_runtime_and_the_key_is_read() {
+    fn a_leftover_runtime_key_is_reported_as_unknown_rather_than_read() {
         let m = parse("id = \"t\"\nruntime = \"datamodel\"\n");
-        assert_eq!(m.runtime, Runtime::DataModel);
-        // The whole reason this is a modelled field rather than an extra key:
-        // arriving in `unknown` would mean the host ignored it.
-        assert!(m.unknown.is_empty());
-    }
-
-    #[test]
-    fn an_unknown_runtime_is_refused_rather_than_falling_back() {
-        assert!(Manifest::parse("id = \"t\"\nruntime = \"solid\"\n", "test").is_err());
+        assert_eq!(m.unknown, vec!["runtime"]);
     }
 
     #[test]

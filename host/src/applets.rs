@@ -3,8 +3,7 @@
 //! THE ORDER IS THE POINT. Everything the host needs to decide whether a mod may
 //! run is known before the mod's logic executes:
 //!
-//!   1. `dew.toml` is read from disk. It names the mod, its runtime and its
-//!      permissions.
+//!   1. `dew.toml` is read from disk. It names the mod and its permissions.
 //!   2. A VM is created — deny-by-default, with no ffi, io, os or ambient `dew`.
 //!   3. The `dew` table is built from the GRANTED permissions and nothing else.
 //!   4. The mod's module is loaded. It returns a declaration and does nothing.
@@ -13,16 +12,15 @@
 //! A registration-style API collapses 4 and 5 into "loading the mod runs the
 //! mod", which puts every one of the earlier steps after the fact.
 //!
-//! ONE LOADER. `manifest.runtime` names the framework — if any — the mod's
-//! `mount` was written against. There is one runtime today, `datamodel`:
-//! discovery, the manifest, the sandbox, the capability table, the size and the
-//! surface are all the same regardless, because none of them is a property of
-//! the runtime; what a runtime actually decides is which globals the VM gets
-//! and what `mount` is handed.
+//! ONE LOADER, NO FRAMEWORK NAMED. The host gives a mod a root and the `dew`
+//! table and knows nothing else about what the mod is built from: discovery,
+//! the manifest, the sandbox, the capability table, the size and the surface
+//! are decided the same way for every mod, and `mount(dew, root)` is the one
+//! signature there is.
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
-use crate::manifest::{Manifest, Runtime};
+use crate::manifest::Manifest;
 use crate::services::{self, Clock, PointerState, SharedClock, SharedPointer};
 use crate::surface::{Declared, Requested};
 use dew_runtime::{modules, Vm};
@@ -32,9 +30,8 @@ use std::sync::{Arc, Mutex};
 
 /// The living half of a mounted mod: what the frame loop drives.
 ///
-/// AN ENUM WITH ONE VARIANT TODAY rather than the DataModel shape on its own,
-/// because `main.rs` and the tests both match on it (`Mounted::DataModel { .. }`)
-/// and a second runtime is the kind of thing this seam exists to make room for.
+/// AN ENUM WITH ONE VARIANT TODAY, because `main.rs` and the tests both match
+/// on it (`Mounted::DataModel { .. }`) rather than reading a bare struct.
 pub enum Mounted {
     /// A DataModel tree, rendered from the arena with `render::frame_of`.
     ///
@@ -47,15 +44,6 @@ pub enum Mounted {
     },
 }
 
-impl Mounted {
-    /// Which flavour this is, for the load line and for `main`'s dispatch.
-    pub fn runtime(&self) -> Runtime {
-        match self {
-            Mounted::DataModel { .. } => Runtime::DataModel,
-        }
-    }
-}
-
 pub struct Applet {
     pub manifest: Manifest,
     pub width: u32,
@@ -65,8 +53,8 @@ pub struct Applet {
     /// Frame subscriptions this mod made, for the loop to drive.
     ///
     /// ON `Mod` RATHER THAN INSIDE `Mounted`, and that is the point of it. A
-    /// clock is not a property of which runtime the author chose -- so putting
-    /// it in the enum would have made "can this mod animate" depend on that.
+    /// clock is not a property of what `Mounted` holds -- so putting it in the
+    /// enum would have made "can this mod animate" depend on that.
     pub clock: SharedClock,
     /// Where this mod's `dew.Pointer`/`dew.Input` believe the cursor is.
     ///
@@ -118,7 +106,6 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
 
 pub fn load(
     dir: &Path,
-    _aether_root: &Path,
     aliases: &std::collections::HashMap<String, PathBuf>,
     state: &Shared,
 ) -> Result<Applet, String> {
@@ -240,57 +227,42 @@ pub fn load(
 
     modules::install(&vm, &caps).map_err(|e| format!("{}: {e}", manifest.id))?;
 
-    // 3 ── whatever the declared runtime needs in place BEFORE the mod's own
-    //      module is loaded. Produces something step 6 mounts with, and does
-    //      not run a line of the mod.
-    enum Ceremony {
-        /// The `ScreenGui` in `dom` that the guest parents into.
-        DataModel { root: usize },
-    }
-
-    let ceremony = match manifest.runtime {
-        // no framework: just a root to parent into.
-        //
-        //       `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS ARM. A
-        //       DataModel mod is handed the root it parents into, and `DewRoot`
-        //       names it. It needs no vide, so it is not the arm the gate above is
-        //       for and it does not get one -- which is the whole of what keeps
-        //       `game` from becoming a sentinel a second time.
-        //
-        //       A `ScreenGui` because that is what an engine application expects
-        //       to find above its tree, so the same mod has a chance of running
-        //       in both places -- which is a property of the TREE rather than of
-        //       anything named `game`.
-        //
-        //       HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/host/standalone`
-        //       reaches for a `DewRoot` global because a bare script has no
-        //       function to receive one; a mod has `mount`, and a parameter is
-        //       the same argument that keeps `dew` off the globals table — what a
-        //       mod is GIVEN is visible at its own call site.
-        Runtime::DataModel => {
-            let root = dom
-                .lock()
-                .expect("dom")
-                .insert("ScreenGui".into(), "DewRoot".into());
-            Ceremony::DataModel { root }
-        }
-    };
+    // 3 ── the root every mod parents into, made BEFORE the mod's own module
+    //      is loaded.
+    //
+    //      `DewRoot` RATHER THAN `game`. A mod is handed the root it parents
+    //      into, and `DewRoot` names it. It needs no vide, so it is not what
+    //      the gate above is for and it does not get one -- which is the
+    //      whole of what keeps `game` from becoming a sentinel a second time.
+    //
+    //      A `ScreenGui` because that is what an engine application expects
+    //      to find above its tree, so the same mod has a chance of running in
+    //      both places -- which is a property of the TREE rather than of
+    //      anything named `game`.
+    //
+    //      HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/host/standalone`
+    //      reaches for a `DewRoot` global because a bare script has no
+    //      function to receive one; a mod has `mount`, and a parameter is the
+    //      same argument that keeps `dew` off the globals table — what a mod
+    //      is GIVEN is visible at its own call site.
+    let root = dom
+        .lock()
+        .expect("dom")
+        .insert("ScreenGui".into(), "DewRoot".into());
 
     // 4 ── the capability table, from the granted permissions ONLY.
     let requested: Requested = Arc::new(Mutex::new(None));
     let grant = capabilities::SurfaceGrant {
         requested: Arc::clone(&requested),
-        root: match &ceremony {
-            //  THE HANDLE, NOT THE NODE ID. `root` is an index into the DOM and
-            //  handing that over parents instances into an integer; the applet
-            //  wants the same userdata `mount` was always given.
-            Ceremony::DataModel { root } => Some(
-                datamodel::handle(vm.lua(), &dom, *root)
-                    .map_err(|e| format!("{}: {e}", manifest.id))?
-                    .into_lua(vm.lua())
-                    .map_err(|e| format!("{}: {e}", manifest.id))?,
-            ),
-        },
+        //  THE HANDLE, NOT THE NODE ID. `root` is an index into the DOM and
+        //  handing that over parents instances into an integer; the applet
+        //  wants the same userdata `mount` was always given.
+        root: Some(
+            datamodel::handle(vm.lua(), &dom, root)
+                .map_err(|e| format!("{}: {e}", manifest.id))?
+                .into_lua(vm.lua())
+                .map_err(|e| format!("{}: {e}", manifest.id))?,
+        ),
         title: manifest.display_name().to_string(),
     };
     let dew = capabilities::build(vm.lua(), &manifest.permissions, state, &grant)
@@ -364,10 +336,8 @@ pub fn load(
         ));
     }
 
-    // THE SIGNATURE IS THE RUNTIME'S, and so is the message when it is missing.
-    let signature = match manifest.runtime {
-        Runtime::DataModel => "mount = function(dew, root) … end",
-    };
+    // THE ONE SIGNATURE THERE IS, named for the message when it is missing.
+    let signature = "mount = function(dew, root) … end";
     //  AN APPLET THAT ASKED FOR ITS SURFACE HAS ALREADY BUILT ITS TREE. It was
     //  handed the root by `dew.Widget{}` while it ran, so there is nothing left
     //  for the host to call and no declaration to read. That is the shape this
@@ -384,39 +354,36 @@ pub fn load(
     };
 
     // 6 ── build the tree, ONCE.
-    let mounted = match ceremony {
-        //      CALLED DIRECTLY, because there is no scope to be inside. A
-        //      DataModel mod's `mount` parents instances and returns; its return
-        //      value is deliberately ignored, since the tree the host renders is
-        //      the one under the root it was handed rather than one it was given
-        //      back. Handing a root over and then reading a returned tree would
-        //      be two answers to the same question.
-        Ceremony::DataModel { root } => {
-            //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
-            //      `dew.Widget{}` handed it this same root while it ran, so the
-            //      instances are under there already and calling a second
-            //      entry point would ask it to build them twice.
-            if let Some(mount) = mount {
-                let handle = datamodel::handle(vm.lua(), &dom, root)
-                    .map_err(|e| format!("{}: {e}", manifest.id))?;
-                mount
-                    .call::<()>((dew, handle))
-                    .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
-            }
-            Mounted::DataModel {
-                dom: dom.clone(),
-                root,
-            }
-        }
+    //
+    //      CALLED DIRECTLY, because there is no scope to be inside. `mount`
+    //      parents instances and returns; its return value is deliberately
+    //      ignored, since the tree the host renders is the one under the root
+    //      it was handed rather than one it was given back. Handing a root
+    //      over and then reading a returned tree would be two answers to the
+    //      same question.
+    //
+    //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
+    //      `dew.Widget{}` handed it this same root while it ran, so the
+    //      instances are under there already and calling a second entry point
+    //      would ask it to build them twice.
+    if let Some(mount) = mount {
+        let handle =
+            datamodel::handle(vm.lua(), &dom, root).map_err(|e| format!("{}: {e}", manifest.id))?;
+        mount
+            .call::<()>((dew, handle))
+            .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
+    }
+    let mounted = Mounted::DataModel {
+        dom: dom.clone(),
+        root,
     };
 
     println!(
-        "[dew] loaded {} ({}x{}) — {} — {} — granted: {}",
+        "[dew] loaded {} ({}x{}) — {} — granted: {}",
         manifest.id,
         width,
         height,
         surface.describe(),
-        mounted.runtime().name(),
         capabilities::describe(&manifest.permissions)
     );
 
@@ -432,12 +399,12 @@ pub fn load(
     })
 }
 
-/// WHAT THIS COVERS is the branch itself: that a mod declaring
-/// `runtime = "datamodel"` reaches `mount(dew, root)` with the vocabulary
-/// present and a root to parent into, and that what it parented is what the
-/// renderer finds. It goes through the real `load` — manifest, sandbox,
-/// capability table and all — because a test that called the DataModel arm
-/// directly would pass on the day the manifest stopped selecting it.
+/// WHAT THIS COVERS is the loader itself: that a mod reaches `mount(dew, root)`
+/// with the vocabulary present and a root to parent into, and that what it
+/// parented is what the renderer finds. It goes through the real `load` —
+/// manifest, sandbox, capability table and all — rather than calling the
+/// DataModel machinery directly, because that is the path a mod actually
+/// takes.
 #[cfg(test)]
 pub mod tests {
     use super::*;
@@ -467,9 +434,7 @@ pub mod tests {
 
         pub fn load(&self) -> Result<Applet, String> {
             let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-            // The path is still a require root, and pointing it at the mod's own
-            // directory keeps this test from depending on an install having run.
-            load(&self.0, &self.0, &Default::default(), &state)
+            load(&self.0, &Default::default(), &state)
         }
     }
 
@@ -483,7 +448,6 @@ pub mod tests {
         let fixture = Fixture::new(
             "ungranted",
             "id = \"plain\"
-runtime = \"datamodel\"
 ", // no surface on purpose
             r#"
                 return {
@@ -519,7 +483,7 @@ runtime = \"datamodel\"
     fn a_mod_cannot_reach_a_framework_it_did_not_declare() {
         let fixture = Fixture::new(
             "undeclared",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 local Aether = require("@aether/api")
                 return { id = "plain", size = { width = 10, height = 10 } }
@@ -544,12 +508,12 @@ runtime = \"datamodel\"
     }
 
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing
-    /// nothing -- the same choice an unknown permission or runtime makes.
+    /// nothing -- the same choice an unknown permission makes.
     #[test]
     fn an_unknown_experimental_entry_refuses_to_load() {
         let fixture = Fixture::new(
             "gradient-typo",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n\
+            "id = \"plain\"\npermissions = [\"widget\"]\n\
              experimentalDatamodel = [\"UIGradient.Typo\"]\n",
             PLAIN,
         );
@@ -580,7 +544,7 @@ runtime = \"datamodel\"
         datamodel::extensions::set_enabled_flags(&[]);
         let fixture = Fixture::new(
             "blend-undeclared",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -609,7 +573,7 @@ runtime = \"datamodel\"
     fn an_applet_that_declares_blending_mode_can_set_and_read_it_back() {
         let fixture = Fixture::new(
             "blend-declared",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n\
+            "id = \"plain\"\npermissions = [\"widget\"]\n\
              experimentalDatamodel = [\"GuiObject.BlendingMode\"]\n",
             r#"
                 return {
@@ -662,12 +626,11 @@ runtime = \"datamodel\"
     fn a_datamodel_mod_mounts_and_the_renderer_finds_what_it_parented() {
         let fixture = Fixture::new(
             "mounts",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             PLAIN,
         );
         let loaded = fixture.load().expect("the mod loads");
 
-        assert_eq!(loaded.mounted.runtime(), Runtime::DataModel);
         assert_eq!((loaded.width, loaded.height), (100, 60));
 
         let Mounted::DataModel { dom, root } = &loaded.mounted;
@@ -685,7 +648,7 @@ runtime = \"datamodel\"
         // the root the host made, and the VM a mod is actually given.
         let fixture = Fixture::new(
             "clickable",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -742,7 +705,7 @@ runtime = \"datamodel\"
         // terms as `dew.Time`.
         let fixture = Fixture::new(
             "services",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -770,7 +733,7 @@ runtime = \"datamodel\"
         // sees it as `take_dirty` answering true for a mod that changed nothing.
         let fixture = Fixture::new(
             "idleclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 ticks = 0
                 return {
@@ -813,7 +776,7 @@ runtime = \"datamodel\"
         // listener must repaint -- the paint follows the change, not the tick.
         let fixture = Fixture::new(
             "animclock",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -870,7 +833,7 @@ runtime = \"datamodel\"
         // count being wrong.
         let fixture = Fixture::new(
             "vocabulary",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             PLAIN,
         );
         assert!(fixture.load().is_ok());
@@ -900,7 +863,7 @@ runtime = \"datamodel\"
         // manifest granted.
         let fixture = Fixture::new(
             "caps",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -919,7 +882,7 @@ runtime = \"datamodel\"
     fn a_datamodel_mod_without_mount_is_told_the_signature_it_needed() {
         let fixture = Fixture::new(
             "nomount",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"return { id = "plain" }"#,
         );
         let Err(message) = fixture.load() else {
@@ -944,7 +907,7 @@ runtime = \"datamodel\"
     fn a_mod_resolves_an_image_through_rbxassetid_with_grant() {
         let fixture = Fixture::new(
             "rbxgrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"rbxassetid\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\", \"rbxassetid\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -990,7 +953,7 @@ runtime = \"datamodel\"
     fn a_mod_is_refused_an_image_through_rbxassetid_without_grant() {
         let fixture = Fixture::new(
             "rbxnogrant",
-            "id = \"plain\"\nruntime = \"datamodel\"\npermissions = [\"widget\", \"storage\"]\n",
+            "id = \"plain\"\npermissions = [\"widget\", \"storage\"]\n",
             r#"
                 return {
                     id = "plain",
@@ -1045,11 +1008,7 @@ frame.Parent = root
     /// vararg now, so asking is possible before there is anything to return.
     #[test]
     fn an_applet_that_asks_returns_nothing() {
-        let fixture = Fixture::new(
-            "asks",
-            "id = \"asks\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
-            ASKS,
-        );
+        let fixture = Fixture::new("asks", "id = \"asks\"\npermissions = [\"widget\"]\n", ASKS);
         let applet = fixture.load().expect("an applet that asks should load");
         assert_eq!((applet.width, applet.height), (120, 60));
     }
@@ -1063,7 +1022,7 @@ frame.Parent = root
     fn an_ungranted_surface_is_not_on_the_table() {
         let fixture = Fixture::new(
             "asks-ungranted",
-            "id = \"ungranted\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"ungranted\"\npermissions = [\"widget\"]\n",
             "assert(dew.Widget ~= nil, \"widget was granted\")\n\
              assert(dew.Overlay == nil, \"overlay was not granted and must be absent\")\n\
              local root = dew.Widget({ width = 10, height = 10 })\n",
@@ -1078,7 +1037,7 @@ frame.Parent = root
     fn an_applet_that_does_neither_is_told_both_ways_out() {
         let fixture = Fixture::new(
             "asks-neither",
-            "id = \"neither\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"neither\"\npermissions = [\"widget\"]\n",
             "return { size = { width = 10, height = 10 } }\n",
         );
         let error = match fixture.load() {
@@ -1102,7 +1061,6 @@ frame.Parent = root
         let fixture = Fixture::new(
             "asks-submodule",
             "id = \"sub\"
-runtime = \"datamodel\"
 permissions = [\"widget\"]
 ",
             "local helper = require(\"./helper\")
@@ -1128,7 +1086,7 @@ end
     fn asking_wins_over_a_stale_declaration() {
         let fixture = Fixture::new(
             "asks-both",
-            "id = \"both\"\nruntime = \"datamodel\"\npermissions = [\"widget\"]\n",
+            "id = \"both\"\npermissions = [\"widget\"]\n",
             "local root = dew.Widget({ width = 33, height = 44 })\n\
              return { size = { width = 999, height = 999 }, mount = function() end }\n",
         );
@@ -1173,10 +1131,7 @@ mod a_pressable_responds {
         }
 
         let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
-        let aether_root = dew_runtime::installed_package_in(&dir, "aether")
-            .expect("timetracker has no aether installed");
-        let loaded =
-            load(&dir, &aether_root, &Default::default(), &state).expect("timetracker should load");
+        let loaded = load(&dir, &Default::default(), &state).expect("timetracker should load");
 
         let Mounted::DataModel { dom, root } = &loaded.mounted;
 
