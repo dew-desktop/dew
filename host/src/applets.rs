@@ -514,7 +514,7 @@ pub mod tests {
         let fixture = Fixture::new(
             "gradient-typo",
             "id = \"plain\"\npermissions = [\"widget\"]\n\
-             experimentalDatamodel = [\"UIGradient.Typo\"]\n",
+             experimentalDatamodel = [\"UIGradient.Typo@1\"]\n",
             PLAIN,
         );
 
@@ -574,7 +574,7 @@ pub mod tests {
         let fixture = Fixture::new(
             "blend-declared",
             "id = \"plain\"\npermissions = [\"widget\"]\n\
-             experimentalDatamodel = [\"GuiObject.BlendingMode\"]\n",
+             experimentalDatamodel = [\"GuiObject.BlendingMode@1\"]\n",
             r#"
                 return {
                     id = "plain",

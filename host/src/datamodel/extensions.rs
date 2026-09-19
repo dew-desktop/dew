@@ -64,6 +64,14 @@ pub struct ExtensionProperty {
     pub default: Variant,
     pub scriptability: Scriptability,
     pub tier: Tier,
+    /// Scaffolding for this sprint's own tests, never a real feature --
+    /// `generate-datamodel-types` skips it, so it never reaches
+    /// `types/datamodel.d.luau`, the one artifact every entry here
+    /// otherwise feeds unconditionally (see that generator's comment on why
+    /// `Tier::Experimental` rows still generate a type: the flag gates
+    /// behavior, not what the type-checker can see). `false` for every real
+    /// row.
+    pub test_only: bool,
 }
 
 /// An enum the reflection database does not carry.
@@ -100,6 +108,7 @@ pub static PROPERTIES: &[ExtensionProperty] = &[
         default: Variant::String(String::new()),
         scriptability: Scriptability::ReadWrite,
         tier: Tier::DewOnly,
+        test_only: false,
     },
     // Declared on GuiObject, the base every visual class inherits from, so
     // `describe`'s ancestor walk (`datamodel::mod`'s `describe`) finds it for
@@ -116,6 +125,29 @@ pub static PROPERTIES: &[ExtensionProperty] = &[
             flag: "FFlagDewGuiObjectBlendingMode",
             revision: 1,
         },
+        test_only: false,
+    },
+    // TEST-ONLY. Not a real feature and never will graduate -- the class
+    // exists nowhere else, `test_only: true` keeps it out of
+    // `types/datamodel.d.luau`, and no applet ships declaring it. Exists
+    // purely so revision-mismatch resolution (`resolve_declaration`) can be
+    // exercised end to end, through a real `dew.toml` and the real
+    // registry, rather than asserted against a mock -- see `manifest.rs`'s
+    // `a_mismatched_revision_refuses_with_a_specific_message`. Frozen at
+    // revision 2 to stand in for "a row whose shape already changed once",
+    // without needing to invent a shape change for `GuiObject.BlendingMode`,
+    // the one real experimental row, that never happened.
+    ExtensionProperty {
+        class: "DewSprintTestOnly",
+        name: "RevisionProbe",
+        data_type: DataType::Value(VariantType::String),
+        default: Variant::String(String::new()),
+        scriptability: Scriptability::ReadWrite,
+        tier: Tier::Experimental {
+            flag: "FFlagDewSprintTestOnlyRevisionProbe",
+            revision: 2,
+        },
+        test_only: true,
     },
 ];
 
@@ -225,6 +257,12 @@ pub fn describe_enum(name: &str) -> Option<&'static EnumDescriptor<'static>> {
 /// that graduated into the reflection database and lost its row here -- and
 /// `Manifest::experimental_flags` turns that into a refusal to load rather
 /// than a manifest entry that silently does nothing.
+///
+/// TAKES A BARE KEY, NO `@revision` -- `resolve_declaration` is what
+/// `dew.toml` actually calls (milestone 12 sprint 2); this stays the plain
+/// name-to-flag lookup underneath it, and its own test
+/// (`flag_for_refuses_an_unknown_key_and_a_dew_only_one`) is exactly the
+/// coverage `resolve_declaration`'s `UnknownProperty` case builds on.
 pub fn flag_for(key: &str) -> Option<(&'static str, u32)> {
     let (class, property) = key.split_once('.')?;
     PROPERTIES.iter().find_map(|p| {
@@ -236,6 +274,86 @@ pub fn flag_for(key: &str) -> Option<(&'static str, u32)> {
             Tier::DewOnly => None,
         }
     })
+}
+
+/// Why a `dew.toml` `experimentalDatamodel` entry could not be resolved.
+/// `Display` gives the reason on its own, without the entry itself or the
+/// applet's id -- `Manifest::experimental_flags` prepends both, since it is
+/// the one that has them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeclarationError {
+    /// No `@revision` suffix. A bare `"Class.Property"` used to be enough
+    /// (before milestone 12 sprint 2); it no longer is, because a
+    /// declaration that never pins a revision can never mismatch one --
+    /// exactly the silent break the Origin-Trials framing in
+    /// `vision/overview.md` exists to rule out. `describe`/`class_exists`/
+    /// etc. don't care WHY a flag got enabled, only that it did, so this
+    /// refusal happens once, here, rather than at every call site that
+    /// reads a property.
+    MissingRevision,
+    /// The text after `@` was not a plain non-negative integer.
+    InvalidRevision(String),
+    /// The part before `@` does not resolve to a known `Tier::Experimental`
+    /// row -- the same condition `flag_for` reports as `None`: a typo, a
+    /// `Tier::DewOnly` entry (which has no revision to pin), or a feature
+    /// that graduated out of this registry.
+    UnknownProperty,
+    /// The key is real, but the registry has moved past the revision this
+    /// declaration pinned -- the row's shape changed since the applet was
+    /// written against it.
+    RevisionMismatch { declared: u32, current: u32 },
+}
+
+impl std::fmt::Display for DeclarationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeclarationError::MissingRevision => write!(
+                f,
+                "has no @revision -- write it as \"Class.Property@N\", pinning the revision \
+                 this mod was written against"
+            ),
+            DeclarationError::InvalidRevision(text) => {
+                write!(f, "has a revision that is not a plain integer: {text:?}")
+            }
+            DeclarationError::UnknownProperty => {
+                write!(f, "is not a known experimental property")
+            }
+            DeclarationError::RevisionMismatch { declared, current } => write!(
+                f,
+                "was written against revision {declared}, but the registry is now at revision \
+                 {current} -- the property's shape changed; update the mod for the new behavior \
+                 and declare @{current}"
+            ),
+        }
+    }
+}
+
+/// Resolve one `"Class.Property@N"` string from `dew.toml`'s
+/// `experimentalDatamodel` array to the flag it unlocks, refusing unless the
+/// declared revision matches the registry's current one for that row.
+///
+/// SPLITS ON THE LAST `@` BEFORE SPLITTING ON `.`. `flag_for` already splits
+/// `key` on the first `.` to separate class from property; if this split
+/// class/property first and looked for `@` inside the trailing piece, a
+/// property name that happened to contain a `.` (none do today) would put
+/// the `@` split on the wrong side of it. Stripping the revision suffix
+/// first, with `rsplit_once`, means `flag_for` never sees it and this
+/// function never has to know how `flag_for` parses its half.
+pub fn resolve_declaration(declaration: &str) -> Result<(&'static str, u32), DeclarationError> {
+    let (key, revision_text) = declaration
+        .rsplit_once('@')
+        .ok_or(DeclarationError::MissingRevision)?;
+    let declared_revision: u32 = revision_text
+        .parse()
+        .map_err(|_| DeclarationError::InvalidRevision(revision_text.to_string()))?;
+    let (flag, current_revision) = flag_for(key).ok_or(DeclarationError::UnknownProperty)?;
+    if declared_revision != current_revision {
+        return Err(DeclarationError::RevisionMismatch {
+            declared: declared_revision,
+            current: current_revision,
+        });
+    }
+    Ok((flag, current_revision))
 }
 
 /// Every experimental flag this registry defines, deduplicated across
@@ -346,5 +464,51 @@ mod tests {
         let declared = vec![("FFlagTestOnlyDoesNotGateAnything", 1)];
         let effective = effective_flags(&declared);
         assert!(effective.contains(&("FFlagTestOnlyDoesNotGateAnything", 1)));
+    }
+
+    #[test]
+    fn resolve_declaration_requires_a_revision_suffix() {
+        assert!(matches!(
+            resolve_declaration("GuiObject.BlendingMode"),
+            Err(DeclarationError::MissingRevision)
+        ));
+    }
+
+    #[test]
+    fn resolve_declaration_rejects_a_non_integer_revision() {
+        assert!(matches!(
+            resolve_declaration("GuiObject.BlendingMode@one"),
+            Err(DeclarationError::InvalidRevision(text)) if text == "one"
+        ));
+    }
+
+    #[test]
+    fn resolve_declaration_rejects_an_unknown_property_even_with_a_revision() {
+        assert!(matches!(
+            resolve_declaration("UIGradient.NotAThing@1"),
+            Err(DeclarationError::UnknownProperty)
+        ));
+    }
+
+    #[test]
+    fn resolve_declaration_accepts_a_matching_revision() {
+        assert_eq!(
+            resolve_declaration("GuiObject.BlendingMode@1"),
+            Ok(("FFlagDewGuiObjectBlendingMode", 1))
+        );
+    }
+
+    /// THE MISMATCH, PRODUCED FOR REAL against a genuine registry row
+    /// (`DewSprintTestOnly.RevisionProbe`, frozen at revision 2 for exactly
+    /// this purpose) rather than asserted against a mock.
+    #[test]
+    fn resolve_declaration_refuses_a_stale_revision() {
+        assert_eq!(
+            resolve_declaration("DewSprintTestOnly.RevisionProbe@1"),
+            Err(DeclarationError::RevisionMismatch {
+                declared: 1,
+                current: 2,
+            })
+        );
     }
 }

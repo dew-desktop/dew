@@ -119,11 +119,14 @@ pub struct Manifest {
     #[serde(default)]
     pub hotkeys: BTreeMap<String, String>,
 
-    /// `"Class.Property"` entries this mod wants unlocked, e.g.
-    /// `["SomeClass.SomeProperty"]`. Each must name a real `Tier::Experimental`
-    /// property in `datamodel::extensions::PROPERTIES` -- see
-    /// `experimental_flags`, which is what actually resolves and validates
-    /// this list.
+    /// `"Class.Property@N"` entries this mod wants unlocked, e.g.
+    /// `["SomeClass.SomeProperty@1"]` -- `N` pins the revision of
+    /// `Tier::Experimental` the mod was written against, and is required,
+    /// not optional (milestone 12 sprint 2): a declaration that never pins a
+    /// revision can never be told it fell behind one. Each key must name a
+    /// real `Tier::Experimental` property in
+    /// `datamodel::extensions::PROPERTIES` -- see `experimental_flags`,
+    /// which is what actually resolves and validates this list.
     #[serde(default, rename = "experimentalDatamodel")]
     pub experimental_datamodel: Vec<String>,
 
@@ -219,20 +222,25 @@ impl Manifest {
 
     /// Resolve `experimentalDatamodel` against the registry, deduplicated.
     ///
-    /// REFUSES TO LOAD ON AN UNKNOWN ENTRY rather than ignoring it, the same
-    /// choice `Permission` already makes for an unknown value -- a typo or a
-    /// feature that graduated out of this registry must be caught here, not
-    /// discovered later as a property that silently never unlocks.
+    /// REFUSES TO LOAD ON AN UNKNOWN ENTRY, A MISSING/INVALID REVISION, OR A
+    /// STALE ONE, rather than ignoring any of them -- the same choice
+    /// `Permission` already makes for an unknown value. Each is a distinct
+    /// failure with its own message (`extensions::DeclarationError`'s
+    /// `Display`): "not a known property" calls for fixing a typo, "no
+    /// @revision" calls for adding one, and a stale revision calls for
+    /// reading what changed and updating the mod -- three different fixes,
+    /// so a generic "unknown flag" error would send an author down the
+    /// wrong path for two of the three.
     pub fn experimental_flags(&self) -> Result<Vec<(&'static str, u32)>, String> {
         let mut flags: Vec<(&'static str, u32)> = Vec::new();
-        for key in &self.experimental_datamodel {
-            let Some(flag) = crate::datamodel::extensions::flag_for(key) else {
-                return Err(format!(
-                    "{}: experimentalDatamodel declares {key:?}, which is not a known \
-                     experimental property",
-                    self.id
-                ));
-            };
+        for declaration in &self.experimental_datamodel {
+            let flag =
+                crate::datamodel::extensions::resolve_declaration(declaration).map_err(|e| {
+                    format!(
+                        "{}: experimentalDatamodel entry {declaration:?} {e}",
+                        self.id
+                    )
+                })?;
             if !flags.contains(&flag) {
                 flags.push(flag);
             }
@@ -340,17 +348,20 @@ mod tests {
     /// A REAL PROPERTY, BUT NOT AN EXPERIMENTAL ONE. `InputActionLabel.InputAction`
     /// is a genuine row in the registry, and is still refused here: it is
     /// `Tier::DewOnly`, always on, with no flag to resolve to -- declaring it
-    /// experimental would ask for a flag that does not exist.
+    /// experimental would ask for a flag that does not exist. `@1` is there
+    /// so this test exercises that refusal specifically, not the (also true,
+    /// but different) missing-revision one below.
     #[test]
     fn a_dew_only_entry_cannot_be_declared_experimental() {
-        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"InputActionLabel.InputAction\"]\n");
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"InputActionLabel.InputAction@1\"]\n");
         let err = m.experimental_flags().unwrap_err();
         assert!(err.contains("InputActionLabel.InputAction"), "{err}");
+        assert!(err.contains("not a known experimental property"), "{err}");
     }
 
     #[test]
     fn an_unknown_experimental_entry_is_refused_rather_than_ignored() {
-        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"NotAThing.Nope\"]\n");
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"NotAThing.Nope@1\"]\n");
         let err = m.experimental_flags().unwrap_err();
         assert!(err.contains("NotAThing.Nope"), "{err}");
     }
@@ -359,5 +370,43 @@ mod tests {
     fn no_experimental_declaration_resolves_to_no_flags() {
         let m = parse("id = \"t\"\n");
         assert!(m.experimental_flags().unwrap().is_empty());
+    }
+
+    /// A BARE `"Class.Property"`, WITH NO `@revision`, REFUSES TO LOAD
+    /// (milestone 12 sprint 2's decision: mandatory, not permissive -- see
+    /// the sprint record for why a default-to-current revision would defeat
+    /// the whole mechanism).
+    #[test]
+    fn a_declaration_without_a_revision_refuses_to_load() {
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"GuiObject.BlendingMode\"]\n");
+        let err = m.experimental_flags().unwrap_err();
+        assert!(err.contains("GuiObject.BlendingMode"), "{err}");
+        assert!(err.contains("no @revision"), "{err}");
+    }
+
+    #[test]
+    fn a_matching_revision_loads() {
+        let m = parse("id = \"t\"\nexperimentalDatamodel = [\"GuiObject.BlendingMode@1\"]\n");
+        assert_eq!(
+            m.experimental_flags().unwrap(),
+            vec![("FFlagDewGuiObjectBlendingMode", 1)]
+        );
+    }
+
+    /// THE MISMATCH, THROUGH THE WHOLE MANIFEST PATH -- TOML parse, key
+    /// split, registry lookup, revision compare -- not a unit test of
+    /// `resolve_declaration` alone. `DewSprintTestOnly.RevisionProbe` is
+    /// frozen at revision 2 for exactly this (see `extensions.rs`).
+    #[test]
+    fn a_mismatched_revision_refuses_with_a_specific_message() {
+        let m =
+            parse("id = \"t\"\nexperimentalDatamodel = [\"DewSprintTestOnly.RevisionProbe@1\"]\n");
+        let err = m.experimental_flags().unwrap_err();
+        assert_eq!(
+            err,
+            "t: experimentalDatamodel entry \"DewSprintTestOnly.RevisionProbe@1\" was written \
+             against revision 1, but the registry is now at revision 2 -- the property's shape \
+             changed; update the mod for the new behavior and declare @2"
+        );
     }
 }
