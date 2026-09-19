@@ -50,6 +50,24 @@ use std::time::{Duration, Instant};
 /// Deep obsidian, behind every widget.
 const BACKGROUND: Rgb = Rgb(13, 17, 23);
 
+/// `{CARGO_PKG_VERSION}+g{short commit sha}` -- an incrementing build stamp,
+/// not a compatibility promise. Milestone 12 sprints 1 and 2 already gave
+/// that job to the flag registry (`Tier::Experimental { flag, revision }`),
+/// so this number carries no gating meaning of its own: bumping
+/// `host/Cargo.toml`'s `version` says a new build exists, nothing about
+/// whether an applet written against the last one still works. `+g<sha>` is
+/// SemVer build metadata (the leading `g` is `git describe`'s own
+/// convention for "this is a commit hash, not a number"), for crash and
+/// support traceability -- reading it back tells you the exact tree a
+/// report came from.
+///
+/// `DEW_BUILD_SHA` COMES FROM `build.rs`, BAKED IN AT COMPILE TIME. A
+/// shipped `dew.exe` has no `.git` directory to ask, so the lookup happens
+/// once, here, where a checkout is expected to exist -- see that file for
+/// the shallow-clone and no-`.git` fallbacks.
+pub(crate) const BUILD_IDENTIFIER: &str =
+    concat!(env!("CARGO_PKG_VERSION"), "+g", env!("DEW_BUILD_SHA"));
+
 fn find_dir(name: &str) -> Option<PathBuf> {
     let mut cur = std::env::current_dir().ok()?;
     loop {
@@ -601,6 +619,7 @@ pub enum Command {
     Help {
         subcommand: Option<String>,
     },
+    Version,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -646,6 +665,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "help" | "--help" | "-h" => Ok(Command::Help {
             subcommand: args_vec.get(1).cloned(),
         }),
+        "version" | "--version" | "-V" => Ok(Command::Version),
         _ if first.starts_with("--") => parse_legacy_flags(&args_vec, is_windows),
         // A BARE PATH RUNS IT. `dew examples/aether/timetracker` is the shortest true
         // thing to type, and it is what the README documents; requiring `run`
@@ -2334,6 +2354,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  help [COMMAND]   Show help for a command");
             println!();
             println!("Options:");
+            println!("  --version, -V    Show the build identifier and exit");
             println!("  -o <PATH>        Where snapshot writes its image");
             println!("  --script <PATH>  Render a standalone script rather than an applet");
             println!("  --size <WxH>     Dimensions for a standalone script");
@@ -2418,6 +2439,10 @@ fn run() -> Result<(), String> {
             execute_help(subcommand);
             Ok(())
         }
+        Command::Version => {
+            println!("{BUILD_IDENTIFIER}");
+            Ok(())
+        }
     }
 }
 
@@ -2432,7 +2457,25 @@ fn icon_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// Prints the build identifier before Rust's own panic message, so a crash
+/// report carries it without whoever files one needing to know to run `dew
+/// --version` separately -- which may not even be possible if the crash is a
+/// hang rather than a return.
+///
+/// READS ONLY `BUILD_IDENTIFIER`, A `const`. A hook that panics while
+/// formatting its own message turns one panic into a much worse, harder to
+/// diagnose double panic, so there is nothing here that can fail: no lock,
+/// no lookup, just a string cargo baked in at compile time.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!("dew {BUILD_IDENTIFIER}: about to panic");
+        default_hook(info);
+    }));
+}
+
 fn main() -> ExitCode {
+    install_panic_hook();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -2881,6 +2924,30 @@ mod tests {
             Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("snapshot")),
             _ => panic!("expected Help command"),
         }
+    }
+
+    #[test]
+    fn version_short_and_long_flags_agree() {
+        for spelling in ["version", "--version", "-V"] {
+            let words = [spelling];
+            let args = words.iter().map(|s| s.to_string());
+            assert_eq!(
+                parse_args(args, false).unwrap(),
+                Command::Version,
+                "{spelling:?} should parse as Command::Version"
+            );
+        }
+    }
+
+    #[test]
+    fn the_build_identifier_carries_the_cargo_version_and_a_commit_hash() {
+        // NOT ASSERTING AN EXACT SHA -- it moves every commit. What must hold
+        // regardless: the Cargo version is the prefix, and `+g` introduces a
+        // non-empty hash after it, the shape `--version`'s real output and
+        // the sprint record both rely on.
+        assert!(BUILD_IDENTIFIER.starts_with(env!("CARGO_PKG_VERSION")));
+        let (_, sha) = BUILD_IDENTIFIER.split_once("+g").expect("a +g suffix");
+        assert!(!sha.is_empty());
     }
 
     /// NOT SKIPPED WHEN THE DIRECTORY IS ABSENT. Both lookups here were `if let`

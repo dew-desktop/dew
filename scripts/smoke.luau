@@ -178,6 +178,10 @@ if #targets == 0 then
 	process.exit(1)
 end
 
+print("the build identifier")
+ok("--version prints the build identifier", { "--version" }, "+g")
+ok("-V is the same command", { "-V" }, "+g")
+
 print(`checking {#targets} applet(s)`)
 ok("check every applet", (function()
 	local args = { "check" }
