@@ -327,14 +327,21 @@ fn collect_classes(db: &ReflectionDatabase) -> BTreeMap<String, ClassOut> {
 
     // Extension properties merge into whatever class they name, whether that
     // class comes from the reflection database (`GuiObject.BlendingMode`) or
-    // is itself synthesized (`InputActionLabel.InputAction`).
+    // is itself synthesized (`InputActionLabel.InputAction`). `test_only`
+    // rows are skipped: they exist purely to exercise the revision-mismatch
+    // mechanism in `manifest.rs`'s own tests and were never meant to reach
+    // an applet author's editor.
     for prop in extensions::PROPERTIES {
         let ExtensionProperty {
             class,
             name,
             data_type,
+            test_only,
             ..
         } = prop;
+        if *test_only {
+            continue;
+        }
         let Some(ty) = luau_type_for_data_type(data_type) else {
             panic!(
                 "extension property {class}.{name} has a data type this generator cannot map \

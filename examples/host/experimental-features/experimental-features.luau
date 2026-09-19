@@ -5,9 +5,10 @@
 
 	    cargo run -- examples/host/experimental-features
 
-	Unlocking it costs one line in `dew.toml`:
+	Unlocking it costs one line in `dew.toml`, pinning the revision this mod
+	was written against:
 
-	    experimentalDatamodel = ["GuiObject.BlendingMode"]
+	    experimentalDatamodel = ["GuiObject.BlendingMode@1"]
 
 	Three panels, each two overlapping squares with a different
 	`Enum.BlendMode` on the top one. Alpha, the default, paints over whatever

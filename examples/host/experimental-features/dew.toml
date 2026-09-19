@@ -13,4 +13,7 @@ permissions = ["widget"]
 # THE ONE LINE THAT UNLOCKS THE PROPERTY. Without it, `BlendingMode` is not a
 # valid member of `GuiObject` and setting it refuses to load -- see
 # `dew_host::datamodel::extensions` for what the registry and the flag mean.
-experimentalDatamodel = ["GuiObject.BlendingMode"]
+# `@1` pins the revision this mod was written against; the host refuses to
+# load rather than run if that revision ever moves without this line
+# following it.
+experimentalDatamodel = ["GuiObject.BlendingMode@1"]
