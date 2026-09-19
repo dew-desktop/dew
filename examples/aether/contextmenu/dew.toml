@@ -9,7 +9,6 @@ description = "A context menu opened by a right-click and closed by choosing a r
 
 # THIS APPLET MOUNTS ITS OWN FRAMEWORK. It asks the host for a surface, builds
 # its tree into it and hands the host nothing to mount on its behalf.
-runtime = "datamodel"
 
 # NO PERMISSIONS BEYOND A SURFACE. It reads the pointer the host reports and
 # touches nothing else.

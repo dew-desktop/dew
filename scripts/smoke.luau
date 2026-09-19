@@ -216,7 +216,7 @@ local SCAFFOLD = "examples/host/smoke_scaffold"
 if fs.isDir(SCAFFOLD) then
 	fs.removeDir(SCAFFOLD)
 end
-ok("init scaffolds an applet", { "init", SCAFFOLD, "--runtime", "datamodel" })
+ok("init scaffolds an applet", { "init", SCAFFOLD })
 ok("the scaffold passes check", { "check", SCAFFOLD })
 ok("the scaffold renders", { "snapshot", SCAFFOLD, "-o", `{TEMP}/smoke_scaffold.png` })
 if fs.isDir(SCAFFOLD) then

@@ -6,9 +6,8 @@ id = "basic-widget"
 name = "Basic Widget"
 description = "The smallest applet that draws something"
 
-# Which runtime `mount` is written against. This one uses the DataModel
-# directly and imports nothing.
-runtime = "datamodel"
+# THIS APPLET IMPORTS NOTHING. `mount` builds its tree with `Instance.new`
+# directly, against the DataModel the host already provides.
 
 # WHAT THIS APPLET MAY REACH. `widget` is what puts `dew.Widget` on the table,
 # so an applet that does not ask for it here has no way to open a surface.

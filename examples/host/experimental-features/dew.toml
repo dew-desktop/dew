@@ -7,10 +7,6 @@ id = "experimental-features"
 name = "Experimental Features"
 description = "GuiObject.BlendingMode: Alpha, Additive and Multiply side by side"
 
-# Which runtime `mount` is written against. This one uses the DataModel
-# directly and imports nothing.
-runtime = "datamodel"
-
 # WHAT THIS APPLET MAY REACH. `widget` is what puts `dew.Widget` on the table.
 permissions = ["widget"]
 

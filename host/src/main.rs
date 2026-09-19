@@ -80,7 +80,7 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     Ok(painter)
 }
 
-/// What the frame loop drives, for the one runtime a mod can declare.
+/// What the frame loop drives.
 ///
 /// A DataModel tree answers its own "did anything change" question, because
 /// every write a guest can make goes through the path that fires `Changed`,
@@ -584,7 +584,6 @@ pub enum Command {
     },
     Init {
         name: String,
-        runtime: manifest::Runtime,
         surface: String,
         size: (u32, u32),
     },
@@ -884,20 +883,12 @@ fn parse_uninstall(args: &[String]) -> Result<Command, String> {
 
 fn parse_init(args: &[String]) -> Result<Command, String> {
     let mut name = None;
-    let mut runtime = manifest::Runtime::DataModel;
     let mut surface = "window".to_string();
     let mut size = (340, 180);
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         match arg.as_str() {
-            "--runtime" | "-r" => {
-                let val = iter.next().ok_or("missing value for --runtime")?;
-                runtime = match val.to_lowercase().as_str() {
-                    "datamodel" => manifest::Runtime::DataModel,
-                    _ => return Err(format!("unknown runtime '{val}', expected 'datamodel'")),
-                };
-            }
             "--surface" => {
                 let val = iter.next().ok_or("missing value for --surface")?;
                 surface = val.clone();
@@ -931,7 +922,6 @@ fn parse_init(args: &[String]) -> Result<Command, String> {
     let name = name.ok_or("missing applet name for init (usage: dew init <name>)")?;
     Ok(Command::Init {
         name,
-        runtime,
         surface,
         size,
     })
@@ -1129,9 +1119,8 @@ fn load_applet(dir: &Path) -> Result<applets::Applet, String> {
         ));
     }
 
-    let (aether_root, aliases) = aether_aliases()?;
     let state = Arc::new(Mutex::new(capabilities::HostState::default()));
-    applets::load(dir, &aether_root, &aliases, &state)
+    applets::load(dir, &HashMap::new(), &state)
 }
 
 fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String> {
@@ -1629,9 +1618,8 @@ fn execute_check(targets: Vec<PathBuf>) -> Result<(), String> {
         match check_mod_dir(dir) {
             Ok((manifest, entry, warnings)) => {
                 println!(
-                    "[dew] check {}: ok ({}, entry: {})",
+                    "[dew] check {}: ok (entry: {})",
                     manifest.id,
-                    manifest.runtime.name(),
                     entry.file_name().unwrap_or_default().to_string_lossy()
                 );
                 for warn in warnings {
@@ -1740,12 +1728,7 @@ fn execute_uninstall(id: String) -> Result<(), String> {
 ///
 /// A TEMPLATE RATHER THAN A SERIALISER, so the scaffold carries the comments that
 /// tell an author what the keys are for. A round-tripped struct cannot.
-fn scaffold_manifest(
-    name: &str,
-    display_name: &str,
-    runtime: manifest::Runtime,
-    surface: manifest::Permission,
-) -> String {
+fn scaffold_manifest(name: &str, display_name: &str, surface: manifest::Permission) -> String {
     format!(
         r#"# {display_name}
 #
@@ -1753,10 +1736,7 @@ fn scaffold_manifest(
 
 id = "{name}"
 name = "{display_name}"
-description = "A Dew applet ({runtime_name})"
-
-# Which runtime `mount` is written against. Never guessed, always declared.
-runtime = "{runtime_name}"
+description = "A Dew applet"
 
 # WHAT THIS APPLET MAY REACH. A surface is one of these, and an applet that asks
 # for no surface has nowhere to draw and is refused at mount. Add `storage`,
@@ -1765,17 +1745,11 @@ permissions = ["{surface_name}"]
 "#,
         display_name = display_name,
         name = name,
-        runtime_name = runtime.name(),
         surface_name = surface.name(),
     )
 }
 
-fn execute_init(
-    name: String,
-    runtime: manifest::Runtime,
-    surface: String,
-    size: (u32, u32),
-) -> Result<(), String> {
+fn execute_init(name: String, surface: String, size: (u32, u32)) -> Result<(), String> {
     // REFUSED HERE, NOT AT MOUNT. `--surface` was accepted and then dropped, so
     // `--surface windwo` scaffolded a window and said nothing about it. The word
     // has to name a surface now, because it is written into the manifest as the
@@ -1828,17 +1802,16 @@ fn execute_init(
         }
     };
 
-    let manifest_text = scaffold_manifest(&name, &display_name, runtime, surface_grant);
+    let manifest_text = scaffold_manifest(&name, &display_name, surface_grant);
 
     let manifest_path = target_dir.join("dew.toml");
     std::fs::write(&manifest_path, manifest_text)
         .map_err(|e| format!("could not write {}: {e}", manifest_path.display()))?;
 
-    let entry_code = match runtime {
-        manifest::Runtime::DataModel => format!(
-            r#"--!strict
+    let entry_code = format!(
+        r#"--!strict
 --[[
-	{display_name} -- a Dew applet written against the native DataModel.
+	{display_name} -- a Dew applet.
 ]]
 
 local function mount(_dew: any, root: Instance)
@@ -1869,11 +1842,10 @@ return {{
 	mount = mount,
 }}
 "#,
-            size.0,
-            size.1,
-            surface_grant.name()
-        ),
-    };
+        size.0,
+        size.1,
+        surface_grant.name()
+    );
 
     let entry_path = target_dir.join(format!("{name}.luau"));
     std::fs::write(&entry_path, entry_code)
@@ -2265,7 +2237,6 @@ fn execute_help(subcommand: Option<String>) {
             println!("  <NAME>                Mod identifier and directory name");
             println!();
             println!("Options:");
-            println!("  --runtime, -r <RT>    Runtime: 'datamodel' (default, and the only one)");
             println!("  --surface <SURFACE>   Surface: 'window' (default), 'overlay', or 'widget'");
             println!("  --size <WxH>          Default size (default: 340x180)");
         }
@@ -2432,10 +2403,9 @@ fn run() -> Result<(), String> {
         Command::Uninstall { id } => execute_uninstall(id),
         Command::Init {
             name,
-            runtime,
             surface,
             size,
-        } => execute_init(name, runtime, surface, size),
+        } => execute_init(name, surface, size),
         Command::Test { filter, dir } => execute_test(filter, dir),
         Command::Conformance {
             filter,
@@ -2460,36 +2430,6 @@ fn icon_path() -> Option<PathBuf> {
         PathBuf::from("../host/assets/dew.ico"),
     ];
     candidates.into_iter().find(|p| p.is_file())
-}
-
-/// What every mod VM is given: Aether's source, and the aliases that name it.
-///
-/// NOTHING IS WRITTEN TO DISK. An earlier version generated a `.luaurc`, and it
-/// could not work: aliases resolve by walking up from the requiring FILE, and a
-/// package's source lives under `roblox_packages/.pesde/` — a config file at the
-/// root of this repository is never on that path. `Capabilities.aliases` reaches
-/// the resolver directly instead, so it applies wherever the requiring module
-/// happens to be.
-///
-/// BOTH PATHS COME FROM THE SAME INSTALL, AND AETHER IS NOW ONE OF THEM. It used
-/// to come from Cargo: `luau_source_root()` reported the checkout made for the
-/// revision in `host/Cargo.toml`, so the Luau a mod required was the same commit
-/// as the Rust driving it. ADR-004 moved that Rust here, so there is no Aether
-/// checkout to read it out of — and Aether was never Dew's Rust dependency in the
-/// first place, it is a GUEST FRAMEWORK, exactly like vide. It is pinned by
-/// commit in `pesde.toml` and installed beside vide, and both are found the same
-/// way.
-fn aether_aliases() -> Result<(PathBuf, HashMap<String, PathBuf>), String> {
-    // NOTHING IS INJECTED ANY MORE. A mod declares Aether and vide in its own
-    // `pesde.toml` and requires them through the redirect pesde writes beside
-    // it, exactly as an engine place does. The host used to hand every mod an
-    // `@aether` and a `@vide` pointing into its OWN installed packages, which
-    // meant a mod could not say what it depended on and could not be built
-    // without a Dew checkout.
-    //
-    // The path is still returned because callers thread it through; it names
-    // nothing a guest can reach.
-    Ok((PathBuf::from("."), HashMap::new()))
 }
 
 fn main() -> ExitCode {
@@ -2651,18 +2591,12 @@ mod tests {
     /// that would have caught it, because the file was well-formed JSON.
     #[test]
     fn init_writes_a_manifest_that_parses() {
-        let runtime = manifest::Runtime::DataModel;
-        let raw = scaffold_manifest(
-            "my_applet",
-            "My_applet",
-            runtime,
-            manifest::Permission::Window,
-        );
+        let raw = scaffold_manifest("my_applet", "My_applet", manifest::Permission::Window);
         let parsed = manifest::Manifest::parse(&raw, "dew.toml")
             .unwrap_or_else(|e| panic!("init wrote a manifest that will not parse: {e}"));
 
         assert_eq!(parsed.id, "my_applet");
-        assert_eq!(parsed.runtime, runtime);
+        assert!(parsed.unknown.is_empty());
     }
 
     /// The grant `--surface` asked for is the grant that lands in the manifest.
@@ -2678,7 +2612,7 @@ mod tests {
             manifest::Permission::Overlay,
             manifest::Permission::Popover,
         ] {
-            let raw = scaffold_manifest("a", "A", manifest::Runtime::DataModel, surface);
+            let raw = scaffold_manifest("a", "A", surface);
             let parsed = manifest::Manifest::parse(&raw, "dew.toml").expect("parses");
             assert_eq!(parsed.permissions, vec![surface]);
         }
@@ -2912,26 +2846,17 @@ mod tests {
 
     #[test]
     fn subcommand_init() {
-        let args = [
-            "init",
-            "my_mod",
-            "--runtime",
-            "datamodel",
-            "--size",
-            "400x200",
-        ]
-        .iter()
-        .map(|s| s.to_string());
+        let args = ["init", "my_mod", "--size", "400x200"]
+            .iter()
+            .map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
             Command::Init {
                 name,
-                runtime,
                 surface: _,
                 size,
             } => {
                 assert_eq!(name, "my_mod");
-                assert_eq!(runtime, manifest::Runtime::DataModel);
                 assert_eq!(size, (400, 200));
             }
             _ => panic!("expected Init command"),
