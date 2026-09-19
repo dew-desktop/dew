@@ -28,19 +28,18 @@
 //! table a future experimental entry will be a row of, so there will be
 //! exactly one place this pattern lives.
 //!
-//! THREAD-LOCAL FLAG STATE, MATCHING HOW APPLETS ARE ALREADY ISOLATED. Each
-//! applet runs entirely on its own OS thread with its own Lua VM
-//! (`coordinator::spawn_applet`), so "which experimental flags are enabled
-//! for this applet" is naturally a thread-local, the same shape
-//! `crates/window/src/win32.rs` already uses for its per-thread event queue.
-//! `describe`/`class_exists`/`describe_enum` need no signature change to
-//! consult it, and the isolation it rides on is the same isolation that
-//! keeps two applets' DataModels apart.
+//! FLAG ENABLEMENT LIVES IN `crate::flags`, NOT HERE (milestone 12 sprint
+//! 1). This module owns the DataModel-specific rows -- `Tier`, `PROPERTIES`,
+//! `ENUMS`, `CLASSES`, and resolving a `"Class.Property"` string to the flag
+//! it's gated by -- and calls into `flags` for storage, the thread-local
+//! enabled set, and `DewAppSettings.json`'s local override. That module
+//! knows nothing about a `class.property` shape, so a future non-DataModel
+//! flag (a coordinator or rendering-pipeline change) calls it directly
+//! rather than adding a second copy of this bookkeeping. See `flags.rs`'s
+//! header for why the storage itself is thread-local.
 
 use rbx_reflection::{DataType, EnumDescriptor, PropertyDescriptor, Scriptability};
 use rbx_types::{Enum, Variant, VariantType};
-use std::cell::RefCell;
-use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
 
 /// How long an entry lives before, or instead of, appearing in upstream
@@ -136,35 +135,18 @@ pub static CLASSES: &[ExtensionClass] = &[ExtensionClass {
     tier: Tier::DewOnly,
 }];
 
-thread_local! {
-    /// Which experimental flags are enabled for the applet running on this
-    /// thread. Empty by default, which is what makes an example that never
-    /// calls `set_enabled_flags` see zero observable difference.
-    static ENABLED_FLAGS: RefCell<HashSet<&'static str>> = RefCell::new(HashSet::new());
-}
-
-/// Enable exactly this set of flags for whatever runs on the calling thread
-/// from here on. Called once, before an applet's own Luau runs -- see
-/// `applets::load`.
-pub fn set_enabled_flags(flags: &[(&'static str, u32)]) {
-    ENABLED_FLAGS.with(|cell| {
-        let mut set = cell.borrow_mut();
-        set.clear();
-        set.extend(flags.iter().map(|(flag, _)| *flag));
-    });
-}
-
-/// Is this exact flag enabled for the calling thread's applet?
-pub fn is_enabled(flag: &str) -> bool {
-    ENABLED_FLAGS.with(|cell| cell.borrow().contains(flag))
-}
+/// Re-exported so existing callers (`applets::load`, this module's own
+/// tests) keep naming it `extensions::set_enabled_flags` -- the storage it
+/// touches now lives in `crate::flags`, but which module OWNS enablement is
+/// an implementation detail callers outside this file don't need to track.
+pub use crate::flags::set_enabled_flags;
 
 /// Is this entry visible right now: always for `DewOnly`, only when its flag
 /// is enabled for `Experimental`?
 fn visible(tier: &Tier) -> bool {
     match tier {
         Tier::DewOnly => true,
-        Tier::Experimental { flag, .. } => is_enabled(flag),
+        Tier::Experimental { flag, .. } => crate::flags::is_enabled(flag),
     }
 }
 
@@ -258,7 +240,10 @@ pub fn flag_for(key: &str) -> Option<(&'static str, u32)> {
 
 /// Every experimental flag this registry defines, deduplicated across
 /// `PROPERTIES` and `ENUMS` -- a property and an enum belonging to the same
-/// feature would share one flag, and this must not print it twice.
+/// feature would share one flag, and this must not print it twice. This is
+/// the DataModel's own idea of "known"; `crate::flags::effective_flags`
+/// takes it as a parameter rather than assuming it, since a future
+/// non-DataModel flag would have its own list drawn from its own rows.
 fn known_flags() -> Vec<(&'static str, u32)> {
     let mut out: Vec<(&'static str, u32)> = Vec::new();
     let mut note = |flag: &'static str, revision: u32| {
@@ -279,59 +264,17 @@ fn known_flags() -> Vec<(&'static str, u32)> {
     out
 }
 
-/// `dirs::data_local_dir()/Dew/DewAppSettings.json` -- a flat
-/// `{ "FFlagName": true }` map, mirroring Roblox's own
-/// `ClientAppSettings.json` convention exactly. A local, host-level override
-/// independent of what any applet declares: the "flip it on while I'm
-/// personally testing" path, the equivalent of Studio's beta-features
-/// toggle.
-///
-/// SAME READ/WRITE SHAPE AS `positions.rs`: `dirs::data_local_dir()`,
-/// create-dir-all, read-or-default. This file is read-only from here --
-/// nothing in this sprint writes it, a person edits it by hand -- so only
-/// the read half is needed.
-fn local_overrides_path() -> Option<std::path::PathBuf> {
-    let dir = dirs::data_local_dir()?.join("Dew");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir.join("DewAppSettings.json"))
-}
-
-fn read_local_overrides() -> BTreeMap<String, bool> {
-    let Some(path) = local_overrides_path() else {
-        return BTreeMap::new();
-    };
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        return BTreeMap::new();
-    };
-    serde_json::from_str(&text).unwrap_or_default()
-}
-
 /// The union of a manifest's own `experimentalDatamodel` flags and whatever
-/// `DewAppSettings.json` enables locally. The manifest says what an applet
-/// USES; the local file is a host-level override for testing one without
-/// editing the applet -- so the effective set for a run is always both,
-/// never one replacing the other.
+/// `DewAppSettings.json` enables locally, out of this module's own registry.
+/// See `crate::flags::effective_flags` for what "declared" and "local
+/// override" mean; this is a thin wrapper supplying `known_flags()` so
+/// callers here keep the old one-argument shape.
 pub fn effective_flags(declared: &[(&'static str, u32)]) -> Vec<(&'static str, u32)> {
-    let mut effective: Vec<(&'static str, u32)> = declared.to_vec();
-    let overrides = read_local_overrides();
-    for (flag, revision) in known_flags() {
-        let locally_on = overrides.get(flag).copied().unwrap_or(false);
-        if locally_on && !effective.iter().any(|(f, _)| *f == flag) {
-            effective.push((flag, revision));
-        }
-    }
-    effective
+    crate::flags::effective_flags(declared, &known_flags())
 }
 
-/// Print every flag in effect for this run, unconditionally -- the whole
-/// point of an experimental surface is that nobody using it can plausibly
-/// not know. Silent when the set is empty, so the common case (no flags at
-/// all) manufactures no noise.
-pub fn print_effective(flags: &[(&'static str, u32)]) {
-    for (flag, revision) in flags {
-        println!("[dew] experimental: {flag} (revision {revision})");
-    }
-}
+/// Print every flag in effect for this run. See `crate::flags::print_effective`.
+pub use crate::flags::print_effective;
 
 #[cfg(test)]
 mod tests {
