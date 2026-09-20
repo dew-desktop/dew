@@ -179,8 +179,17 @@ if #targets == 0 then
 end
 
 print("the build identifier")
-ok("--version prints the build identifier", { "--version" }, "+g")
-ok("-V is the same command", { "-V" }, "+g")
+-- THE DOTTED, ROBLOX-SHAPED FORM (`0.1.0.482`), NOT `+g<sha>` -- the build
+-- number itself moves every commit, so this checks for the stable prefix
+-- (Cargo's own version, dot-terminated) rather than an exact fourth segment.
+-- Read from host/Cargo.toml rather than hardcoded, so a version bump cannot
+-- make this assertion quietly stop checking anything.
+local cargoToml = fs.readFile("host/Cargo.toml")
+local cargoVersion = string.match(cargoToml, '\nversion = "([^"]+)"')
+	or error("smoke: could not find a version in host/Cargo.toml")
+local versionPrefix = `{cargoVersion}.`
+ok("--version prints the build identifier", { "--version" }, versionPrefix)
+ok("-V is the same command", { "-V" }, versionPrefix)
 
 print(`checking {#targets} applet(s)`)
 ok("check every applet", (function()

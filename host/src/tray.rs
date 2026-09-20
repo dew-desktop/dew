@@ -365,6 +365,15 @@ mod tests {
     #[test]
     fn the_about_text_carries_the_real_build_identifier() {
         assert_eq!(about_text(), format!("Dew {}", crate::BUILD_IDENTIFIER));
-        assert!(about_text().contains("+g"), "{}", about_text());
+        // Four dot-separated segments (CARGO_PKG_VERSION's three plus the
+        // build number), all numeric -- the dotted, Roblox-shaped form, not
+        // the old `+g<sha>` one.
+        let segments: Vec<&str> = crate::BUILD_IDENTIFIER.split('.').collect();
+        assert_eq!(segments.len(), 4, "{}", about_text());
+        assert!(
+            segments.iter().all(|s| s.parse::<u64>().is_ok()),
+            "{}",
+            about_text()
+        );
     }
 }

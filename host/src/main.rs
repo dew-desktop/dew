@@ -50,23 +50,35 @@ use std::time::{Duration, Instant};
 /// Deep obsidian, behind every widget.
 const BACKGROUND: Rgb = Rgb(13, 17, 23);
 
-/// `{CARGO_PKG_VERSION}+g{short commit sha}` -- an incrementing build stamp,
-/// not a compatibility promise. Milestone 12 sprints 1 and 2 already gave
-/// that job to the flag registry (`Tier::Experimental { flag, revision }`),
-/// so this number carries no gating meaning of its own: bumping
-/// `host/Cargo.toml`'s `version` says a new build exists, nothing about
-/// whether an applet written against the last one still works. `+g<sha>` is
-/// SemVer build metadata (the leading `g` is `git describe`'s own
-/// convention for "this is a commit hash, not a number"), for crash and
-/// support traceability -- reading it back tells you the exact tree a
-/// report came from.
+/// `{CARGO_PKG_VERSION}.{build number}` -- an incrementing build stamp, not
+/// a compatibility promise. Milestone 12 sprints 1 and 2 already gave that
+/// job to the flag registry (`Tier::Experimental { flag, revision }`), so
+/// this number carries no gating meaning of its own: bumping
+/// `host/Cargo.toml`'s `version`, or the build count moving, says a new
+/// build exists, nothing about whether an applet written against the last
+/// one still works.
 ///
-/// `DEW_BUILD_SHA` COMES FROM `build.rs`, BAKED IN AT COMPILE TIME. A
+/// A DOTTED NUMBER, NOT A COMMIT SHA. This originally read
+/// `{CARGO_PKG_VERSION}+g{short sha}`, reasoned from the milestone plan's
+/// own "SemVer build metadata on a short commit hash" wording -- and that
+/// turned out not to match what the plan was actually modeling: Roblox's
+/// real version string, `0.739.0.7390687`, is entirely numeric, with an
+/// opaque incrementing build number as its fourth segment, no VCS hash
+/// anywhere in it. `{CARGO_PKG_VERSION}.{build number}` (e.g. `0.1.0.482`)
+/// is the corrected, literal analogue: three segments from Cargo's own
+/// version, a fourth that increments the same way Roblox's does. A commit
+/// sha is a reasonable crash-traceability idea on its own merits, but it is
+/// not this milestone's reference shape.
+///
+/// `DEW_BUILD_NUMBER` COMES FROM `build.rs`, BAKED IN AT COMPILE TIME. A
 /// shipped `dew.exe` has no `.git` directory to ask, so the lookup happens
 /// once, here, where a checkout is expected to exist -- see that file for
-/// the shallow-clone and no-`.git` fallbacks.
+/// the shallow-clone and no-`.git` fallbacks, and for why a plain commit
+/// count is NOT shallow-clone-safe the way a short sha was (a shallow clone
+/// answers `1`, not the repository's real count -- see the sprint-3
+/// amendment record for how CI's own checkout was fixed for this).
 pub(crate) const BUILD_IDENTIFIER: &str =
-    concat!(env!("CARGO_PKG_VERSION"), "+g", env!("DEW_BUILD_SHA"));
+    concat!(env!("CARGO_PKG_VERSION"), ".", env!("DEW_BUILD_NUMBER"));
 
 fn find_dir(name: &str) -> Option<PathBuf> {
     let mut cur = std::env::current_dir().ok()?;
@@ -2940,14 +2952,21 @@ mod tests {
     }
 
     #[test]
-    fn the_build_identifier_carries_the_cargo_version_and_a_commit_hash() {
-        // NOT ASSERTING AN EXACT SHA -- it moves every commit. What must hold
-        // regardless: the Cargo version is the prefix, and `+g` introduces a
-        // non-empty hash after it, the shape `--version`'s real output and
-        // the sprint record both rely on.
+    fn the_build_identifier_carries_the_cargo_version_and_a_build_number() {
+        // NOT ASSERTING AN EXACT COUNT -- it moves every commit. What must
+        // hold regardless: the Cargo version is the prefix, a `.` introduces
+        // a fourth, purely numeric segment after it -- the dotted,
+        // Roblox-shaped form `--version`'s real output and the sprint record
+        // both rely on -- and that segment parses as a number rather than
+        // carrying a stray letter the way the old `g<sha>` form did.
         assert!(BUILD_IDENTIFIER.starts_with(env!("CARGO_PKG_VERSION")));
-        let (_, sha) = BUILD_IDENTIFIER.split_once("+g").expect("a +g suffix");
-        assert!(!sha.is_empty());
+        let (_, build_number) = BUILD_IDENTIFIER
+            .rsplit_once('.')
+            .expect("a fourth, dot-separated segment");
+        assert!(
+            build_number.parse::<u64>().is_ok(),
+            "{build_number:?} should be a plain number"
+        );
     }
 
     /// NOT SKIPPED WHEN THE DIRECTORY IS ABSENT. Both lookups here were `if let`
