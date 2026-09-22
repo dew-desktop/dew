@@ -16,6 +16,29 @@ cd examples/aether/timetracker && pesde install
 Dew itself declares no framework. `cargo test --manifest-path host/Cargo.toml`
 borrows one from an example that has installed it.
 
+## The build identifier
+
+`dew --version` (or `-V`) prints an identifier shaped like Cargo's own
+version plus a running build count, for example:
+
+```
+0.1.0.242
+```
+
+The first three numbers are `host/Cargo.toml`'s version. The last is a
+plain count of commits, incrementing on every commit regardless of what
+changed. The same identifier appears in the tray's About entry and at the
+top of a panic report, so a crash always carries it even when nobody
+thought to ask for `dew --version` separately.
+
+None of it is a compatibility promise. It does not say whether a given mod
+still works after an update; that answer lives entirely in
+`experimentalDatamodel`'s revision pinning (see
+[docs/applet_contract.md](docs/applet_contract.md)), not in this number. A
+build with a higher count is not guaranteed to behave the same as one with
+a lower count, and a mod that needs that guarantee should pin the
+revisions it depends on rather than reading this string.
+
 ## Checking it
 
 ```sh
