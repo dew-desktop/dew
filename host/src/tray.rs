@@ -59,6 +59,7 @@ static UNLOAD_QUEUE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const ID_EXIT: usize = 1000;
 const ID_MANAGE: usize = 1001;
+const ID_ABOUT: usize = 1002;
 /// Where the per-applet unload entries start. Clear of `CAPS` (2000-2005) and
 /// `ID_EXIT`/`ID_MANAGE`, with room for far more loaded applets than the menu
 /// could ever show usefully before the low word of `WM_COMMAND`'s `wParam`
@@ -132,6 +133,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 EXIT_REQUESTED.store(1, Ordering::Relaxed);
             } else if id == ID_MANAGE {
                 crate::manage::open_or_focus();
+            } else if id == ID_ABOUT {
+                show_about();
             } else if let Some((_, _, us)) = CAPS.iter().find(|(cap_id, _, _)| *cap_id == id) {
                 FRAME_BUDGET_US.store(*us, Ordering::Relaxed);
             } else if id >= ID_APPLET_BASE {
@@ -147,6 +150,30 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+/// The About box's body text. Split out from `show_about` so it can be
+/// asserted on directly -- there is no way to click-drive a real
+/// `MessageBoxW` from a test, but there is no reason the string that goes
+/// into one should be untestable along with it.
+fn about_text() -> String {
+    format!("Dew {}", crate::BUILD_IDENTIFIER)
+}
+
+/// Shows the build identifier in a message box.
+///
+/// ITS OWN THREAD, THE SAME PATTERN `manage::open_or_focus` USES. `tray_proc`
+/// runs on the coordinator's own thread, which its `poll()` also uses to
+/// drive every loaded applet's frame loop -- `MessageBoxW` is modal and does
+/// not return until dismissed, so calling it here directly would freeze
+/// every applet's rendering for as long as the box stays open, not just the
+/// tray menu.
+fn show_about() {
+    std::thread::spawn(|| unsafe {
+        let title = wide("About Dew");
+        let text = wide(&about_text());
+        MessageBoxW(None, PCWSTR(text.as_ptr()), PCWSTR(title.as_ptr()), MB_OK);
+    });
 }
 
 unsafe fn show_menu(hwnd: HWND) {
@@ -177,6 +204,13 @@ unsafe fn show_menu(hwnd: HWND) {
         MF_STRING,
         ID_MANAGE,
         PCWSTR(wide("Manage applets").as_ptr()),
+    );
+
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_ABOUT,
+        PCWSTR(wide("About Dew").as_ptr()),
     );
 
     // ONE ENTRY PER LOADED APPLET, EACH ITS OWN UNLOAD -- a quick unload for
@@ -321,5 +355,25 @@ impl Drop for Tray {
             let _ = Shell_NotifyIconW(NIM_DELETE, &self.icon);
             let _ = DestroyWindow(self.hwnd);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_about_text_carries_the_real_build_identifier() {
+        assert_eq!(about_text(), format!("Dew {}", crate::BUILD_IDENTIFIER));
+        // Four dot-separated segments (CARGO_PKG_VERSION's three plus the
+        // build number), all numeric -- the dotted, Roblox-shaped form, not
+        // the old `+g<sha>` one.
+        let segments: Vec<&str> = crate::BUILD_IDENTIFIER.split('.').collect();
+        assert_eq!(segments.len(), 4, "{}", about_text());
+        assert!(
+            segments.iter().all(|s| s.parse::<u64>().is_ok()),
+            "{}",
+            about_text()
+        );
     }
 }

@@ -185,6 +185,15 @@ jobs:
     if: needs.changes.outputs.code == 'true'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `host/build.rs` embeds `git rev-list --count HEAD` as dew's build
+          # number (milestone 12 sprint 3's amendment), and that count is
+          # shallow-clone-dependent in a way a short sha never was: the
+          # default depth-1 checkout has exactly one commit, so the count is
+          # always 1 regardless of the real repository's history, and this
+          # job would silently bake that wrong number into every build it
+          # produces. Full history is what makes the count real.
+          fetch-depth: 0
 
       # THE TOOLCHAIN HAS ONE HOME, rust-toolchain.toml, and this reads it rather
       # than naming a version twice. `@stable` floated six releases ahead of the

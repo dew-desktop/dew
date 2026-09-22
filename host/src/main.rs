@@ -50,6 +50,36 @@ use std::time::{Duration, Instant};
 /// Deep obsidian, behind every widget.
 const BACKGROUND: Rgb = Rgb(13, 17, 23);
 
+/// `{CARGO_PKG_VERSION}.{build number}` -- an incrementing build stamp, not
+/// a compatibility promise. Milestone 12 sprints 1 and 2 already gave that
+/// job to the flag registry (`Tier::Experimental { flag, revision }`), so
+/// this number carries no gating meaning of its own: bumping
+/// `host/Cargo.toml`'s `version`, or the build count moving, says a new
+/// build exists, nothing about whether an applet written against the last
+/// one still works.
+///
+/// A DOTTED NUMBER, NOT A COMMIT SHA. This originally read
+/// `{CARGO_PKG_VERSION}+g{short sha}`, reasoned from the milestone plan's
+/// own "SemVer build metadata on a short commit hash" wording -- and that
+/// turned out not to match what the plan was actually modeling: Roblox's
+/// real version string, `0.739.0.7390687`, is entirely numeric, with an
+/// opaque incrementing build number as its fourth segment, no VCS hash
+/// anywhere in it. `{CARGO_PKG_VERSION}.{build number}` (e.g. `0.1.0.482`)
+/// is the corrected, literal analogue: three segments from Cargo's own
+/// version, a fourth that increments the same way Roblox's does. A commit
+/// sha is a reasonable crash-traceability idea on its own merits, but it is
+/// not this milestone's reference shape.
+///
+/// `DEW_BUILD_NUMBER` COMES FROM `build.rs`, BAKED IN AT COMPILE TIME. A
+/// shipped `dew.exe` has no `.git` directory to ask, so the lookup happens
+/// once, here, where a checkout is expected to exist -- see that file for
+/// the shallow-clone and no-`.git` fallbacks, and for why a plain commit
+/// count is NOT shallow-clone-safe the way a short sha was (a shallow clone
+/// answers `1`, not the repository's real count -- see the sprint-3
+/// amendment record for how CI's own checkout was fixed for this).
+pub(crate) const BUILD_IDENTIFIER: &str =
+    concat!(env!("CARGO_PKG_VERSION"), ".", env!("DEW_BUILD_NUMBER"));
+
 fn find_dir(name: &str) -> Option<PathBuf> {
     let mut cur = std::env::current_dir().ok()?;
     loop {
@@ -601,6 +631,7 @@ pub enum Command {
     Help {
         subcommand: Option<String>,
     },
+    Version,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -646,6 +677,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "help" | "--help" | "-h" => Ok(Command::Help {
             subcommand: args_vec.get(1).cloned(),
         }),
+        "version" | "--version" | "-V" => Ok(Command::Version),
         _ if first.starts_with("--") => parse_legacy_flags(&args_vec, is_windows),
         // A BARE PATH RUNS IT. `dew examples/aether/timetracker` is the shortest true
         // thing to type, and it is what the README documents; requiring `run`
@@ -2334,6 +2366,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  help [COMMAND]   Show help for a command");
             println!();
             println!("Options:");
+            println!("  --version, -V    Show the build identifier and exit");
             println!("  -o <PATH>        Where snapshot writes its image");
             println!("  --script <PATH>  Render a standalone script rather than an applet");
             println!("  --size <WxH>     Dimensions for a standalone script");
@@ -2418,6 +2451,10 @@ fn run() -> Result<(), String> {
             execute_help(subcommand);
             Ok(())
         }
+        Command::Version => {
+            println!("{BUILD_IDENTIFIER}");
+            Ok(())
+        }
     }
 }
 
@@ -2432,7 +2469,25 @@ fn icon_path() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.is_file())
 }
 
+/// Prints the build identifier before Rust's own panic message, so a crash
+/// report carries it without whoever files one needing to know to run `dew
+/// --version` separately -- which may not even be possible if the crash is a
+/// hang rather than a return.
+///
+/// READS ONLY `BUILD_IDENTIFIER`, A `const`. A hook that panics while
+/// formatting its own message turns one panic into a much worse, harder to
+/// diagnose double panic, so there is nothing here that can fail: no lock,
+/// no lookup, just a string cargo baked in at compile time.
+fn install_panic_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        eprintln!("dew {BUILD_IDENTIFIER}: about to panic");
+        default_hook(info);
+    }));
+}
+
 fn main() -> ExitCode {
+    install_panic_hook();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
@@ -2881,6 +2936,37 @@ mod tests {
             Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("snapshot")),
             _ => panic!("expected Help command"),
         }
+    }
+
+    #[test]
+    fn version_short_and_long_flags_agree() {
+        for spelling in ["version", "--version", "-V"] {
+            let words = [spelling];
+            let args = words.iter().map(|s| s.to_string());
+            assert_eq!(
+                parse_args(args, false).unwrap(),
+                Command::Version,
+                "{spelling:?} should parse as Command::Version"
+            );
+        }
+    }
+
+    #[test]
+    fn the_build_identifier_carries_the_cargo_version_and_a_build_number() {
+        // NOT ASSERTING AN EXACT COUNT -- it moves every commit. What must
+        // hold regardless: the Cargo version is the prefix, a `.` introduces
+        // a fourth, purely numeric segment after it -- the dotted,
+        // Roblox-shaped form `--version`'s real output and the sprint record
+        // both rely on -- and that segment parses as a number rather than
+        // carrying a stray letter the way the old `g<sha>` form did.
+        assert!(BUILD_IDENTIFIER.starts_with(env!("CARGO_PKG_VERSION")));
+        let (_, build_number) = BUILD_IDENTIFIER
+            .rsplit_once('.')
+            .expect("a fourth, dot-separated segment");
+        assert!(
+            build_number.parse::<u64>().is_ok(),
+            "{build_number:?} should be a plain number"
+        );
     }
 
     /// NOT SKIPPED WHEN THE DIRECTORY IS ABSENT. Both lookups here were `if let`
