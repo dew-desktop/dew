@@ -304,6 +304,65 @@ invisible, and an author would check all three before suspecting the asset.
 An engine application moved to Dew with an asset it cannot reach is a correct
 application missing an image, not a broken one.
 
+## Experimental DataModel features, pinned by revision
+
+Some DataModel properties and enums are accepted by the host before they are
+part of the surface every applet can rely on staying the same shape. A mod
+opts into one through `experimentalDatamodel`:
+
+```toml
+experimentalDatamodel = ["GuiObject.BlendingMode@1"]
+```
+
+Each entry names a property or enum as `Class.Property`, followed by `@`
+and the revision the mod was written against. The revision is required.
+Loading a mod whose `dew.toml` names an entry with no `@N` refuses rather
+than quietly resolving to whatever revision the registry happens to be at
+today:
+
+```
+dew: mismatch-demo: experimentalDatamodel entry "GuiObject.BlendingMode" has no @revision -- write it as
+"Class.Property@N", pinning the revision this mod was written against
+```
+
+If the row's shape has changed since the pinned revision, loading also
+refuses, naming both the revision the mod expects and the one the registry
+is actually at:
+
+```
+dew: mismatch-demo: experimentalDatamodel entry "DewSprintTestOnly.RevisionProbe@1" was written against revision 1,
+but the registry is now at revision 2 -- the property's shape changed; update the mod for the new behavior and declare
+@2
+```
+
+An experimental row can be renamed or change shape entirely between one Dew
+build and the next, with no permanent deprecated form kept around for
+compatibility. Pinning a revision is what turns that into a refusal with a
+specific fix, rather than a mod quietly behaving differently after an
+update. A property that is not experimental, `permissions` for instance,
+carries no revision at all, because it is not allowed to move underneath an
+applet the way an experimental one explicitly is.
+
+At load, the console names every experimental flag a mod's declarations
+resolved to:
+
+```
+[dew] experimental: FFlagDewGuiObjectBlendingMode (revision 1)
+```
+
+**A local override, independent of any mod's own declarations.** A flat map
+at `DewAppSettings.json`, beside Dew's other per-user files (on Windows,
+`%LOCALAPPDATA%\Dew\DewAppSettings.json`), turns a flag on for every mod run
+on that machine, whether or not the mod running declared it:
+
+```json
+{ "FFlagDewGuiObjectBlendingMode": true }
+```
+
+This is a host-level switch for trying an experimental feature locally
+without editing any mod's manifest, not something a mod ships or reads.
+Nothing writes this file; a person edits it by hand.
+
 ## Every `dew.toml` field, and whether the host reads it
 
 A manifest field that is parsed and ignored is indistinguishable, from the
@@ -317,6 +376,7 @@ says the difference out loud at load.
 | `name` | the window caption when the declaration sets no `surface.title`, and the tray tooltip |
 | `description` | the tray tooltip |
 | `hotkeys` | **nothing yet.** Declared and inert; see below |
+| `experimentalDatamodel` | gates experimental DataModel properties and enums behind a pinned revision; see above |
 
 `hotkeys` is the one field Dew accepts and does not act on. Nothing in the
 host registers a global hotkey, so a declared binding has never fired.
