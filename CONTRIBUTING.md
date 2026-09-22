@@ -87,3 +87,22 @@ is. A branch that needs "and" to describe it is two branches.
 
 **`main` is always green.** Every commit on it compiles, passes its checks, and
 runs.
+
+## Releases
+
+A release is a tag on `main`, not a branch. Tagging a commit `v0.1.0` (`v`
+plus whatever `host/Cargo.toml`'s `version` field reads at that commit)
+triggers a workflow that builds `dew.exe` in release mode on Windows and
+attaches it to a GitHub Release for that tag. Cutting a release means
+bumping `host/Cargo.toml`'s version in an ordinary pull request first, then
+tagging the resulting commit once it lands: the release workflow checks the
+tag's version against `host/Cargo.toml` and refuses to build if they
+disagree, so a shipped `dew.exe`'s own `--version` output always matches the
+tag it was published under.
+
+There is no `release/x.y` branch maintained alongside ongoing work on
+`main`. The one case that branch is for is reactive: hotfixing something
+already shipped after `main` has moved past it. Cut it from the tag at the
+moment the fix is actually needed, land the fix there, tag the result, and
+let the branch end its life once that ships. It is never created ahead of
+a release that has not happened yet.

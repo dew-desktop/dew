@@ -23,6 +23,13 @@ name: CI
 on:
   push:
     branches: [main]
+    # A RELEASE TAG IS A SEPARATE TRIGGER FROM A BRANCH PUSH. `branches` and
+    # `tags` are independent filters under one `push` block: a push to `main`
+    # matches the first, a pushed tag matching `v*` matches the second, and
+    # each kind of push only ever satisfies its own filter. This is what lets
+    # the `release` job below fire on `v0.1.0` without every ordinary commit
+    # to `main` also trying to cut a release.
+    tags: ['v*']
   pull_request:
   # SO A RUN CAN BE ASKED FOR, once minutes are back or a quota window resets,
   # without pushing an empty commit to trigger one.
@@ -82,6 +89,11 @@ jobs:
   changes:
     name: decide which jobs need to run
     runs-on: ubuntu-latest
+    # NOT FOR A TAG PUSH. A pushed tag has no "before" commit in the sense
+    # this diff assumes (it names a commit already on `main`, not a new one),
+    # and nothing this job decides is relevant to the `release` job below,
+    # which builds unconditionally on a tag and never reads this output.
+    if: github.ref_type != 'tag'
     outputs:
       code: ${{ steps.filter.outputs.code }}
     steps:
@@ -146,6 +158,11 @@ jobs:
   checks:
     name: architecture boundaries
     runs-on: ubuntu-latest
+    # NOT FOR A TAG PUSH, for the same reason as `changes` above: a release
+    # tag names a commit that already passed this check on the branch push or
+    # pull request that put it on `main`. Re-running it here would only cost
+    # a machine to re-confirm something the tag's own history already proved.
+    if: github.ref_type != 'tag'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -610,3 +627,101 @@ jobs:
       # applet by path removed the thing they were selecting, so the commands are
       # not broken, they are gone. `snapshot applets/nameplate` above covers what
       # they were really testing, which is that a named applet renders headlessly.
+
+  # A TAG ON `main` CUTS A RELEASE. Milestone 12 sprint 4: this is the first
+  # time anything in this repository builds and publishes `dew.exe` itself,
+  # as opposed to `dew package`, which zips up an APPLET directory and has
+  # never built the host binary at all.
+  #
+  # NOT GATED ON `changes.outputs.code`, unlike `build` and `linux` above.
+  # That condition exists to skip a Windows build for a documentation-only
+  # commit, which is the right call for an ordinary pull request but the
+  # wrong one here: a release build has no "documentation-only" case, since
+  # the entire point of pushing a tag is to produce a binary. Depending on
+  # `changes` (whose own job skips on a tag push, see its comment above)
+  # would just mean this job's `needs` is always unmet and the release
+  # silently never builds, which is exactly the trap of copying that
+  # condition verbatim onto a job it was never written for.
+  release:
+    name: release (tag build)
+    runs-on: windows-latest
+    if: github.ref_type == 'tag'
+    # THE DEFAULT `GITHUB_TOKEN` IS READ-ONLY ON THIS REPOSITORY. Creating a
+    # Release and uploading an asset to it needs `contents: write`; without
+    # this block the `gh release create` step below fails with a 403 that
+    # looks like a `gh` misconfiguration rather than what it actually is; a
+    # permissions gap on the token itself.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Same reason as the `build` job above: `host/build.rs` embeds
+          # `git rev-list --count HEAD` as the build number, and that count
+          # is wrong under the default shallow checkout.
+          fetch-depth: 0
+
+      # THE TOOLCHAIN HAS ONE HOME, rust-toolchain.toml. Copied from the
+      # `build` job rather than re-derived, so both jobs read the same pin
+      # the same way.
+      - name: Read the Rust version from rust-toolchain.toml
+        id: rust
+        shell: bash
+        run: |
+          channel=$(grep -m1 -oE 'channel = "[^"]+"' rust-toolchain.toml | cut -d'"' -f2)
+          test -n "$channel" || { echo "no channel in rust-toolchain.toml"; exit 1; }
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Rust pinned at $channel"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.rust.outputs.channel }}
+
+      # A CACHE OF ITS OWN, `${{ runner.os }}-release` rather than
+      # `${{ runner.os }}-build`. A release profile build produces different
+      # artifacts from the `build` job's dev profile; sharing a key would
+      # have the two jobs overwrite each other's cache and both stay cold.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: .
+          shared-key: ${{ runner.os }}-release
+
+      # THE TAG-TO-VERSION DECISION, ENFORCED, NOT JUST STATED. Sprint 3 left
+      # open whether `host/Cargo.toml`'s `version` field, reused as the build
+      # identifier's source, would ever need to serve two masters at once.
+      # A release tag is the concrete case: this sprint decides that cutting
+      # a release requires `Cargo.toml`'s version to already read what the
+      # tag says, checked here rather than left as an unenforced convention,
+      # so a tag and the build identifier it ships can never silently drift.
+      # A tag's own pre-release or build-metadata suffix (`-rc1`, `+test`) is
+      # stripped before comparing, since that suffix describes the TAG
+      # (a staging or verification cut) rather than the crate version it was
+      # built from.
+      - name: Verify the tag's version matches host/Cargo.toml
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          core="${tag%%-*}"
+          core="${core%%+*}"
+          cargo_version=$(grep -m1 -oE '^version = "[^"]+"' host/Cargo.toml | cut -d'"' -f2)
+          echo "tag: $GITHUB_REF_NAME (core version $core), host/Cargo.toml: $cargo_version"
+          test "$core" = "$cargo_version" || {
+            echo "::error::Tag $GITHUB_REF_NAME's version ($core) does not match host/Cargo.toml's version ($cargo_version). Bump host/Cargo.toml's version in the commit a release tag points at before tagging it."
+            exit 1
+          }
+
+      - name: Build dew.exe in release profile
+        run: cargo build --manifest-path host/Cargo.toml --release --bin dew
+
+      # ATTACHED TO A GITHUB RELEASE FOR THE TAG. `gh release create` both
+      # creates the Release and uploads the named asset in one step; no
+      # release exists for this tag until this succeeds.
+      - name: Create the GitHub Release and attach dew.exe
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "target/release/dew.exe" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Automated release build for $GITHUB_REF_NAME."
