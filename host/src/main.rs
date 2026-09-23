@@ -607,6 +607,15 @@ pub enum Command {
         path: PathBuf,
         force: bool,
     },
+    /// `dew install @<owner_user_id>/<applet_id>`. The leading `@` is what
+    /// tells this apart from a filesystem path -- npm's scoped-package
+    /// syntax, chosen for the same reason: no local path legally starts
+    /// with `@`, so there is nothing to disambiguate at parse time.
+    InstallFromMarketplace {
+        owner_user_id: String,
+        applet_id: String,
+        force: bool,
+    },
     Package {
         dir: PathBuf,
         output: Option<PathBuf>,
@@ -618,6 +627,7 @@ pub enum Command {
     Signup,
     Logout,
     Whoami,
+    Discover,
     Init {
         name: String,
         surface: String,
@@ -681,6 +691,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "signup" => Ok(Command::Signup),
         "logout" => Ok(Command::Logout),
         "whoami" => Ok(Command::Whoami),
+        "discover" => Ok(Command::Discover),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
@@ -862,24 +873,39 @@ fn parse_check(args: &[String]) -> Result<Command, String> {
 }
 
 fn parse_install(args: &[String]) -> Result<Command, String> {
-    let mut path: Option<PathBuf> = None;
+    let mut positional: Option<String> = None;
     let mut force = false;
     for arg in args {
         match arg.as_str() {
             "--force" => force = true,
             s if !s.starts_with('-') => {
-                if path.is_some() {
+                if positional.is_some() {
                     return Err(format!("unexpected argument '{s}'"));
                 }
-                path = Some(PathBuf::from(s));
+                positional = Some(s.to_string());
             }
             _ => return Err(format!("unrecognised argument '{arg}'")),
         }
     }
-    let path = path.ok_or(
-        "nothing to install: pass an applet directory or a .dewpkg file, e.g. `dew install examples/host/basic-widget`",
+    let positional = positional.ok_or(
+        "nothing to install: pass an applet directory, a .dewpkg file, or @<owner>/<applet_id>, e.g. `dew install examples/host/basic-widget`",
     )?;
-    Ok(Command::Install { path, force })
+
+    if let Some(reference) = positional.strip_prefix('@') {
+        let (owner_user_id, applet_id) = reference.split_once('/').ok_or_else(|| {
+            format!("'{positional}': expected @<owner_user_id>/<applet_id>, e.g. `dew install @00000000-0000-0000-0000-000000000000/calculator`")
+        })?;
+        return Ok(Command::InstallFromMarketplace {
+            owner_user_id: owner_user_id.to_string(),
+            applet_id: applet_id.to_string(),
+            force,
+        });
+    }
+
+    Ok(Command::Install {
+        path: PathBuf::from(positional),
+        force,
+    })
 }
 
 fn parse_package(args: &[String]) -> Result<Command, String> {
@@ -1826,6 +1852,74 @@ fn execute_whoami() -> Result<(), String> {
     }
 }
 
+fn execute_discover() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        Err(
+            "'discover' is Windows-only, alongside the rest of the marketplace commands"
+                .to_string(),
+        )
+    }
+
+    #[cfg(windows)]
+    {
+        let packages = platform::discover()?;
+        if packages.is_empty() {
+            println!("[dew] no public packages yet");
+            return Ok(());
+        }
+        for package in packages {
+            println!(
+                "[dew] @{}/{}  (published {})",
+                package.owner_user_id, package.applet_id, package.uploaded_at
+            );
+        }
+        println!("[dew] install one with `dew install @<owner>/<applet_id>`");
+        Ok(())
+    }
+}
+
+/// Fetches a public package's bytes and hands them to
+/// `package::install_from_archive`, exactly the path a local `.dewpkg`
+/// file already takes: a marketplace fetch is a second way of producing
+/// a `&Path` on disk, never a fork of install itself, per ADR-015.
+fn execute_install_from_marketplace(
+    owner_user_id: String,
+    applet_id: String,
+    force: bool,
+) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (owner_user_id, applet_id, force);
+        Err("'install' is Windows-only: an installed applet loads into the coordinator's window, which only runs on Windows".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let bytes = platform::fetch_package(&owner_user_id, &applet_id)?;
+
+        let temp_path = std::env::temp_dir().join(format!(
+            "dew-fetch-{applet_id}-{}-{}.dewpkg",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::write(&temp_path, &bytes).map_err(|e| e.to_string())?;
+
+        let result = package::install_from_archive(&temp_path, force);
+        let _ = std::fs::remove_file(&temp_path);
+        let id = result?;
+
+        println!("[dew] installed '{id}' from @{owner_user_id}/{applet_id}");
+        println!(
+            "[dew] this loads the next time the Dew service starts; a service already running keeps what it started with"
+        );
+        Ok(())
+    }
+}
+
 /// The `dew.toml` that `dew init` writes.
 ///
 /// TOML, BECAUSE THE FILE IS CALLED `dew.toml`. This emitted JSON for as long as
@@ -2365,12 +2459,17 @@ fn execute_help(subcommand: Option<String>) {
         }
         Some("install") => {
             println!("Usage: dew install <PATH> [OPTIONS]");
+            println!("       dew install @<owner_user_id>/<applet_id> [OPTIONS]");
             println!();
             println!("Copy an applet into the per-user store, so a Dew service loads it on its next start.");
+            println!("The @owner/id form fetches a public package from the marketplace (dew login first).");
             println!();
             println!("Arguments:");
             println!(
                 "  <PATH>                Applet directory or .dewpkg file (its dew.toml names its id)"
+            );
+            println!(
+                "  @<owner>/<id>         A public package's owner and applet id, from `dew discover`"
             );
             println!();
             println!("Options:");
@@ -2421,6 +2520,11 @@ fn execute_help(subcommand: Option<String>) {
             println!();
             println!("Show which account, if any, is currently signed in.");
         }
+        Some("discover") => {
+            println!("Usage: dew discover");
+            println!();
+            println!("List public packages on the deployed marketplace (dew login first).");
+        }
         Some("conformance") => {
             println!("Usage: dew conformance [FILTER] [OPTIONS]");
             println!();
@@ -2462,6 +2566,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  signup           Create a Dew account (Windows only)");
             println!("  logout           Clear the stored session (Windows only)");
             println!("  whoami           Show which account is signed in (Windows only)");
+            println!("  discover         List public packages on the marketplace (Windows only)");
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
@@ -2534,12 +2639,18 @@ fn run() -> Result<(), String> {
         Command::Snapshot { target, output } => execute_snapshot(target, output),
         Command::Check { targets } => execute_check(targets),
         Command::Install { path, force } => execute_install(path, force),
+        Command::InstallFromMarketplace {
+            owner_user_id,
+            applet_id,
+            force,
+        } => execute_install_from_marketplace(owner_user_id, applet_id, force),
         Command::Package { dir, output } => execute_package(dir, output),
         Command::Uninstall { id } => execute_uninstall(id),
         Command::Login => execute_login(),
         Command::Signup => execute_signup(),
         Command::Logout => execute_logout(),
         Command::Whoami => execute_whoami(),
+        Command::Discover => execute_discover(),
         Command::Init {
             name,
             surface,
@@ -3073,6 +3184,50 @@ mod tests {
                 "{word:?} should parse with no arguments"
             );
         }
+    }
+
+    #[test]
+    fn discover_parses_with_no_arguments() {
+        let words = ["discover"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(parse_args(args, false).unwrap(), Command::Discover);
+    }
+
+    #[test]
+    fn install_with_an_at_prefix_parses_as_a_marketplace_reference() {
+        let words = [
+            "install",
+            "@00000000-0000-0000-0000-000000000000/calculator",
+        ];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(
+            parse_args(args, false).unwrap(),
+            Command::InstallFromMarketplace {
+                owner_user_id: "00000000-0000-0000-0000-000000000000".to_string(),
+                applet_id: "calculator".to_string(),
+                force: false,
+            }
+        );
+    }
+
+    #[test]
+    fn install_without_an_at_prefix_still_parses_as_a_path() {
+        let words = ["install", "examples/host/basic-widget"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(
+            parse_args(args, false).unwrap(),
+            Command::Install {
+                path: PathBuf::from("examples/host/basic-widget"),
+                force: false,
+            }
+        );
+    }
+
+    #[test]
+    fn install_with_an_at_prefix_but_no_slash_is_refused() {
+        let words = ["install", "@no-slash-here"];
+        let args = words.iter().map(|s| s.to_string());
+        assert!(parse_args(args, false).is_err());
     }
 
     #[test]

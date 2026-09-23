@@ -14,12 +14,13 @@
 #![cfg(windows)]
 
 use serde::{Deserialize, Serialize};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
 const SUPABASE_URL: &str = "https://yeijewkdjiiixjthinib.supabase.co";
 const SUPABASE_ANON_KEY: &str = "sb_publishable_kfzM8P-uVqW6gDlb_7oJCw_Q7aNdLnl";
+const DEW_PLATFORM_URL: &str = "https://dew-platform.fly.dev";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
@@ -109,11 +110,68 @@ pub fn signup(email: &str, password: &str) -> Result<(), String> {
 
 fn describe_auth_error(error: ureq::Error) -> String {
     match error {
-        ureq::Error::Status(_, response) => response
-            .into_string()
-            .unwrap_or_else(|_| "the identity provider rejected this".to_string()),
+        ureq::Error::Status(code, response) => {
+            let body = response.into_string().unwrap_or_default();
+            if body.trim().is_empty() {
+                format!("rejected with status {code}")
+            } else {
+                format!("{code}: {body}")
+            }
+        }
         ureq::Error::Transport(transport) => format!("offline or network error: {transport}"),
     }
+}
+
+/// One entry in `GET /discover`'s listing: `dew-platform`'s own
+/// `PublicPackage`, which deliberately carries no storage key, so nothing
+/// this client learns from discovery can be used to reach a package's
+/// bytes on its own; `fetch_package` below is the only path to those.
+#[derive(Debug, Deserialize)]
+pub struct DiscoveredPackage {
+    pub owner_user_id: String,
+    pub applet_id: String,
+    pub uploaded_at: String,
+}
+
+fn require_session() -> Result<Session, String> {
+    load_session().ok_or_else(|| "not signed in; run `dew login`".to_string())
+}
+
+/// Lists every public package across every account. Requires a session
+/// the same way every other platform request does, even though the
+/// listing itself is not scoped to the caller: `dew-platform` gates every
+/// route behind a verified token, discovery included.
+pub fn discover() -> Result<Vec<DiscoveredPackage>, String> {
+    let session = require_session()?;
+    agent()
+        .get(&format!("{DEW_PLATFORM_URL}/discover"))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .map_err(describe_auth_error)?
+        .into_json()
+        .map_err(|e| e.to_string())
+}
+
+/// Fetches a public package's raw bytes by its owner and applet id
+/// together, exactly the shape `dew-platform`'s own milestone 18 route
+/// takes: never by applet id alone, since that still cannot say whose
+/// package is meant.
+pub fn fetch_package(owner_user_id: &str, applet_id: &str) -> Result<Vec<u8>, String> {
+    let session = require_session()?;
+    let response = agent()
+        .get(&format!(
+            "{DEW_PLATFORM_URL}/packages/{owner_user_id}/{applet_id}"
+        ))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .map_err(describe_auth_error)?;
+
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
 }
 
 /// Reads an email and a password from the terminal. The password is
