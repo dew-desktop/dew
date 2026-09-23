@@ -36,14 +36,65 @@ fn session_path() -> Option<PathBuf> {
 
 pub fn load_session() -> Option<Session> {
     let path = session_path()?;
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&text).ok()
+    let ciphertext = std::fs::read(path).ok()?;
+    let plaintext = dpapi_unprotect(&ciphertext).ok()?;
+    serde_json::from_slice(&plaintext).ok()
 }
 
 fn save_session(session: &Session) -> Result<(), String> {
     let path = session_path().ok_or("no home directory to store a session in")?;
-    let text = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
-    std::fs::write(path, text).map_err(|e| e.to_string())
+    let plaintext = serde_json::to_vec(session).map_err(|e| e.to_string())?;
+    let ciphertext = dpapi_protect(&plaintext)?;
+    std::fs::write(path, ciphertext).map_err(|e| e.to_string())
+}
+
+/// Encrypts with DPAPI, scoped to the current Windows user by default
+/// (no extra entropy needed, the same guarantee Windows' own Credential
+/// Manager relies on): only a process running as this same user can ever
+/// decrypt it back, so `session.json`'s bytes on disk are useless to
+/// anything that is not.
+fn dpapi_protect(plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Foundation::LocalFree;
+    use windows::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
+
+    unsafe {
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: plaintext.len() as u32,
+            pbData: plaintext.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB::default();
+
+        CryptProtectData(&input, None, None, None, None, 0, &mut output)
+            .map_err(|e| format!("failed to encrypt session: {e}"))?;
+
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+            output.pbData as *mut _,
+        )));
+        Ok(bytes)
+    }
+}
+
+fn dpapi_unprotect(ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+    use windows::Win32::Foundation::LocalFree;
+    use windows::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+
+    unsafe {
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: ciphertext.len() as u32,
+            pbData: ciphertext.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB::default();
+
+        CryptUnprotectData(&input, None, None, None, None, 0, &mut output)
+            .map_err(|e| format!("failed to decrypt session: {e}"))?;
+
+        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+        let _ = LocalFree(Some(windows::Win32::Foundation::HLOCAL(
+            output.pbData as *mut _,
+        )));
+        Ok(bytes)
+    }
 }
 
 pub fn clear_session() {
