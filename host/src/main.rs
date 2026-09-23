@@ -628,6 +628,7 @@ pub enum Command {
     Logout,
     Whoami,
     Discover,
+    Sync,
     Init {
         name: String,
         surface: String,
@@ -692,6 +693,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "logout" => Ok(Command::Logout),
         "whoami" => Ok(Command::Whoami),
         "discover" => Ok(Command::Discover),
+        "sync" => Ok(Command::Sync),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
@@ -1738,7 +1740,23 @@ fn execute_install(path: PathBuf, force: bool) -> Result<(), String> {
         println!(
             "[dew] this loads the next time the Dew service starts; a service already running keeps what it started with"
         );
+        sync_after_install(&id);
         Ok(())
+    }
+}
+
+/// Records a successful install in the signed-in account's synced list,
+/// if there is one. Silent when signed out entirely, since sync is
+/// optional, not a requirement to use Dew at all; a soft warning, not a
+/// failure of the install that already succeeded, if a session exists
+/// but the sync request itself does not go through.
+#[cfg(windows)]
+fn sync_after_install(id: &str) {
+    if platform::load_session().is_none() {
+        return;
+    }
+    if let Err(e) = platform::add_synced(id) {
+        println!("[dew] warning: installed, but could not sync '{id}': {e}");
     }
 }
 
@@ -1879,6 +1897,75 @@ fn execute_discover() -> Result<(), String> {
     }
 }
 
+/// Restores the signed-in account's own synced applets that are missing
+/// locally. Fetches each by applet id alone (`fetch_own_package`),
+/// resolved to that account's own package on `dew-platform`'s side; an
+/// id that came from installing someone ELSE'S public package has no
+/// owner recorded in the sync list (milestone 16's own scope boundary,
+/// unchanged here) and is reported as needing a manual reinstall rather
+/// than silently skipped or treated as a failure of the sprint's own
+/// scope.
+fn execute_sync() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        Err("'sync' is Windows-only, alongside the rest of the marketplace commands".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let synced = platform::list_synced()?;
+        let already_installed: std::collections::HashSet<String> = installed::list()
+            .into_iter()
+            .map(|entry| entry.id)
+            .collect();
+
+        let mut restored = 0;
+        let mut needs_manual_attention = Vec::new();
+
+        for entry in synced {
+            if already_installed.contains(&entry.applet_id) {
+                continue;
+            }
+
+            match platform::fetch_own_package(&entry.applet_id) {
+                Ok(bytes) => {
+                    let temp_path = std::env::temp_dir().join(format!(
+                        "dew-sync-{}-{}-{}.dewpkg",
+                        entry.applet_id,
+                        std::process::id(),
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos())
+                            .unwrap_or(0)
+                    ));
+                    let write_and_install = std::fs::write(&temp_path, &bytes)
+                        .map_err(|e| e.to_string())
+                        .and_then(|()| package::install_from_archive(&temp_path, false));
+                    let _ = std::fs::remove_file(&temp_path);
+
+                    match write_and_install {
+                        Ok(id) => {
+                            println!("[dew] restored '{id}'");
+                            restored += 1;
+                        }
+                        Err(e) => needs_manual_attention.push(format!("{}: {e}", entry.applet_id)),
+                    }
+                }
+                Err(_) => needs_manual_attention.push(format!(
+                    "{}: not this account's own published package; reinstall it manually",
+                    entry.applet_id
+                )),
+            }
+        }
+
+        println!("[dew] restored {restored} applet(s)");
+        for line in &needs_manual_attention {
+            println!("[dew] could not restore {line}");
+        }
+        Ok(())
+    }
+}
+
 /// Fetches a public package's bytes and hands them to
 /// `package::install_from_archive`, exactly the path a local `.dewpkg`
 /// file already takes: a marketplace fetch is a second way of producing
@@ -1916,6 +2003,7 @@ fn execute_install_from_marketplace(
         println!(
             "[dew] this loads the next time the Dew service starts; a service already running keeps what it started with"
         );
+        sync_after_install(&id);
         Ok(())
     }
 }
@@ -2525,6 +2613,13 @@ fn execute_help(subcommand: Option<String>) {
             println!();
             println!("List public packages on the deployed marketplace (dew login first).");
         }
+        Some("sync") => {
+            println!("Usage: dew sync");
+            println!();
+            println!("Restore this account's own synced applets that are missing locally.");
+            println!("An applet synced from someone else's public package cannot be restored this");
+            println!("way and is reported for manual reinstall instead (dew login first).");
+        }
         Some("conformance") => {
             println!("Usage: dew conformance [FILTER] [OPTIONS]");
             println!();
@@ -2567,6 +2662,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  logout           Clear the stored session (Windows only)");
             println!("  whoami           Show which account is signed in (Windows only)");
             println!("  discover         List public packages on the marketplace (Windows only)");
+            println!("  sync             Restore this account's own synced applets (Windows only)");
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
@@ -2651,6 +2747,7 @@ fn run() -> Result<(), String> {
         Command::Logout => execute_logout(),
         Command::Whoami => execute_whoami(),
         Command::Discover => execute_discover(),
+        Command::Sync => execute_sync(),
         Command::Init {
             name,
             surface,
@@ -3191,6 +3288,13 @@ mod tests {
         let words = ["discover"];
         let args = words.iter().map(|s| s.to_string());
         assert_eq!(parse_args(args, false).unwrap(), Command::Discover);
+    }
+
+    #[test]
+    fn sync_parses_with_no_arguments() {
+        let words = ["sync"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(parse_args(args, false).unwrap(), Command::Sync);
     }
 
     #[test]

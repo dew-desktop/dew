@@ -174,6 +174,61 @@ pub fn fetch_package(owner_user_id: &str, applet_id: &str) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
+/// Fetches one of the CALLER'S OWN packages by applet id alone.
+/// `dew-platform` resolves the owner from the bearer token itself for
+/// this route, so it is only ever the caller's own published package,
+/// never a stranger's -- `dew sync` restores what an account published
+/// itself, and it is honest about not yet solving restoring someone
+/// else's public package by id alone, the same namespacing question
+/// ADR-015 already deferred.
+pub fn fetch_own_package(applet_id: &str) -> Result<Vec<u8>, String> {
+    let session = require_session()?;
+    let response = agent()
+        .get(&format!("{DEW_PLATFORM_URL}/packages/{applet_id}"))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .map_err(describe_auth_error)?;
+
+    let mut bytes = Vec::new();
+    response
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
+/// One entry in `GET /sync`'s listing. `dew-platform` also returns
+/// `added_at`, not read here: nothing this command does needs it.
+#[derive(Debug, Deserialize)]
+pub struct SyncedApplet {
+    pub applet_id: String,
+}
+
+/// Lists the signed-in account's synced applet ids.
+pub fn list_synced() -> Result<Vec<SyncedApplet>, String> {
+    let session = require_session()?;
+    agent()
+        .get(&format!("{DEW_PLATFORM_URL}/sync"))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .map_err(describe_auth_error)?
+        .into_json()
+        .map_err(|e| e.to_string())
+}
+
+/// Adds an applet id to the signed-in account's synced list. Idempotent
+/// on `dew-platform`'s own side, so calling this for an id already
+/// synced is a harmless no-op, not an error.
+pub fn add_synced(applet_id: &str) -> Result<(), String> {
+    let session = require_session()?;
+    agent()
+        .put(&format!("{DEW_PLATFORM_URL}/sync/{applet_id}"))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .call()
+        .map_err(describe_auth_error)?;
+    Ok(())
+}
+
 /// Reads an email and a password from the terminal. The password is
 /// masked; `rpassword` is this module's only dependency with no protocol
 /// or crypto role, present purely for that.
