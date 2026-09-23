@@ -1,36 +1,39 @@
-//! Aether's rasterizer: a C ABI over tiny-skia, consumed by `zune.ffi`.
+//! Dew's rasterizer: a flat C ABI over two CPU backends, tiny-skia and
+//! vello_cpu.
 //!
-//! WHY THIS EXISTS
-//! The native host paints with GDI, which cannot do two things the browser host
-//! does: ALPHA BLENDING and GRADIENTS. On the two real screens 49 of 85 filled
-//! rects are translucent, so that is not a polish gap — it is most of the screen
-//! rendered wrong, and it is what stops the native host being a product rather
-//! than an instrument.
+//! WHY NOT GDI. GDI cannot do two things a modern display list needs: ALPHA
+//! BLENDING and GRADIENTS. Painting shapes with it was most of the screen
+//! rendered wrong on any host with translucent or gradient-filled elements,
+//! not a polish gap, and it is why this crate exists at all rather than
+//! calling into the platform for everything.
 //!
-//! WHY tiny-skia RATHER THAN SKIA
-//! Skia's public API is C++, and `zune.ffi` speaks the C ABI, so Skia needs a
-//! C++ shim and its build. tiny-skia is Skia's CPU raster pipeline ported to pure
-//! Rust — no C++, no system dependencies, and it covers precisely the primitives
-//! this display list uses. Measured across both real screens, that list is five
-//! things: filled rects (85, of which 81 rounded and 49 translucent), rect clips
-//! (233), text (96), strokes (23) and linear gradients (5).
+//! WHY tiny-skia. Real Skia's public API is C++, which this ABI would need a
+//! shim and a C++ build to reach. tiny-skia is Skia's CPU raster pipeline
+//! ported to pure Rust: no C++, no system dependencies, and it covers the
+//! primitives a display list actually uses.
 //!
-//! WHAT THIS DELIBERATELY DOES NOT DO: text. 96 of 237 nodes are text runs, and
-//! glyph rasterization, hinting, shaping and fallback are where a hand-rolled
-//! renderer dies. The host draws shapes here and text with the platform, which
-//! keeps the hard half delegated while the easy half gets alpha and gradients.
+//! TEXT IS RASTERISED HERE, NOT DELEGATED TO THE PLATFORM. `text` explains
+//! why and when that stopped being true of GDI: a windowed GPU surface
+//! cannot compose with GDI at all, so glyph rendering had to move into this
+//! crate before that path could exist.
 //!
-//! TWO BACKENDS BEHIND ONE ABI (ms-52 M10). `vello_cpu` joins tiny-skia, chosen
-//! per surface at construction. They are kept SIDE BY SIDE rather than swapped
-//! for the same reason the GDI and Rust painters are: fed byte-identical frames,
-//! a disagreement between two rasterisers is a backend bug by construction, and
-//! that is the only cheap way to tell one from a framework bug. `--compare`
-//! already does this for GDI vs Rust; it now does it for Rust vs Rust.
+//! TWO BACKENDS BEHIND ONE ABI. `vello_cpu` joins tiny-skia, chosen per
+//! surface at construction. They are kept SIDE BY SIDE rather than swapped:
+//! fed byte-identical frames, a disagreement between them is a backend bug
+//! by construction, which is the only cheap way to tell one from a
+//! framework bug.
 //!
-//! THE ABI IS DELIBERATELY FLAT. No structs cross the boundary — only integers,
-//! floats and pointers to flat arrays. Struct marshalling through an FFI is where
-//! a wrong offset becomes a crash rather than an error, and the native host has
-//! already avoided it once on the Win32 side.
+//! A THIRD PATH EXISTS OUTSIDE THIS ABI. `windowed` presents a GPU swapchain
+//! directly to a window rather than handing pixels back through these
+//! functions; see its own header for why the two shapes cannot share one
+//! model.
+//!
+//! THE ABI IS DELIBERATELY FLAT. No structs cross the boundary: only
+//! integers, floats and pointers to flat arrays. Struct marshalling through
+//! an FFI is where a wrong offset becomes a crash rather than an error.
+//! Nothing outside this workspace calls it today; `host/tests/render.rs` is
+//! its one real caller, and the flat shape is kept because an external
+//! consumer is what it was built for, not because one exists right now.
 
 pub mod bitmap;
 #[cfg(feature = "gpu")]
