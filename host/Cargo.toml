@@ -139,6 +139,12 @@ windows = { version = "0.59", features = [
     # `WNDCLASSW.hbrBackground` needs so the window paints an ordinary white
     # background instead of the artifacts an unset brush leaves behind.
     "Win32_Graphics_Gdi",
+    # `session.json` HOLDS A LIVE CREDENTIAL. `CryptProtectData` and
+    # `CryptUnprotectData` are DPAPI, scoped to the current Windows user by
+    # default with no extra entropy needed, the same mechanism Windows'
+    # own Credential Manager uses.
+    "Win32_Security_Cryptography",
+    "Win32_System_Memory",
 ] }
 
 # `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.
