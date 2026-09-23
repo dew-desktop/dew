@@ -1,10 +1,10 @@
-# aether_runtime
+# dew_runtime
 
 The Rust-owned host runtime for Aether. Rust holds the process; Luau is a guest
 inside it.
 
 ```
-Aether (Luau)  --Live.Frame-->  aether_runtime  -->  impl Painter
+Aether (Luau)  --Live.Frame-->  dew_runtime  -->  impl Painter
      ^                                 |
      +------- Pointer / Key / Step ----+
 ```
@@ -17,8 +17,6 @@ skips the sandbox.
 There is no window, no swapchain, no `ffi` and no `libloading` here. Surfaces
 belong to a shell; native drawing belongs behind `painter::Painter`. That is what
 lets this crate be finished before the surface question is.
-
-See [`docs/hosting_architecture.md`](../../docs/hosting_architecture.md).
 
 ## Tests
 

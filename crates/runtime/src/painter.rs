@@ -1,6 +1,6 @@
 //! What a display must be able to do, and nothing about how.
 //!
-//! DELIBERATELY NOT COUPLED TO `aether_raster`. The display list has now survived
+//! DELIBERATELY NOT COUPLED TO `dew_raster`. The display list has now survived
 //! four rasterisers without the framework changing a line, and that property is
 //! worth preserving one level up too: a snapshot painter writing a PNG, a GPU
 //! painter owning a swapchain, and a test painter recording calls are all the
