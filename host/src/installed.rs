@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 /// `.pesde/` entries.
 pub(crate) const SKIP_DIRS: &[&str] = &["roblox_packages", "luau_packages", ".pesde"];
 
-fn dew_dir() -> Option<PathBuf> {
+pub(crate) fn dew_dir() -> Option<PathBuf> {
     let dir = dirs::data_local_dir()?.join("Dew");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
