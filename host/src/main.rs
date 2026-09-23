@@ -30,6 +30,8 @@ mod manage;
 #[cfg(windows)]
 mod package;
 #[cfg(windows)]
+mod platform;
+#[cfg(windows)]
 mod positions;
 mod surface;
 #[cfg(windows)]
@@ -612,6 +614,10 @@ pub enum Command {
     Uninstall {
         id: String,
     },
+    Login,
+    Signup,
+    Logout,
+    Whoami,
     Init {
         name: String,
         surface: String,
@@ -671,6 +677,10 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "install" => parse_install(&args_vec[1..]),
         "package" => parse_package(&args_vec[1..]),
         "uninstall" => parse_uninstall(&args_vec[1..]),
+        "login" => Ok(Command::Login),
+        "signup" => Ok(Command::Signup),
+        "logout" => Ok(Command::Logout),
+        "whoami" => Ok(Command::Whoami),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
@@ -1750,6 +1760,72 @@ fn execute_uninstall(id: String) -> Result<(), String> {
     }
 }
 
+/// Prompts for an email and a masked password, then signs in against the
+/// deployed platform's identity provider and persists the session. See
+/// `platform.rs`'s own header for why this is a native form rather than a
+/// browser redirect.
+fn execute_login() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        Err("'login' is Windows-only, alongside the rest of the marketplace commands".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let (email, password) = platform::prompt_credentials()?;
+        let session = platform::login(&email, &password)?;
+        println!("[dew] signed in as {}", session.email);
+        Ok(())
+    }
+}
+
+/// Creates a new account. Does not sign in: Supabase's project requires
+/// email confirmation first, so this only ever starts that.
+fn execute_signup() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        Err("'signup' is Windows-only, alongside the rest of the marketplace commands".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let (email, password) = platform::prompt_credentials()?;
+        platform::signup(&email, &password)?;
+        println!("[dew] check {email} for a confirmation link, then run `dew login`");
+        Ok(())
+    }
+}
+
+fn execute_logout() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        Err("'logout' is Windows-only, alongside the rest of the marketplace commands".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        platform::clear_session();
+        println!("[dew] signed out");
+        Ok(())
+    }
+}
+
+fn execute_whoami() -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        Err("'whoami' is Windows-only, alongside the rest of the marketplace commands".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        match platform::load_session() {
+            Some(session) => println!("[dew] signed in as {}", session.email),
+            None => println!("[dew] not signed in; run `dew login`"),
+        }
+        Ok(())
+    }
+}
+
 /// The `dew.toml` that `dew init` writes.
 ///
 /// TOML, BECAUSE THE FILE IS CALLED `dew.toml`. This emitted JSON for as long as
@@ -2323,6 +2399,28 @@ fn execute_help(subcommand: Option<String>) {
                 "  <ID>                  The applet's manifest id, as `dew install` reported it"
             );
         }
+        Some("login") => {
+            println!("Usage: dew login");
+            println!();
+            println!("Sign in with a Dew account (email and password), prompted interactively.");
+            println!("Persists a session under %LOCALAPPDATA%\\Dew for later commands to use.");
+        }
+        Some("signup") => {
+            println!("Usage: dew signup");
+            println!();
+            println!("Create a Dew account. Sends a confirmation email; run `dew login` after");
+            println!("clicking the link it contains.");
+        }
+        Some("logout") => {
+            println!("Usage: dew logout");
+            println!();
+            println!("Clear the stored session.");
+        }
+        Some("whoami") => {
+            println!("Usage: dew whoami");
+            println!();
+            println!("Show which account, if any, is currently signed in.");
+        }
         Some("conformance") => {
             println!("Usage: dew conformance [FILTER] [OPTIONS]");
             println!();
@@ -2360,6 +2458,10 @@ fn execute_help(subcommand: Option<String>) {
                 "  package <DIR>    Zip an applet directory into a .dewpkg file (Windows only)"
             );
             println!("  uninstall <ID>   Remove an applet from the per-user store (Windows only)");
+            println!("  login            Sign in with a Dew account (Windows only)");
+            println!("  signup           Create a Dew account (Windows only)");
+            println!("  logout           Clear the stored session (Windows only)");
+            println!("  whoami           Show which account is signed in (Windows only)");
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
@@ -2434,6 +2536,10 @@ fn run() -> Result<(), String> {
         Command::Install { path, force } => execute_install(path, force),
         Command::Package { dir, output } => execute_package(dir, output),
         Command::Uninstall { id } => execute_uninstall(id),
+        Command::Login => execute_login(),
+        Command::Signup => execute_signup(),
+        Command::Logout => execute_logout(),
+        Command::Whoami => execute_whoami(),
         Command::Init {
             name,
             surface,
@@ -2947,6 +3053,24 @@ mod tests {
                 parse_args(args, false).unwrap(),
                 Command::Version,
                 "{spelling:?} should parse as Command::Version"
+            );
+        }
+    }
+
+    #[test]
+    fn login_signup_logout_whoami_parse_with_no_arguments() {
+        for (word, expected) in [
+            ("login", Command::Login),
+            ("signup", Command::Signup),
+            ("logout", Command::Logout),
+            ("whoami", Command::Whoami),
+        ] {
+            let words = [word];
+            let args = words.iter().map(|s| s.to_string());
+            assert_eq!(
+                parse_args(args, false).unwrap(),
+                expected,
+                "{word:?} should parse with no arguments"
             );
         }
     }

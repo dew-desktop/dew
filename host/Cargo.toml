@@ -94,7 +94,10 @@ rbx_reflection_database = "3"
 # turns bytes into pixels and hands the rasteriser pixels.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 sha2 = "0.10"
-ureq = { version = "2.10", default-features = false, features = ["tls"] }
+ureq = { version = "2.10", default-features = false, features = ["tls", "json"] }
+# Only for masking password input at `dew login`'s prompt; no protocol or
+# crypto role, unlike everything else near it in this file.
+rpassword = "7"
 
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
 serde = { version = "1", features = ["derive"] }
