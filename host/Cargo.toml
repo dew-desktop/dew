@@ -110,7 +110,7 @@ dirs = "6.0"
 # case `bzip2` or `zstd` exist for, so there is nothing to gain by linking them.
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
-# WIN32, FOR DEW'S OWN FURNITURE. `aether_window` owns what any Aether host needs
+# WIN32, FOR DEW'S OWN FURNITURE. `dew_window` owns what any Aether host needs
 # from a platform -- surfaces and input -- and a tray icon is neither. It presents
 # nothing of Aether and the CLI will never want one, so the mechanism lives here
 # with the product that needs it.

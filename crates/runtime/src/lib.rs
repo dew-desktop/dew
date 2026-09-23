@@ -1,4 +1,4 @@
-//! `aether_runtime` — the Rust-owned host runtime for Aether.
+//! `dew_runtime` — the Rust-owned host runtime for Aether.
 //!
 //! ## What this is for
 //!
@@ -14,7 +14,7 @@
 //! click means.
 //!
 //! ```text
-//!   Aether (Luau)  ──Live.Frame──>  aether_runtime  ──>  impl Painter
+//!   Aether (Luau)  ──Live.Frame──>  dew_runtime  ──>  impl Painter
 //!        ^                                │
 //!        └────── Pointer / Key / Step ────┘
 //! ```

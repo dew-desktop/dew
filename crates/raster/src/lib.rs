@@ -1307,7 +1307,7 @@ pub extern "C" fn ar_image_size(id: u32, out: *mut u32) -> u32 {
 /// Draw the source rectangle of an uploaded image into a destination rectangle.
 ///
 /// TWO RECTANGLES, AND NO SCALE MODE. `Enum.ScaleType`, `ImageRectOffset` and
-/// `ImageRectSize` are resolved by `aether_runtime::frame::Image::placement`
+/// `ImageRectSize` are resolved by `dew_runtime::frame::Image::placement`
 /// before anything reaches here, for the reason that file gives: three backends
 /// deciding independently what `Fit` means is three chances to disagree, and the
 /// disagreement shows up on one backend only. This maps one rectangle onto the

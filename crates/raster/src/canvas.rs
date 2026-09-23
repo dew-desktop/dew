@@ -304,7 +304,7 @@ impl Canvas {
     ///
     /// TWO RECTANGLES AND NO SCALE MODE, deliberately: `ScaleType`,
     /// `ImageRectOffset` and `ImageRectSize` are resolved into these two by
-    /// `aether_runtime::frame::Image::placement`, so no backend re-decides them.
+    /// `dew_runtime::frame::Image::placement`, so no backend re-decides them.
     ///
     /// Returns false when nothing was drawn — an unknown id, a degenerate
     /// rectangle, or an armed poison.

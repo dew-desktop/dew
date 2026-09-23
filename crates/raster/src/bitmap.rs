@@ -45,7 +45,7 @@ pub struct BitmapStore {
 impl BitmapStore {
     /// Take straight (non-premultiplied) RGBA and return an id, or 0.
     ///
-    /// STRAIGHT IN, PREMULTIPLIED OUT. `aether_runtime::frame::Bitmap` says why
+    /// STRAIGHT IN, PREMULTIPLIED OUT. `dew_runtime::frame::Bitmap` says why
     /// the display list carries the straight form: it is what a decoder produces
     /// and what a second decoder would produce, and premultiplying at the source
     /// would put a lossy step between resolving an asset and drawing it. This is
