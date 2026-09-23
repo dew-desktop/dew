@@ -137,19 +137,79 @@ fn require_session() -> Result<Session, String> {
     load_session().ok_or_else(|| "not signed in; run `dew login`".to_string())
 }
 
+/// Exchanges the stored refresh token for a new session, and persists it.
+/// If this itself fails (the refresh token is also expired or revoked),
+/// the caller sees a plain "run `dew login`" rather than a confusing
+/// error about a token refresh nobody asked for directly.
+fn refresh_session(session: &Session) -> Result<Session, String> {
+    let response = agent()
+        .post(&format!(
+            "{SUPABASE_URL}/auth/v1/token?grant_type=refresh_token"
+        ))
+        .set("apikey", SUPABASE_ANON_KEY)
+        .set("Content-Type", "application/json")
+        .send_json(serde_json::json!({ "refresh_token": session.refresh_token }))
+        .map_err(|_| "session expired; run `dew login`".to_string())?;
+
+    let token: TokenResponse = response
+        .into_json()
+        .map_err(|_| "session expired; run `dew login`".to_string())?;
+    let refreshed = Session {
+        access_token: token.access_token,
+        refresh_token: token.refresh_token,
+        user_id: token.user.id,
+        email: token.user.email,
+    };
+    save_session(&refreshed)?;
+    Ok(refreshed)
+}
+
+/// Every authenticated `dew-platform` request goes through this: on a 401
+/// (an access token expired, typically within about an hour), it
+/// transparently refreshes and retries once before giving up, so a
+/// session that has gone stale does not surface as a confusing error to
+/// something as simple as `dew discover`.
+fn authorized_call(request: impl Fn(&str) -> ureq::Request) -> Result<ureq::Response, String> {
+    let session = require_session()?;
+    match request(&session.access_token).call() {
+        Ok(response) => Ok(response),
+        Err(ureq::Error::Status(401, _)) => {
+            let refreshed = refresh_session(&session)?;
+            request(&refreshed.access_token)
+                .call()
+                .map_err(describe_auth_error)
+        }
+        Err(e) => Err(describe_auth_error(e)),
+    }
+}
+
+fn authorized_json<T: serde::de::DeserializeOwned>(
+    request: impl Fn(&str) -> ureq::Request,
+) -> Result<T, String> {
+    authorized_call(request)?
+        .into_json()
+        .map_err(|e| e.to_string())
+}
+
+fn authorized_bytes(request: impl Fn(&str) -> ureq::Request) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    authorized_call(request)?
+        .into_reader()
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    Ok(bytes)
+}
+
 /// Lists every public package across every account. Requires a session
 /// the same way every other platform request does, even though the
 /// listing itself is not scoped to the caller: `dew-platform` gates every
 /// route behind a verified token, discovery included.
 pub fn discover() -> Result<Vec<DiscoveredPackage>, String> {
-    let session = require_session()?;
-    agent()
-        .get(&format!("{DEW_PLATFORM_URL}/discover"))
-        .set("Authorization", &format!("Bearer {}", session.access_token))
-        .call()
-        .map_err(describe_auth_error)?
-        .into_json()
-        .map_err(|e| e.to_string())
+    authorized_json(|token| {
+        agent()
+            .get(&format!("{DEW_PLATFORM_URL}/discover"))
+            .set("Authorization", &format!("Bearer {token}"))
+    })
 }
 
 /// Fetches a public package's raw bytes by its owner and applet id
@@ -157,21 +217,13 @@ pub fn discover() -> Result<Vec<DiscoveredPackage>, String> {
 /// takes: never by applet id alone, since that still cannot say whose
 /// package is meant.
 pub fn fetch_package(owner_user_id: &str, applet_id: &str) -> Result<Vec<u8>, String> {
-    let session = require_session()?;
-    let response = agent()
-        .get(&format!(
-            "{DEW_PLATFORM_URL}/packages/{owner_user_id}/{applet_id}"
-        ))
-        .set("Authorization", &format!("Bearer {}", session.access_token))
-        .call()
-        .map_err(describe_auth_error)?;
-
-    let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    Ok(bytes)
+    authorized_bytes(|token| {
+        agent()
+            .get(&format!(
+                "{DEW_PLATFORM_URL}/packages/{owner_user_id}/{applet_id}"
+            ))
+            .set("Authorization", &format!("Bearer {token}"))
+    })
 }
 
 /// Fetches one of the CALLER'S OWN packages by applet id alone.
@@ -182,19 +234,11 @@ pub fn fetch_package(owner_user_id: &str, applet_id: &str) -> Result<Vec<u8>, St
 /// else's public package by id alone, the same namespacing question
 /// ADR-015 already deferred.
 pub fn fetch_own_package(applet_id: &str) -> Result<Vec<u8>, String> {
-    let session = require_session()?;
-    let response = agent()
-        .get(&format!("{DEW_PLATFORM_URL}/packages/{applet_id}"))
-        .set("Authorization", &format!("Bearer {}", session.access_token))
-        .call()
-        .map_err(describe_auth_error)?;
-
-    let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
-    Ok(bytes)
+    authorized_bytes(|token| {
+        agent()
+            .get(&format!("{DEW_PLATFORM_URL}/packages/{applet_id}"))
+            .set("Authorization", &format!("Bearer {token}"))
+    })
 }
 
 /// One entry in `GET /sync`'s listing. `dew-platform` also returns
@@ -206,26 +250,22 @@ pub struct SyncedApplet {
 
 /// Lists the signed-in account's synced applet ids.
 pub fn list_synced() -> Result<Vec<SyncedApplet>, String> {
-    let session = require_session()?;
-    agent()
-        .get(&format!("{DEW_PLATFORM_URL}/sync"))
-        .set("Authorization", &format!("Bearer {}", session.access_token))
-        .call()
-        .map_err(describe_auth_error)?
-        .into_json()
-        .map_err(|e| e.to_string())
+    authorized_json(|token| {
+        agent()
+            .get(&format!("{DEW_PLATFORM_URL}/sync"))
+            .set("Authorization", &format!("Bearer {token}"))
+    })
 }
 
 /// Adds an applet id to the signed-in account's synced list. Idempotent
 /// on `dew-platform`'s own side, so calling this for an id already
 /// synced is a harmless no-op, not an error.
 pub fn add_synced(applet_id: &str) -> Result<(), String> {
-    let session = require_session()?;
-    agent()
-        .put(&format!("{DEW_PLATFORM_URL}/sync/{applet_id}"))
-        .set("Authorization", &format!("Bearer {}", session.access_token))
-        .call()
-        .map_err(describe_auth_error)?;
+    authorized_call(|token| {
+        agent()
+            .put(&format!("{DEW_PLATFORM_URL}/sync/{applet_id}"))
+            .set("Authorization", &format!("Bearer {token}"))
+    })?;
     Ok(())
 }
 
