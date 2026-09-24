@@ -19,6 +19,10 @@ use std::collections::HashMap;
 
 pub struct RasterPainter {
     canvas: Canvas,
+    /// Kept so a resize can rebuild `canvas` on the same backend it was
+    /// created with -- `Canvas::new` takes this by value and `Canvas` itself
+    /// exposes no way to ask a live one which backend it is.
+    backend: Backend,
     /// The face used for every run. One font for now, deliberately: the display
     /// list carries no font name yet, so pretending to select one would be a
     /// second place for text to diverge between hosts.
@@ -48,9 +52,30 @@ impl RasterPainter {
     pub fn new(width: u32, height: u32, backend: Backend) -> Option<Self> {
         Some(RasterPainter {
             canvas: Canvas::new(width, height, backend)?,
+            backend,
             font: None,
             uploaded: HashMap::new(),
         })
+    }
+
+    /// Rebuild the drawing surface at a new size, e.g. when the window it is
+    /// presented into was resized.
+    ///
+    /// A FRESH `Canvas`, NOT AN IN-PLACE RESIZE -- `dew_raster`'s `Surface`
+    /// has no resize entry point of its own, so this pays the same
+    /// allocation `RasterPainter::new` already pays once at mount, just
+    /// again. `uploaded` is untouched: an image id is a handle into the
+    /// rasteriser's own store, not into this specific `Canvas`, so nothing
+    /// here needs re-uploading just because the surface it eventually draws
+    /// onto changed size.
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        match Canvas::new(width, height, self.backend) {
+            Some(canvas) => {
+                self.canvas = canvas;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Use this font for text.
@@ -493,5 +518,28 @@ impl Painter for RasterPainter {
         // A CPU surface holds its pixels; presenting is the caller's business
         // (write a PNG, blit to a DC). Nothing to do, and nothing to pretend.
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE ACTUAL DEFECT BEHIND A RESIZED WINDOW STRETCHING ITS CONTENT
+    /// instead of redrawing it: `host/src/main.rs`'s `Event::Resized` used
+    /// to update the window's own tracked size and nothing else, leaving
+    /// the canvas -- and therefore every subsequent frame's DataModel
+    /// layout -- at whatever size the applet was mounted with. Windows'
+    /// `StretchDIBits` then stretched that stale-sized buffer to fill the
+    /// window's new, already-resized client rect. This is the fix's own
+    /// lowest-level proof: the canvas itself really does end up at the new
+    /// size, not just the caller believing it does.
+    #[test]
+    fn resize_rebuilds_the_canvas_at_the_new_size() {
+        let mut painter = RasterPainter::new(100, 60, Backend::TinySkia).expect("painter");
+        assert_eq!((painter.canvas.width(), painter.canvas.height()), (100, 60));
+
+        assert!(painter.resize(320, 240));
+        assert_eq!((painter.canvas.width(), painter.canvas.height()), (320, 240));
     }
 }

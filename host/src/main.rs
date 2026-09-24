@@ -466,6 +466,35 @@ impl Renderer {
             Renderer::DataModel { painter, .. } => painter,
         }
     }
+
+    /// Take a size the window was just told it now has.
+    ///
+    /// WITHOUT THIS, A RESIZE STRETCHES RATHER THAN REDRAWS. `width`/`height`
+    /// here are what `frame_of` lays the DataModel out against every frame;
+    /// left at whatever they were when this renderer was created, the next
+    /// frame keeps rendering the OLD layout into a canvas also still the old
+    /// size, and `Window::present`'s `StretchDIBits` then stretches that
+    /// stale-sized buffer to fill the window's new, already-resized client
+    /// rect -- which is indistinguishable, on screen, from the content
+    /// itself being stretched, because it is being stretched, just not by
+    /// anything that knows what it is stretching.
+    #[cfg(windows)]
+    fn resize(&mut self, width: u32, height: u32) {
+        match self {
+            Renderer::DataModel {
+                dom,
+                painter,
+                width: w,
+                height: h,
+                ..
+            } => {
+                *w = width as f32;
+                *h = height as f32;
+                painter.resize(width, height);
+                dom.lock().expect("dom").touch();
+            }
+        }
+    }
 }
 
 /// `--script <path> --snapshot <png>`: run a Luau file against Dew's OWN
@@ -1656,7 +1685,20 @@ fn run_applet(
                     // THE SHELL APPLIES THE SIZE NOW. The window used to
                     // catch its own resize while draining its own queue.
                     window.resized(w, h);
-                    renderer.invalidate();
+                    // AND THE RENDERER, AND THIS FUNCTION'S OWN `width`/
+                    // `height` -- THREE COPIES OF THE SAME NUMBER, and a
+                    // stretched-instead-of-redrawn window on every resize
+                    // was what leaving any one of them stale looked like.
+                    // `window.present(bgra, width, height)` below reads
+                    // these locals as the SOURCE buffer's size while
+                    // `Window`'s own (just-updated) size is the blit
+                    // destination -- mismatched, that call stretches
+                    // whatever `renderer.frame` produced to fill the new
+                    // client rect, which is `Renderer::resize`'s doc
+                    // comment in one sentence.
+                    renderer.resize(w, h);
+                    width = w;
+                    height = h;
                 }
                 Event::Exposed => renderer.invalidate(),
                 // UNLOADS THIS APPLET, AND NOTHING ELSE. The process used to
