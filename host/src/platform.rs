@@ -251,6 +251,24 @@ fn authorized_bytes(request: impl Fn(&str) -> ureq::Request) -> Result<Vec<u8>, 
     Ok(bytes)
 }
 
+/// Like `authorized_call`, but for a request that sends a body: the
+/// caller does the `.send_*()` itself and hands back its `Result`,
+/// since `ureq::Request` has no one method that fits every body shape.
+fn authorized_send<T: serde::de::DeserializeOwned>(
+    send: impl Fn(&str) -> Result<ureq::Response, ureq::Error>,
+) -> Result<T, String> {
+    let session = require_session()?;
+    let response = match send(&session.access_token) {
+        Ok(response) => response,
+        Err(ureq::Error::Status(401, _)) => {
+            let refreshed = refresh_session(&session)?;
+            send(&refreshed.access_token).map_err(describe_auth_error)?
+        }
+        Err(e) => return Err(describe_auth_error(e)),
+    };
+    response.into_json().map_err(|e| e.to_string())
+}
+
 /// Lists every public package across every account. Requires a session
 /// the same way every other platform request does, even though the
 /// listing itself is not scoped to the caller: `dew-platform` gates every
@@ -289,6 +307,30 @@ pub fn fetch_own_package(applet_id: &str) -> Result<Vec<u8>, String> {
         agent()
             .get(&format!("{DEW_PLATFORM_URL}/packages/{applet_id}"))
             .set("Authorization", &format!("Bearer {token}"))
+    })
+}
+
+/// `dew-platform`'s own `Package`, returned on a successful publish.
+#[derive(Debug, Deserialize)]
+pub struct PublishedPackage {
+    pub applet_id: String,
+    pub public: bool,
+}
+
+/// Uploads a `.dewpkg`'s raw bytes. The applet id is never named here:
+/// `dew-platform` reads it out of the package's own `dew.toml`, so what a
+/// package claims to be and what it is addressed by can never disagree.
+pub fn publish(bytes: Vec<u8>, public: bool) -> Result<PublishedPackage, String> {
+    let query = if public { "?public=true" } else { "" };
+    // `ureq::Error` is large; boxing it everywhere `authorized_send` might
+    // be used would be more machinery than the one call site needs.
+    #[allow(clippy::result_large_err)]
+    authorized_send(|token| {
+        agent()
+            .post(&format!("{DEW_PLATFORM_URL}/packages{query}"))
+            .set("Authorization", &format!("Bearer {token}"))
+            .set("Content-Type", "application/octet-stream")
+            .send_bytes(&bytes)
     })
 }
 

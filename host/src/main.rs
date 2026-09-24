@@ -629,6 +629,10 @@ pub enum Command {
     Whoami,
     Discover,
     Sync,
+    Publish {
+        path: PathBuf,
+        public: bool,
+    },
     Init {
         name: String,
         surface: String,
@@ -694,6 +698,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "whoami" => Ok(Command::Whoami),
         "discover" => Ok(Command::Discover),
         "sync" => Ok(Command::Sync),
+        "publish" => parse_publish(&args_vec[1..]),
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
@@ -872,6 +877,27 @@ fn parse_check(args: &[String]) -> Result<Command, String> {
         targets.push(PathBuf::from(arg));
     }
     Ok(Command::Check { targets })
+}
+
+fn parse_publish(args: &[String]) -> Result<Command, String> {
+    let mut path: Option<PathBuf> = None;
+    let mut public = false;
+    for arg in args {
+        match arg.as_str() {
+            "--public" => public = true,
+            s if !s.starts_with('-') => {
+                if path.is_some() {
+                    return Err(format!("unexpected argument '{s}'"));
+                }
+                path = Some(PathBuf::from(s));
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+    let path = path.ok_or(
+        "nothing to publish: pass an applet directory, e.g. `dew publish examples/host/basic-widget`",
+    )?;
+    Ok(Command::Publish { path, public })
 }
 
 fn parse_install(args: &[String]) -> Result<Command, String> {
@@ -1905,6 +1931,52 @@ fn execute_discover() -> Result<(), String> {
 /// unchanged here) and is reported as needing a manual reinstall rather
 /// than silently skipped or treated as a failure of the sprint's own
 /// scope.
+/// Zips an applet directory with `package::package` (unchanged, the same
+/// zipper `dew package` already uses) and uploads it. No new way of
+/// producing a `.dewpkg` is added here, only the upload.
+fn execute_publish(path: PathBuf, public: bool) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (path, public);
+        Err("'publish' is Windows-only, alongside the rest of the marketplace commands".to_string())
+    }
+
+    #[cfg(windows)]
+    {
+        let temp_path = std::env::temp_dir().join(format!(
+            "dew-publish-{}-{}.dewpkg",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+
+        let zip_and_read = package::package(&path, Some(temp_path.clone()))
+            .and_then(|zipped| std::fs::read(&zipped).map_err(|e| e.to_string()));
+        let bytes = match zip_and_read {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(e);
+            }
+        };
+        let _ = std::fs::remove_file(&temp_path);
+
+        let published = platform::publish(bytes, public)?;
+        println!(
+            "[dew] published '{}' ({})",
+            published.applet_id,
+            if published.public {
+                "public"
+            } else {
+                "private"
+            }
+        );
+        Ok(())
+    }
+}
+
 fn execute_sync() -> Result<(), String> {
     #[cfg(not(windows))]
     {
@@ -2620,6 +2692,17 @@ fn execute_help(subcommand: Option<String>) {
             println!("An applet synced from someone else's public package cannot be restored this");
             println!("way and is reported for manual reinstall instead (dew login first).");
         }
+        Some("publish") => {
+            println!("Usage: dew publish <PATH> [OPTIONS]");
+            println!();
+            println!("Zip an applet directory and upload it to the marketplace (dew login first).");
+            println!();
+            println!("Arguments:");
+            println!("  <PATH>                Applet directory (its dew.toml names its id)");
+            println!();
+            println!("Options:");
+            println!("  --public              Make the package discoverable via `dew discover`");
+        }
         Some("conformance") => {
             println!("Usage: dew conformance [FILTER] [OPTIONS]");
             println!();
@@ -2663,6 +2746,9 @@ fn execute_help(subcommand: Option<String>) {
             println!("  whoami           Show which account is signed in (Windows only)");
             println!("  discover         List public packages on the marketplace (Windows only)");
             println!("  sync             Restore this account's own synced applets (Windows only)");
+            println!(
+                "  publish <PATH>   Zip and upload an applet to the marketplace (Windows only)"
+            );
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
@@ -2748,6 +2834,7 @@ fn run() -> Result<(), String> {
         Command::Whoami => execute_whoami(),
         Command::Discover => execute_discover(),
         Command::Sync => execute_sync(),
+        Command::Publish { path, public } => execute_publish(path, public),
         Command::Init {
             name,
             surface,
@@ -3295,6 +3382,32 @@ mod tests {
         let words = ["sync"];
         let args = words.iter().map(|s| s.to_string());
         assert_eq!(parse_args(args, false).unwrap(), Command::Sync);
+    }
+
+    #[test]
+    fn publish_defaults_to_private() {
+        let words = ["publish", "examples/host/basic-widget"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(
+            parse_args(args, false).unwrap(),
+            Command::Publish {
+                path: PathBuf::from("examples/host/basic-widget"),
+                public: false,
+            }
+        );
+    }
+
+    #[test]
+    fn publish_accepts_the_public_flag() {
+        let words = ["publish", "examples/host/basic-widget", "--public"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(
+            parse_args(args, false).unwrap(),
+            Command::Publish {
+                path: PathBuf::from("examples/host/basic-widget"),
+                public: true,
+            }
+        );
     }
 
     #[test]
