@@ -93,7 +93,7 @@ listLayout.Parent = list
 local ROW_HEIGHT = 64
 
 local function clearRows()
-	for _, child in list:GetChildren() do
+	for _, child in ipairs(list:GetChildren()) do
 		if child:IsA("Frame") and child.Name == "Row" then
 			child:Destroy()
 		end
@@ -144,7 +144,7 @@ vide.root(function()
 		if current == nil then
 			return
 		end
-		for _, pkg in current do
+		for _, pkg in ipairs(current) do
 			buildRow(pkg)
 		end
 	end)
