@@ -83,7 +83,7 @@ fn valid_id(id: &str) -> bool {
         && !id.contains(':')
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
+pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
     for entry in std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
         let entry = entry.map_err(|e| format!("{}: {e}", src.display()))?;

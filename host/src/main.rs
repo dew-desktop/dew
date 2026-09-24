@@ -24,6 +24,8 @@ mod applets;
 #[cfg(windows)]
 mod coordinator;
 #[cfg(windows)]
+mod dashboard;
+#[cfg(windows)]
 mod installed;
 #[cfg(windows)]
 mod manage;

@@ -355,7 +355,11 @@ jobs:
           # `aether.luau`. An example that declares only `vide` (no Aether)
           # never gets one, and the old unconditional check failed it for a
           # framework it never asked for.
-          for m in examples/*/*/pesde.toml; do
+          # `dashboard/` ONE LEVEL SHALLOWER, on purpose -- it is the bundled
+          # dashboard applet (milestone 23), not an example, so it lives at
+          # the repo root rather than under `examples/`. Same install, same
+          # redirect check, just not the same glob depth.
+          for m in examples/*/*/pesde.toml dashboard/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
@@ -563,7 +567,11 @@ jobs:
           # `aether.luau`. An example that declares only `vide` (no Aether)
           # never gets one, and the old unconditional check failed it for a
           # framework it never asked for.
-          for m in examples/*/*/pesde.toml; do
+          # `dashboard/` ONE LEVEL SHALLOWER, on purpose -- it is the bundled
+          # dashboard applet (milestone 23), not an example, so it lives at
+          # the repo root rather than under `examples/`. Same install, same
+          # redirect check, just not the same glob depth.
+          for m in examples/*/*/pesde.toml dashboard/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)

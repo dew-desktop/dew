@@ -1,0 +1,4 @@
+id = "dashboard"
+name = "Dew Dashboard"
+description = "Browse public packages and install one, without a terminal."
+permissions = ["window", "discover", "install"]

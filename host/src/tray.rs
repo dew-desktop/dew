@@ -60,6 +60,7 @@ const TRAY_CALLBACK: u32 = WM_APP + 1;
 const ID_EXIT: usize = 1000;
 const ID_MANAGE: usize = 1001;
 const ID_ABOUT: usize = 1002;
+const ID_DASHBOARD: usize = 1003;
 /// Where the per-applet unload entries start. Clear of `CAPS` (2000-2005) and
 /// `ID_EXIT`/`ID_MANAGE`, with room for far more loaded applets than the menu
 /// could ever show usefully before the low word of `WM_COMMAND`'s `wParam`
@@ -136,6 +137,8 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 EXIT_REQUESTED.store(1, Ordering::Relaxed);
             } else if id == ID_MANAGE {
                 crate::manage::open_or_focus();
+            } else if id == ID_DASHBOARD {
+                crate::dashboard::open_or_focus();
             } else if id == ID_ABOUT {
                 show_about();
             } else if let Some((_, _, us)) = CAPS.iter().find(|(cap_id, _, _)| *cap_id == id) {
@@ -207,6 +210,16 @@ unsafe fn show_menu(hwnd: HWND) {
         MF_STRING,
         ID_MANAGE,
         PCWSTR(wide("Manage applets").as_ptr()),
+    );
+
+    // NATIVE, ALONGSIDE THE WIN32 ONE ABOVE, not in place of it (milestone
+    // 23). `manage.rs`'s window keeps sign-in and the installed-applet
+    // list until the native surface has actually been used for a while.
+    let _ = AppendMenuW(
+        menu,
+        MF_STRING,
+        ID_DASHBOARD,
+        PCWSTR(wide("Dashboard (preview)").as_ptr()),
     );
 
     let _ = AppendMenuW(

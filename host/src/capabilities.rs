@@ -257,6 +257,14 @@ pub fn build(
                     "Discover",
                     lua.create_function(move |_, ()| {
                         if !in_flight.swap(true, Ordering::SeqCst) {
+                            // CLEARED HERE, SYNCHRONOUSLY, not left for the
+                            // spawned thread to overwrite whenever it gets
+                            // around to it. A second `Discover()` call while
+                            // a stale answer still sits in `discover_result`
+                            // must not hand that stale answer back as if it
+                            // were the new request's -- `Discovered()` goes
+                            // back to `nil` the instant a fresh fetch starts.
+                            *discover_result.lock().expect("discover result") = None;
                             let flight = Arc::clone(&in_flight);
                             let slot = Arc::clone(&discover_result);
                             std::thread::spawn(move || {
@@ -313,6 +321,10 @@ pub fn build(
                     "Install",
                     lua.create_function(move |_, (owner_user_id, applet_id): (String, String)| {
                         if !in_flight.swap(true, Ordering::SeqCst) {
+                            // Same reasoning as `Discover` above: cleared
+                            // synchronously so a second `Install` call never
+                            // hands back a previous install's result.
+                            *install_result.lock().expect("install result") = None;
                             let flight = Arc::clone(&in_flight);
                             let slot = Arc::clone(&install_result);
                             std::thread::spawn(move || {
