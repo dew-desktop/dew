@@ -2983,7 +2983,47 @@ fn install_panic_hook() {
     }));
 }
 
+/// Declares this process per-monitor-v2 DPI aware, before anything creates a
+/// window.
+///
+/// WHAT THIS FIXES: every window Dew creates is sized and positioned in raw
+/// pixels a widget author chose -- `width = 260, height = 120` means exactly
+/// that, on any monitor, the same way a Rainmeter skin is pixel-precise
+/// rather than scaled. A process that never declares a DPI awareness level
+/// defaults to one Windows itself compensates for: it renders once, at
+/// whichever monitor's DPI the process started on, and Windows silently
+/// bitmap-stretches the presented window whenever it ends up on a monitor
+/// with a different scale factor. That reads as "the content stretches when
+/// I drag the window," because that is exactly what is happening to it.
+///
+/// NOTHING ELSE CHANGES. This crate has never scaled anything by DPI and
+/// still does not -- once declared aware, Windows stops compensating on
+/// this process's behalf, and every window simply keeps the exact physical
+/// pixel size it already had. `WM_DPICHANGED` is deliberately left
+/// unhandled everywhere: the default behavior for an unhandled one is to do
+/// nothing, which is the pixel-precise behavior this process wants, not an
+/// oversight to fill in later.
+///
+/// BEST-EFFORT: `SetProcessDpiAwarenessContext` was added in the Creators
+/// Update (1703). A failure here means an older Windows, where the process
+/// falls back to whatever default it already had -- worth being silent
+/// about rather than refusing to start over a display setting nobody but a
+/// multi-monitor, mixed-DPI setup would ever notice.
+#[cfg(windows)]
+fn declare_dpi_awareness() {
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
+#[cfg(not(windows))]
+fn declare_dpi_awareness() {}
+
 fn main() -> ExitCode {
+    declare_dpi_awareness();
     install_panic_hook();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
