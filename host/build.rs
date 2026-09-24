@@ -43,6 +43,16 @@ fn git(args: &[&str]) -> Option<String> {
 }
 
 fn main() {
+    // dew.ico, embedded into dew.exe itself: see host/Cargo.toml's own
+    // comment on the embed-resource dependency for why a file shipped
+    // beside the exe was never actually reachable from a real release.
+    #[cfg(windows)]
+    {
+        println!("cargo:rerun-if-changed=assets/dew.rc");
+        println!("cargo:rerun-if-changed=assets/dew.ico");
+        embed_resource::compile("assets/dew.rc", embed_resource::NONE);
+    }
+
     let count = git(&["rev-list", "--count", "HEAD"]).unwrap_or_else(|| "0".to_string());
     println!("cargo:rustc-env=DEW_BUILD_NUMBER={count}");
 

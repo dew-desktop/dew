@@ -263,14 +263,18 @@ pub struct Tray {
 }
 
 impl Tray {
-    /// Install the tray icon. `icon_path` is a `.ico`; a missing one falls back
-    /// to the system's application icon rather than to nothing.
+    /// Install the tray icon. The icon is resource id 1, compiled into
+    /// `dew.exe` itself by `build.rs` (see `embed-resource` in
+    /// `host/Cargo.toml`): a real downloaded release attaches only the
+    /// `.exe`, so an icon sourced from a file beside it was never
+    /// actually reachable outside a full source checkout. Falls back to
+    /// the system's application icon if the embedded one somehow fails
+    /// to load, rather than to nothing.
     ///
-    /// `tooltip` is what hovering the icon says. It comes from the active mod's
-    /// manifest, which is the only place `description` is read -- before this the
-    /// tip was the literal string "Dew", so every mod's tray icon described the
-    /// host rather than the thing running in it.
-    pub fn new(icon_path: Option<&std::path::Path>, tooltip: &str) -> Result<Tray, String> {
+    /// `tooltip` is what hovering the icon says. One tray now covers every
+    /// applet the coordinator has loaded, not one mod each, so this is a
+    /// fixed string rather than any one mod's own description.
+    pub fn new(tooltip: &str) -> Result<Tray, String> {
         unsafe {
             let instance = GetModuleHandleW(None).map_err(|e| e.to_string())?;
             let class = wide("DewTray");
@@ -300,21 +304,13 @@ impl Tray {
             )
             .map_err(|e| e.to_string())?;
 
-            let hicon = icon_path
-                .and_then(|path| {
-                    let wide_path = wide(&path.to_string_lossy());
-                    LoadImageW(
-                        None,
-                        PCWSTR(wide_path.as_ptr()),
-                        IMAGE_ICON,
-                        0,
-                        0,
-                        LR_LOADFROMFILE | LR_DEFAULTSIZE,
-                    )
-                    .ok()
-                })
-                .map(|h| HICON(h.0))
-                .or_else(|| LoadIconW(None, IDI_APPLICATION).ok())
+            // `1 as *const u16` IS Win32's `MAKEINTRESOURCE(1)`: an integer
+            // resource id smuggled through a pointer parameter, matching
+            // resource id 1 in assets/dew.rc, not a real dangling pointer.
+            // `ptr::dangling` would not preserve that exact bit pattern.
+            #[allow(clippy::manual_dangling_ptr)]
+            let hicon = LoadIconW(Some(instance.into()), PCWSTR(1 as *const u16))
+                .or_else(|_| LoadIconW(None, IDI_APPLICATION))
                 .unwrap_or_default();
 
             // 128 WIDE CHARS INCLUDING THE TERMINATOR, which is a Win32 limit
