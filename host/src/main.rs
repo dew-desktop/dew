@@ -1496,14 +1496,6 @@ fn execute_start(stats: bool, bench: bool) -> Result<(), String> {
 /// applet its own — and the loop now has a second way to end besides the
 /// window closing: `close`, which the coordinator's tray menu sets to unload
 /// this one applet without taking the process down.
-/// A ceiling on how often a live border-drag resize actually reallocates
-/// and repaints, independent of how often Windows sends `WM_SIZE` during
-/// one. ~60Hz -- fast enough that the eye reads it as live, slow enough
-/// that a fast drag reallocates the drawing surface a handful of times a
-/// second rather than every pixel of mouse movement.
-#[cfg(windows)]
-const LIVE_RESIZE_INTERVAL: Duration = Duration::from_millis(16);
-
 #[cfg(windows)]
 fn run_applet(
     dir: &Path,
@@ -1589,27 +1581,19 @@ fn run_applet(
     {
         let renderer = Rc::clone(&renderer);
         let window = Rc::clone(&window);
-        // THROTTLED, NOT EVERY MESSAGE: `renderer.resize` rebuilds the
-        // native drawing surface from scratch (`Canvas` has no in-place
-        // resize of its own), and a fast border drag fires `WM_SIZE` far
-        // more often than any display can show a new frame -- reallocating
-        // a full surface on every one of them is the choppiness this
-        // throttle exists to remove. `window.resized` stays UNTHROTTLED
-        // and runs first regardless: it only writes two fields, and
-        // `blit`'s destination rect has to track the window's real size on
-        // every message so the eventual, un-throttled repaint (either the
-        // next one that clears this gate, or the deferred `Event::Resized`
-        // once the drag ends) presents into the rect Windows actually
-        // gave the window, not a stale one.
-        let mut last_repaint = Instant::now() - LIVE_RESIZE_INTERVAL;
+        // PACED TO THE COMPOSITOR, THE SAME WAY AN UNCAPPED WIDGET ALREADY
+        // IS -- see `tray::CAPS`'s own comment on why `DwmFlush` is the
+        // right wait, not a fixed interval guessed at here a second time.
+        // `renderer.resize` rebuilds the native drawing surface from
+        // scratch (`Canvas` has no in-place resize of its own), and a fast
+        // border drag fires `WM_SIZE` far more often than any display can
+        // show a new frame -- blocking here until the next vertical blank
+        // is what stops that from reallocating and repainting faster than
+        // anything could ever be shown, at whatever the real refresh rate
+        // of whichever monitor this window is actually on happens to be,
+        // rather than a number picked in this file.
         dew_window::set_live_resize_hook(move |w, h| {
             window.borrow_mut().resized(w, h);
-
-            let now = Instant::now();
-            if now.duration_since(last_repaint) < LIVE_RESIZE_INTERVAL {
-                return;
-            }
-            last_repaint = now;
 
             let mut renderer = renderer.borrow_mut();
             renderer.resize(w, h);
@@ -1618,6 +1602,9 @@ fn run_applet(
                     window.borrow().present(bgra, w, h);
                 }
             }
+            drop(renderer);
+
+            let _ = unsafe { DwmFlush() };
         });
     }
 
