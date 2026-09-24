@@ -1,4 +1,4 @@
-//! Building the `dew` table a mod receives.
+//! Building the `desktop` table a mod receives.
 //!
 //! THIS FILE IS THE SECURITY BOUNDARY, and it is deliberately boring to read:
 //! a match on a declared permission, and a table with exactly the fields that
@@ -26,7 +26,7 @@ pub struct HostState {
 
 pub type Shared = Arc<Mutex<HostState>>;
 
-/// What `dew.Widget{ ... }` needs to answer an applet.
+/// What `desktop.Widget{ ... }` needs to answer an applet.
 ///
 /// THE ROOT IS MADE BEFORE THE APPLET RUNS, so asking for a surface hands back
 /// something that already exists rather than creating a window from inside a
@@ -40,7 +40,7 @@ pub struct SurfaceGrant {
 
 /// Build the capability table for one mod.
 ///
-/// REUSES THE `dew` GLOBAL RATHER THAN CREATING A FRESH ONE, because
+/// REUSES THE `desktop` GLOBAL RATHER THAN CREATING A FRESH ONE, because
 /// `services::install` may already have put `Pointer`, `Input`, `Clock` and
 /// `Text` on it -- the host facts that are always present, on the same terms
 /// `Time` already was. Whichever of the two runs first, the other adds its
@@ -61,7 +61,7 @@ pub fn build(
     state: &Shared,
     surface: &SurfaceGrant,
 ) -> LuaResult<LuaTable> {
-    let dew: LuaTable = match lua.globals().get("dew") {
+    let desktop: LuaTable = match lua.globals().get("desktop") {
         Ok(existing) => existing,
         Err(_) => lua.create_table()?,
     };
@@ -76,10 +76,10 @@ pub fn build(
                 .unwrap_or(0.0))
         })?,
     )?;
-    dew.set("Time", time)?;
+    desktop.set("Time", time)?;
 
     for permission in granted {
-        // A SURFACE PERMISSION PUTS NOTHING ON `dew` YET.
+        // A SURFACE PERMISSION PUTS NOTHING ON `desktop` YET.
         //
         // It is a grant the host checks when the applet asks for a surface, and
         // the asking arrives in the next branch (ADR-012). Skipping here rather
@@ -87,12 +87,12 @@ pub fn build(
         // a permission still fails to compile until somebody decides what it
         // hands over.
         if permission.is_surface() {
-            //  A GRANTED SURFACE IS A FUNCTION ON `dew`, and an ungranted one is
-            //  absent. An applet calling `dew.Overlay{}` without the word in its
-            //  manifest indexes nil at its own call site, which says where the
-            //  mistake is; a permission check somewhere else would not.
+            //  A GRANTED SURFACE IS A FUNCTION ON `desktop`, and an ungranted one
+            //  is absent. An applet calling `desktop.Overlay{}` without the word
+            //  in its manifest indexes nil at its own call site, which says where
+            //  the mistake is; a permission check somewhere else would not.
             //
-            //  CAPITALIZED LIKE EVERY OTHER MEMBER OF `dew`, matching Aether's
+            //  CAPITALIZED LIKE EVERY OTHER MEMBER OF `desktop`, matching Aether's
             //  own PascalCase convention -- except `Permission::Popover`, which
             //  has no surface kind behind it yet and is left exactly as it was.
             let name: &str = match permission {
@@ -106,7 +106,7 @@ pub fn build(
             let root = surface.root.clone();
             let title = surface.title.clone();
 
-            dew.set(
+            desktop.set(
                 name,
                 lua.create_function(move |_, options: Option<LuaTable>| {
                     //  LAST CALL WINS, and there is no error for a second one.
@@ -143,7 +143,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("Storage", storage)?;
+                desktop.set("Storage", storage)?;
             }
 
             Permission::Clipboard => {
@@ -165,7 +165,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("Clipboard", clipboard)?;
+                desktop.set("Clipboard", clipboard)?;
             }
 
             Permission::Notifications => {
@@ -179,7 +179,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("Notifications", notifications)?;
+                desktop.set("Notifications", notifications)?;
             }
 
             Permission::Audio => {
@@ -191,7 +191,7 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
-                dew.set("Audio", audio)?;
+                desktop.set("Audio", audio)?;
             }
 
             Permission::RbxAssetId => {
@@ -200,7 +200,7 @@ pub fn build(
 
             // `Capability::Host` permissions (ADR-017). Granted -- `applets::load`
             // already refused anything not bundled before this ran -- but not yet
-            // reachable from Luau at all. Milestone 23 sprint 2 is what puts a
+            // reachable from Luau at all. Milestone 23 sprint 3 is what puts a
             // table behind these; landing the grant ahead of the guest-facing API
             // it unlocks is deliberate, the same order `RbxAssetId` above already
             // took.
@@ -208,7 +208,7 @@ pub fn build(
         }
     }
 
-    Ok(dew)
+    Ok(desktop)
 }
 
 /// What was actually granted, for a log line or a test.

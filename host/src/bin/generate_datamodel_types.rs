@@ -105,7 +105,7 @@ fn main() {
 }
 
 /// `CARGO_MANIFEST_DIR` is `<repo>/host`; the generated file lives at the
-/// repo root next to the `types/` directory `dew.d.luau` already lives in.
+/// repo root next to the `types/` directory `desktop.d.luau` already lives in.
 fn repo_root() -> std::path::PathBuf {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
     Path::new(&manifest_dir)

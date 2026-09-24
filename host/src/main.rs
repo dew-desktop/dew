@@ -479,7 +479,7 @@ impl Renderer {
 /// `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS PATH RATHER THAN ABOUT
 /// the plan. A standalone script parents into a root; `DewRoot` names the root it
 /// was handed. What a guest reaches through `game` on the engine is the SERVICES
-/// behind it, and those are `dew.Text` and `dew.Clock`, installed above: the two
+/// behind it, and those are `desktop.Text` and `desktop.Clock`, installed above: the two
 /// things a guest framework genuinely could not compute for itself, and required
 /// of a conforming host by `docs/host_services.md` since 2026-09-04.
 ///
@@ -524,7 +524,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     dom.lock().expect("dom").assets.set_root(dir.clone());
     datamodel::install(vm.lua(), &dom).map_err(|e| e.to_string())?;
     datamodel::install_vocabulary(vm.lua()).map_err(|e| e.to_string())?;
-    // `dew.Text`/`dew.Clock` HERE TOO, so a standalone script measures text the same way a mod
+    // `desktop.Text`/`desktop.Clock` HERE TOO, so a standalone script measures text the same way a mod
     // does. NOTHING DRIVES THE CLOCK ON THIS PATH and that is honest rather than
     // missing: `--script` draws one frame and exits, so there are no frames to be
     // called on. A script may still subscribe -- it simply never gets a tick,
@@ -1278,7 +1278,7 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
             let active = load_applet(&dir)?;
             // `pointer` IS NOT NEEDED HERE. A snapshot renders one frame and
             // exits without ever calling `Renderer::moved`/`down`/`up`/`wheel`,
-            // so there is no cursor for `dew.Pointer`/`dew.Input` to report.
+            // so there is no cursor for `desktop.Pointer`/`desktop.Input` to report.
             let applets::Applet {
                 manifest,
                 width,
@@ -2528,12 +2528,12 @@ return process
             continue;
         }
 
-        // Test runner provides a steppable clock via dew.Clock.Step(dt)
+        // Test runner provides a steppable clock via desktop.Clock.Step(dt)
         // so transition tests can step simulated time. This is strictly isolated
         // to `dew test` and absent in guest mods run via `dew run` / `dew snapshot`.
         let step_clock = Arc::clone(&clock);
-        if let Ok(dew) = vm.lua().globals().get::<mlua::Table>("dew") {
-            if let Ok(dew_clock) = dew.get::<mlua::Table>("Clock") {
+        if let Ok(desktop) = vm.lua().globals().get::<mlua::Table>("desktop") {
+            if let Ok(dew_clock) = desktop.get::<mlua::Table>("Clock") {
                 let _ = dew_clock.set(
                     "Step",
                     match vm.lua().create_function(move |_, dt: Option<f32>| {
@@ -3030,8 +3030,8 @@ fn install_test_surface(
         root: Some(mlua::IntoLua::into_lua(handle.clone(), lua)?),
         title: "test".to_string(),
     };
-    let dew = crate::capabilities::build(lua, &granted, state, &grant)?;
-    lua.globals().set("dew", dew)?;
+    let desktop = crate::capabilities::build(lua, &granted, state, &grant)?;
+    lua.globals().set("desktop", desktop)?;
 
     let harness = lua.create_table()?;
     harness.set("Root", handle)?;

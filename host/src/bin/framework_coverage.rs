@@ -125,26 +125,26 @@ fn demo_entries(root: &Path) -> Vec<PathBuf> {
 /// ITS OWN VM IS THE POINT. See `run_demo`: sharing one with the differential pass
 /// puts two live trees behind one module-level `PointerRouter`, and the press goes
 /// to whichever it resolves first.
-/// A `dew` global for a VM that is measuring rather than running.
+/// A `desktop` global for a VM that is measuring rather than running.
 ///
-/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `dew.Widget`, so a VM without one
-/// cannot load it at all: the call is at module scope and there is nothing to
-/// index. This is the same answer the host gives, narrowed to what a measurement
-/// needs, which is a root to parent into.
+/// AN EXAMPLE OPENS ITS SURFACE BY CALLING `desktop.Widget`, so a VM without
+/// one cannot load it at all: the call is at module scope and there is
+/// nothing to index. This is the same answer the host gives, narrowed to
+/// what a measurement needs, which is a root to parent into.
 ///
 /// EVERY SURFACE IS PRESENT HERE, unlike in the host, where the table carries
 /// only what the manifest granted. Nothing is being protected in a measuring
 /// VM, and refusing one would make the measurement depend on a manifest it does
 /// not otherwise read.
-fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
-    // REUSES THE EXISTING `dew` GLOBAL IF ONE IS ALREADY THERE. `services::install`
+fn install_desktop(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
+    // REUSES THE EXISTING `desktop` GLOBAL IF ONE IS ALREADY THERE. `services::install`
     // runs before this and already put `Text`/`Clock`/`Pointer` on it; creating a
     // fresh table here and reassigning the global clobbered every one of them.
-    let dew: mlua::Table = match lua.globals().get("dew") {
+    let desktop: mlua::Table = match lua.globals().get("desktop") {
         Ok(existing) => existing,
         Err(_) => {
             let fresh = lua.create_table()?;
-            lua.globals().set("dew", fresh.clone())?;
+            lua.globals().set("desktop", fresh.clone())?;
             fresh
         }
     };
@@ -159,11 +159,11 @@ fn install_dew(lua: &mlua::Lua, root: mlua::AnyUserData) -> mlua::Result<()> {
                 .unwrap_or(0.0))
         })?,
     )?;
-    dew.set("Time", time)?;
+    desktop.set("Time", time)?;
 
     for surface in ["Widget", "Window", "Overlay", "popover"] {
         let handed = root.clone();
-        dew.set(
+        desktop.set(
             surface,
             lua.create_function(move |_, _options: Option<mlua::Table>| Ok(handed.clone()))?,
         )?;
@@ -205,7 +205,7 @@ fn measure_demo(entry: &Path, dir: &Path, name: &str) -> Result<Option<Measured>
         datamodel::install_vocabulary(vm.lua())?;
         let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
         vm.lua().globals().set("DewRoot", root_handle.clone())?;
-        install_dew(vm.lua(), root_handle)?;
+        install_desktop(vm.lua(), root_handle)?;
         Ok(())
     })
     .map_err(|e| format!("{name}: the demo did not load for measurement: {e}"))?;
@@ -310,7 +310,7 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
         datamodel::install_vocabulary(vm.lua())?;
         let root_handle = datamodel::handle(vm.lua(), &installer_dom, root_id)?;
         vm.lua().globals().set("DewRoot", root_handle.clone())?;
-        install_dew(vm.lua(), root_handle)?;
+        install_desktop(vm.lua(), root_handle)?;
         Ok(())
     })
     .map_err(|e| format!("{name}: the demo did not load: {e}"))?;
@@ -346,7 +346,7 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
         if let Ok(seconds) = step.get::<f32>("step") {
             // TICK, THEN SETTLE -- one frame the way Dew's own loop runs one.
             //
-            // `services::tick` is what drives `dew.Clock.OnFrame`, and
+            // `services::tick` is what drives `desktop.Clock.OnFrame`, and
             // `PointerRouter` registers its hover pass there when no Heartbeat
             // exists. Committing geometry alone never advances the clock, so
             // hover would never re-evaluate and a tooltip could not open.
@@ -379,7 +379,7 @@ fn run_demo(entry: &Path) -> Result<Option<Demo>, String> {
         };
         // RECORDED AS WELL AS DELIVERED, so a demo that polls the host sees the
         // same pointer the tree was told about. Without this a guest reading
-        // `dew.Pointer` headlessly gets nothing while the tree gets events.
+        // `desktop.Pointer` headlessly gets nothing while the tree gets events.
         services::pointer_moved(x, y);
         if matches!(pointer, Pointer::Down | Pointer::Up) {
             services::pointer_button(button, matches!(pointer, Pointer::Down));

@@ -1,7 +1,7 @@
 --!strict
 --[[
 	Widget Behaviors -- the desktop-native behaviors a Rainmeter-shaped widget
-	gets on top of `dew.Widget`'s original width/height/anchor/offset/clickThrough.
+	gets on top of `desktop.Widget`'s original width/height/anchor/offset/clickThrough.
 
 	    cargo run -- examples/host/widget-behaviors
 
@@ -20,7 +20,7 @@
 
 local vide = require("./roblox_packages/vide")
 
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
 local root = widget({
 	width = 260,
@@ -82,9 +82,9 @@ end)
 
 -- STILL A POLL, AND STILL HAS TO BE: `Dragging` is an attribute (see
 -- surface.rs), and an attribute has no changed signal to push through here
--- yet -- only `dew.Clock.OnFrame` learns about it each frame. What moved to
+-- yet -- only `desktop.Clock.OnFrame` learns about it each frame. What moved to
 -- vide is everything AFTER that: deciding whether it changed, and what to do
 -- if it did.
-dew.Clock.OnFrame(function()
+desktop.Clock.OnFrame(function()
 	dragging(root:GetAttribute("Dragging") == true)
 end)

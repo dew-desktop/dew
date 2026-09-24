@@ -6,7 +6,7 @@
 local Aether = require("@aether")
 local create, source = Aether.create, Aether.source
 
-local function mount(dew, root)
+local function mount(desktop, root)
     local elapsed = source(0)
     ;(create "Frame" { --[[ ... ]] } :: any).Parent = root
 end
@@ -35,8 +35,8 @@ above.
 
 ## One loader, one signature, no framework named
 
-`mount(dew, root)` is the only shape there is. The host gives every mod a root
-to parent into and the `dew` capability table, and knows nothing else about
+`mount(desktop, root)` is the only shape there is. The host gives every mod a root
+to parent into and the `desktop` capability table, and knows nothing else about
 what the mod is built from:
 
 ```luau
@@ -44,7 +44,7 @@ return {
     id = "nameplate",
     size = { width = 340, height = 148 },
 
-    mount = function(dew, root)
+    mount = function(desktop, root)
         local card = Instance.new("Frame")
         card.Size = UDim2.new(1, 0, 1, 0)
         card.BackgroundColor3 = Color3.fromRGB(20, 26, 36)
@@ -58,13 +58,13 @@ fact that `mount` runs once are decided the same way for every applet. An
 applet that wants a framework requires one from its own installed packages
 (`@aether`, `@vide`, or anything else) and mounts it itself; an applet that
 wants nothing writes `Instance.new` directly, the way `examples/widgets/nameplate`
-does. Neither is a manifest field, because `mount(dew, root)` looks identical
+does. Neither is a manifest field, because `mount(desktop, root)` looks identical
 either way -- what differs is what runs *inside* the function the host calls,
 which is the applet's business and not the loader's.
 
-This used to be two contracts: `mount(dew)` for an applet built with Aether,
+This used to be two contracts: `mount(desktop)` for an applet built with Aether,
 called inside a reactive scope with a `Session` the host drove, and
-`mount(dew, root)` for one built against the DataModel directly. Milestone 9
+`mount(desktop, root)` for one built against the DataModel directly. Milestone 9
 removed the first arm along with `Runtime`, the manifest field that chose
 between them, because the difference it named was never the host's to
 ceremony over. `UserInputService` and `RunService.Heartbeat` (ADR-010) are
@@ -72,7 +72,7 @@ real DataModel members now, so a framework that drives itself by polling
 services -- which is what Aether already does on the engine -- drives itself
 identically here. The host delivers input to nobody; it answers when asked.
 
-**The root is a parameter, like `dew`.** No applet reaches for a global to
+**The root is a parameter, like `desktop`.** No applet reaches for a global to
 find where it draws. The root is a `ScreenGui` named `DewRoot` -- not `game`,
 which nothing in Dew installs -- and it exists before `mount` is called,
 whether the applet asked for its surface explicitly or is about to read one
@@ -93,12 +93,12 @@ not.
 
 ## Surfaces are capabilities
 
-`dew.Widget{}`, `dew.Window{}`, `dew.Overlay{}` and `dew.popover{}` each ask
+`desktop.Widget{}`, `desktop.Window{}`, `desktop.Overlay{}` and `desktop.popover{}` each ask
 the host for somewhere to draw and hand back the root to parent into --
 **before `mount` is even called, if the applet wants**:
 
 ```luau
-local root = dew.Widget({ width = 220, height = 56, anchor = "top-right" })
+local root = desktop.Widget({ width = 220, height = 56, anchor = "top-right" })
 local frame = Instance.new("Frame")
 frame.Size = UDim2.new(1, 0, 1, 0)
 frame.Parent = root
@@ -108,7 +108,7 @@ Each is its own permission (`widget`, `window`, `overlay`, `popover`), because
 they differ in weight. A widget draws in a corner. An overlay that is topmost
 and click-through can draw over everything on screen while the user does not
 know it is there. Granting those with one word would be saying they are the
-same request. `dew.Overlay` is absent from the table unless `dew.toml` grants
+same request. `desktop.Overlay` is absent from the table unless `dew.toml` grants
 `overlay`, and reaching for it anyway is a nil index at the applet's own call
 site rather than a permission check somewhere else.
 
@@ -125,7 +125,7 @@ return {
     id = "clock",
     size = { width = 220, height = 56 },
     surface = { kind = "widget", anchor = "top-right" },
-    mount = function(dew, root) --[[ ... ]] end,
+    mount = function(desktop, root) --[[ ... ]] end,
 }
 ```
 
@@ -147,11 +147,11 @@ window. Whether asked for as a call's options table or read from a returned
 `surface` field, the shape is the same:
 
 ```luau
-dew.Window({ title = "Time Tracker Settings" })
+desktop.Window({ title = "Time Tracker Settings" })
 ```
 
 ```luau
-dew.Widget({
+desktop.Widget({
     anchor = "top-right",       -- "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center"
     offset = { x = 24, y = 24 },
     clickThrough = false,
@@ -164,7 +164,7 @@ dew.Widget({
 ```
 
 ```luau
-dew.Overlay({ zOrder = "topmost", clickThrough = false })
+desktop.Overlay({ zOrder = "topmost", clickThrough = false })
 ```
 
 `zOrder` also applies to an overlay. `draggable`, `keepOnScreen`,
@@ -176,7 +176,7 @@ the same way it never sees the pump that delivers its pointer events.
 ### An overlay is a widget the size of the desktop
 
 ```luau
-dew.Overlay({})   -- zOrder = "topmost", clickThrough = false
+desktop.Overlay({})   -- zOrder = "topmost", clickThrough = false
 ```
 
 The screen supplies the size, so a size an applet asks for is ignored for this
@@ -206,7 +206,7 @@ changes; one at `x = 1872` is in the corner of the display it was written on.
 
 ## Capabilities arrive as an argument, never as a global
 
-`mount` receives `dew`. `dew.toml` declares `permissions`:
+`mount` receives `desktop`. `dew.toml` declares `permissions`:
 
 ```json
 "permissions": ["storage", "audio", "notifications"]
@@ -395,7 +395,7 @@ now prints a line. They are not rejected because a manifest is a
 forward-compatible format: a host that refuses tomorrow's field cannot read
 tomorrow's mod. A `dew.toml` written before milestone 9 that still declares
 `runtime` gets exactly this treatment -- reported once, at load, and
-otherwise ignored -- because `mount(dew, root)` was always the only signature
+otherwise ignored -- because `mount(desktop, root)` was always the only signature
 that field ever selected.
 
 The list that closes this out is `Manifest::unhonoured` in

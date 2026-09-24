@@ -111,7 +111,7 @@ nothing, which is what the engine does, and MUST NOT present one that works.
 ## What is NOT required
 
 **A name.** Nothing above says where these live or what they are called. The engine
-reaches them through `game:GetService`, Dew puts them on its own `dew` global, a Luau
+reaches them through `game:GetService`, Dew puts them on its own `desktop` global, a Luau
 double returns them from a host table. All three conform. A standard that
 specified the spelling would be specifying that every host be the engine, which is
 what this whole standard exists not to do.
@@ -131,10 +131,10 @@ what made sprint 8's work small -- the seams already existed, and moving the eng
 two service lookups behind them changed nothing above Layer 2.5.
 
     engine   game:GetService("TextService"):GetTextSize   RunService.Heartbeat
-    Dew      dew.Text.Measure                             dew.Clock.OnFrame
+    Dew      desktop.Text.Measure                         desktop.Clock.OnFrame
     double   a per-glyph advance table                    a simulated clock
 
-`dew.Text` and `dew.Clock` are Dew's own spelling and this document does not
+`desktop.Text` and `desktop.Clock` are Dew's own spelling and this document does not
 bless it. Sprint 7's record says so in its own words: the name is expected to
 be revisited by whatever decision the standard makes, and it was chosen
 precisely because it could not be mistaken for portable -- installing globals

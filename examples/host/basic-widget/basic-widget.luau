@@ -13,10 +13,10 @@
 	implementing the DataModel.
 ]]
 
---- `dew` is a global, and it carries exactly the capabilities `dew.toml`
---- granted. `dew.Widget` is nil unless the manifest asked for `widget`, so this
+--- `desktop` is a global, and it carries exactly the capabilities `dew.toml`
+--- granted. `desktop.Widget` is nil unless the manifest asked for `widget`, so this
 --- line turns a missing permission into a sentence naming the word to add.
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
 --- Opening the surface hands back the instance to build under.
 local root = widget({

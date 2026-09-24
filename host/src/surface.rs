@@ -333,15 +333,15 @@ pub struct Request {
 /// Where a surface request lands between the applet asking and the host reading.
 ///
 /// THE APPLET ASKS WHILE IT RUNS, and the host wants the answer after. A cell
-/// rather than a return value because `dew.Widget` has to hand the applet its
+/// rather than a return value because `desktop.Widget` has to hand the applet its
 /// root, which is what it is really for; the host reads what was asked out of
 /// here once the module has finished.
 pub type Requested = Arc<Mutex<Option<Request>>>;
 
 impl Request {
-    /// Read `dew.Widget{ ... }` and friends, which take one options table.
+    /// Read `desktop.Widget{ ... }` and friends, which take one options table.
     ///
-    /// EVERY FIELD IS OPTIONAL. An applet that calls `dew.Widget{}` with nothing
+    /// EVERY FIELD IS OPTIONAL. An applet that calls `desktop.Widget{}` with nothing
     /// in it has said the only thing that matters, which is that it wants a
     /// widget, and the defaults are the ones a declaration got.
     pub fn from_options(

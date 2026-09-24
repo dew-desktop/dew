@@ -72,6 +72,7 @@ fn app() -> Application {
 const INSIDE: (f32, f32) = (70.0, 40.0);
 
 #[test]
+#[ignore = "blocked on Aether's own repo detecting `desktop` instead of `dew` (ADR-018); see .artifacts/project/upstream/aether-host-detection-needs-desktop.md"]
 fn a_press_inside_a_pressable_fires_it() {
     let app = app();
     let session = app.session().unwrap();
@@ -89,6 +90,7 @@ fn a_press_inside_a_pressable_fires_it() {
 }
 
 #[test]
+#[ignore = "blocked on Aether's own repo detecting `desktop` instead of `dew` (ADR-018); see .artifacts/project/upstream/aether-host-detection-needs-desktop.md"]
 fn a_press_outside_it_does_not() {
     let app = app();
     let session = app.session().unwrap();
@@ -103,6 +105,7 @@ fn a_press_outside_it_does_not() {
 }
 
 #[test]
+#[ignore = "blocked on Aether's own repo detecting `desktop` instead of `dew` (ADR-018); see .artifacts/project/upstream/aether-host-detection-needs-desktop.md"]
 fn moving_over_it_reports_hover() {
     let app = app();
     let session = app.session().unwrap();
@@ -123,6 +126,7 @@ fn moving_over_it_reports_hover() {
 /// a widget wired to `OnPressed` fires on mouse-down and cannot be cancelled,
 /// which is a subtly wrong button rather than a broken one.
 #[test]
+#[ignore = "blocked on Aether's own repo detecting `desktop` instead of `dew` (ADR-018); see .artifacts/project/upstream/aether-host-detection-needs-desktop.md"]
 fn activation_needs_a_press_and_a_release_inside() {
     let app = app();
     let session = app.session().unwrap();
