@@ -594,6 +594,14 @@ pub enum Command {
         stats: bool,
         bench: bool,
     },
+    /// Starts the service with no applet named: whatever is installed and
+    /// enabled loads on its own. `dew run <path>` stays the way to see one
+    /// specific applet, installed or not; this is the way to see
+    /// everything that already is.
+    Start {
+        stats: bool,
+        bench: bool,
+    },
     Snapshot {
         target: SnapshotTarget,
         output: String,
@@ -687,6 +695,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
     let first = &args_vec[0];
     match first.as_str() {
         "run" => parse_run(&args_vec[1..], is_windows),
+        "start" => parse_start(&args_vec[1..], is_windows),
         "snapshot" => parse_snapshot(&args_vec[1..]),
         "check" => parse_check(&args_vec[1..]),
         "install" => parse_install(&args_vec[1..]),
@@ -767,6 +776,36 @@ fn parse_run(args: &[String], is_windows: bool) -> Result<Command, String> {
         stats,
         bench,
     })
+}
+
+fn parse_start(args: &[String], is_windows: bool) -> Result<Command, String> {
+    let mut stats = false;
+    let mut bench = false;
+
+    for arg in args {
+        match arg.as_str() {
+            "--stats" => stats = true,
+            "--bench" => bench = true,
+            // `dew start` names no applet; a path here is asking for
+            // `dew run <path>` instead, so that mistake gets its own
+            // message rather than "unrecognised argument".
+            s if !s.starts_with('-') => {
+                return Err(format!(
+                    "'start' takes no applet; did you mean `dew run {s}`?"
+                ));
+            }
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+
+    if !is_windows {
+        return Err(
+            "'start' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                .to_string(),
+        );
+    }
+
+    Ok(Command::Start { stats, bench })
 }
 
 fn parse_snapshot(args: &[String]) -> Result<Command, String> {
@@ -1373,6 +1412,41 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
                 coordinator::run(guard, dir.to_path_buf(), stats, bench)
             }
             coordinator::Role::Secondary => coordinator::send_to_running(dir),
+        }
+    }
+}
+
+/// Starts the service with no applet named, loading whatever is already
+/// installed and enabled. If the service is already running, there is
+/// nothing to send it -- unlike `dew run <path>`, this names no applet
+/// the running instance might not already have.
+fn execute_start(stats: bool, bench: bool) -> Result<(), String> {
+    #[cfg(not(windows))]
+    {
+        let _ = (stats, bench);
+        Err(
+            "'start' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
+                .to_string(),
+        )
+    }
+
+    #[cfg(windows)]
+    {
+        match coordinator::acquire()? {
+            coordinator::Role::Primary(guard) => {
+                let Some((_, first_dir)) = installed::enabled().pop() else {
+                    return Err(
+                        "nothing installed; use `dew install` or `dew <path>` to run something directly"
+                            .to_string(),
+                    );
+                };
+                println!("💧 Dew starting");
+                coordinator::run(guard, first_dir, stats, bench)
+            }
+            coordinator::Role::Secondary => {
+                println!("[dew] service already running with whatever it started with");
+                Ok(())
+            }
         }
     }
 }
@@ -2580,6 +2654,17 @@ fn execute_help(subcommand: Option<String>) {
             println!("  --stats               Print FPS and render timings");
             println!("  --bench               Run in benchmark mode");
         }
+        Some("start") => {
+            println!("Usage: dew start [OPTIONS]");
+            println!();
+            println!("Start the service with no applet named: whatever is installed and enabled");
+            println!("loads on its own (Windows only). `dew run <path>` stays the way to see one");
+            println!("specific applet, installed or not.");
+            println!();
+            println!("Options:");
+            println!("  --stats               Print FPS and render timings");
+            println!("  --bench               Run in benchmark mode");
+        }
         Some("check") => {
             println!("Usage: dew check [TARGET]");
             println!();
@@ -2731,6 +2816,9 @@ fn execute_help(subcommand: Option<String>) {
             println!();
             println!("Commands:");
             println!("  run <PATH>       Run an applet in a desktop window (Windows only)");
+            println!(
+                "  start            Start the service with whatever is installed (Windows only)"
+            );
             println!("  snapshot <PATH>  Render an applet or a script to a PNG, no window needed");
             println!("  check [PATH...]  Validate manifests and entry points, or this directory");
             println!(
@@ -2818,6 +2906,7 @@ fn run() -> Result<(), String> {
             [one] => execute_run(one, stats, bench),
             _ => Err("running more than one applet at once is not supported yet".to_string()),
         },
+        Command::Start { stats, bench } => execute_start(stats, bench),
         Command::Snapshot { target, output } => execute_snapshot(target, output),
         Command::Check { targets } => execute_check(targets),
         Command::Install { path, force } => execute_install(path, force),
@@ -3396,6 +3485,50 @@ mod tests {
                 path: PathBuf::from("examples/host/basic-widget"),
                 public: true,
             }
+        );
+    }
+
+    #[test]
+    fn start_parses_with_no_arguments() {
+        let words = ["start"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(
+            parse_args(args, true).unwrap(),
+            Command::Start {
+                stats: false,
+                bench: false,
+            }
+        );
+    }
+
+    #[test]
+    fn start_accepts_stats_and_bench() {
+        let words = ["start", "--stats", "--bench"];
+        let args = words.iter().map(|s| s.to_string());
+        assert_eq!(
+            parse_args(args, true).unwrap(),
+            Command::Start {
+                stats: true,
+                bench: true,
+            }
+        );
+    }
+
+    #[test]
+    fn start_refuses_an_applet_path() {
+        let words = ["start", "examples/host/basic-widget"];
+        let args = words.iter().map(|s| s.to_string());
+        assert!(parse_args(args, false).is_err());
+    }
+
+    #[test]
+    fn start_rejected_off_windows() {
+        let words = ["start"];
+        let args = words.iter().map(|s| s.to_string());
+        let err = parse_args(args, false).unwrap_err();
+        assert_eq!(
+            err,
+            "'start' is Windows-only: it drives the window loop; use --snapshot to render headlessly"
         );
     }
 
