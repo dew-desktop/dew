@@ -22,13 +22,6 @@ use crate::manifest::Manifest;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-/// Directory names a copied applet does not carry with it: pesde's install
-/// output and cache. Named the same way `examples/*/.gitignore` already
-/// excludes them, rather than a second list that can drift from it -- see
-/// the root `.gitignore`'s `roblox_packages/`, `luau_packages/` and
-/// `.pesde/` entries.
-pub(crate) const SKIP_DIRS: &[&str] = &["roblox_packages", "luau_packages", ".pesde"];
-
 pub(crate) fn dew_dir() -> Option<PathBuf> {
     let dir = dirs::data_local_dir()?.join("Dew");
     std::fs::create_dir_all(&dir).ok()?;
@@ -88,9 +81,13 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
         let name = entry.file_name();
 
         if file_type.is_dir() {
-            if SKIP_DIRS.contains(&name.to_string_lossy().as_ref()) {
-                continue;
-            }
+            // `roblox_packages/`, `luau_packages/` and `.pesde/` are NOT
+            // skipped here, even though the root `.gitignore` excludes them
+            // from git: an applet that `require`s a real dependency (see
+            // examples/host/widget-behaviors) has it resolved into exactly
+            // these directories by pesde, and nothing downstream of this
+            // copy re-resolves them. Skipping them at install time was
+            // stripping the one thing that made such an applet runnable.
             copy_dir(&entry.path(), &dst.join(&name))?;
         } else if file_type.is_file() {
             std::fs::copy(entry.path(), dst.join(&name))

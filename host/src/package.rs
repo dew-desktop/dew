@@ -15,7 +15,6 @@
 
 #![cfg(windows)]
 
-use crate::installed::SKIP_DIRS;
 use crate::manifest::Manifest;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -215,10 +214,11 @@ pub fn install_from_archive(zip_path: &Path, force: bool) -> Result<String, Stri
     crate::installed::install(&extracted, force)
 }
 
-/// Zip `dir` into a `.dewpkg` file, excluding the same directories
-/// `installed::install` never copies, with the manifest at the archive's own
-/// root rather than nested under a folder. Defaults the output filename to
-/// the manifest's own id, read the same way `install` reads it.
+/// Zip `dir` into a `.dewpkg` file, carrying everything `installed::install`
+/// itself copies -- including a vendored `roblox_packages`/`.pesde`, if the
+/// applet has one -- with the manifest at the archive's own root rather than
+/// nested under a folder. Defaults the output filename to the manifest's own
+/// id, read the same way `install` reads it.
 pub fn package(dir: &Path, output: Option<PathBuf>) -> Result<PathBuf, String> {
     let manifest = Manifest::load(dir)?;
     let out_path = output.unwrap_or_else(|| PathBuf::from(format!("{}.dewpkg", manifest.id)));
@@ -256,9 +256,6 @@ fn add_dir(
         let rel = prefix.join(&name);
 
         if file_type.is_dir() {
-            if SKIP_DIRS.contains(&name.to_string_lossy().as_ref()) {
-                continue;
-            }
             add_dir(writer, &entry.path(), &rel, options)?;
         } else if file_type.is_file() {
             // ZIP NAMES ARE FORWARD-SLASHED, by the format's own spec,
