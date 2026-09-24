@@ -77,12 +77,18 @@ refreshButton.TextSize = 12
 refreshButton.Text = "Refresh"
 refreshButton.Parent = body
 
-local status = label(body, "Status", UDim2.new(0, 16, 0, 44), UDim2.new(1, -32, 0, 18), 12, Color3.fromRGB(146, 162, 188))
+-- WRAPPED, AND GIVEN ROOM FOR MORE THAN ONE LINE: a network or auth error
+-- (see `platform::describe_auth_error`) is a full sentence, not a label,
+-- and an unwrapped one just runs off the edge of the window rather than
+-- being clipped -- which reads as "blank" at a glance, not as an error.
+local status = label(body, "Status", UDim2.new(0, 16, 0, 44), UDim2.new(1, -32, 0, 40), 12, Color3.fromRGB(146, 162, 188))
+status.TextWrapped = true
+status.TextYAlignment = Enum.TextYAlignment.Top
 
 local list = Instance.new("ScrollingFrame")
 list.Name = "List"
-list.Position = UDim2.new(0, 16, 0, 68)
-list.Size = UDim2.new(1, -32, 1, -84)
+list.Position = UDim2.new(0, 16, 0, 92)
+list.Size = UDim2.new(1, -32, 1, -108)
 list.BackgroundTransparency = 1
 list.Parent = body
 
