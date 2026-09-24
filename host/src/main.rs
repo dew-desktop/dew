@@ -48,6 +48,8 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+#[cfg(windows)]
+use windows::Win32::Graphics::Dwm::DwmFlush;
 
 /// Deep obsidian, behind every widget.
 const BACKGROUND: Rgb = Rgb(13, 17, 23);
@@ -1716,10 +1718,24 @@ fn run_applet(
             return Ok(());
         }
 
-        if let Some(target) = tray::frame_budget() {
-            let elapsed = last.elapsed();
-            if elapsed < target {
-                std::thread::sleep(target - elapsed);
+        match tray::frame_budget() {
+            Some(target) => {
+                let elapsed = last.elapsed();
+                if elapsed < target {
+                    std::thread::sleep(target - elapsed);
+                }
+            }
+            // UNCAPPED MEANS "AS FAST AS THE DISPLAY CAN ACTUALLY SHOW A NEW
+            // FRAME," not "as fast as the CPU can spin." `DwmFlush` blocks this
+            // thread until the compositor's next vertical blank -- the same
+            // wait a real swap-chain present would impose -- so a widget doing
+            // nothing between frames sleeps through the desktop's own timing
+            // instead of busy-polling `PeekMessageW` hundreds of thousands of
+            // times a second for no visible gain. It is a few-hundred-
+            // microsecond OS call, not a measured sleep, so it costs nothing
+            // extra once an applet IS producing a new frame every refresh.
+            None => {
+                let _ = unsafe { DwmFlush() };
             }
         }
     }
