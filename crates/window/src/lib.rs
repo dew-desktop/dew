@@ -24,7 +24,7 @@
 
 mod win32;
 
-pub use win32::{screen_size, Pump, SurfaceId, Window};
+pub use win32::{screen_size, set_live_resize_hook, Pump, SurfaceId, Window};
 
 /// A window's tier in the desktop's z-order.
 ///

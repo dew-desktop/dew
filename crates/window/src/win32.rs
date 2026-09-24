@@ -48,6 +48,40 @@ fn push(hwnd: HWND, event: Event) {
     EVENTS.with(|e| e.borrow_mut().push((SurfaceId(hwnd.0 as isize), event)));
 }
 
+type LiveResizeHook = Box<dyn FnMut(u32, u32)>;
+
+thread_local! {
+    /// A repaint to run synchronously from inside `WM_SIZE`, during a live
+    /// border-drag resize.
+    ///
+    /// WHY THIS EXISTS, AND WHY `EVENTS` ABOVE IS NOT ENOUGH: grabbing a
+    /// window's border and dragging it enters a modal loop inside
+    /// `DefWindowProcW`'s own handling of the resize hit-test, and that
+    /// loop does not return to whoever called `DispatchMessageW` until the
+    /// drag ends -- which means `Pump::poll`'s own loop, and therefore
+    /// draining `EVENTS`, is blocked for the whole drag. Windows keeps
+    /// sending real `WM_SIZE` messages to this window procedure throughout
+    /// that time regardless, synchronously, nested inside the call that
+    /// never returned; a repaint that only happens when `Event::Resized`
+    /// is drained later is a repaint that happens once, when the mouse
+    /// comes up, not while the drag is happening.
+    ///
+    /// ONE HOOK PER THREAD, matching `EVENTS`: one applet runs one window
+    /// on one thread, so there is exactly one hook to call.
+    static LIVE_RESIZE: RefCell<Option<LiveResizeHook>> = const { RefCell::new(None) };
+}
+
+/// Install the repaint `WM_SIZE` calls synchronously during a live resize.
+///
+/// SEPARATE FROM THE EVENT QUEUE ON PURPOSE. This still fires beside a
+/// queued `Event::Resized`, not instead of it -- the queued one is what
+/// keeps the caller's own tracked size and layout correct once the pump
+/// resumes, and this one is only for what appears on screen while it does
+/// not.
+pub fn set_live_resize_hook(hook: impl FnMut(u32, u32) + 'static) {
+    LIVE_RESIZE.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
+}
+
 fn xy(lparam: LPARAM) -> (f32, f32) {
     // The coordinates are SIGNED 16-bit halves. Reading them as unsigned puts the
     // pointer at ~65000 the moment it leaves the window's left or top edge while
@@ -169,6 +203,15 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let width = (raw & 0xFFFF) as u32;
             let height = ((raw >> 16) & 0xFFFF) as u32;
             if width > 0 && height > 0 {
+                // SYNCHRONOUSLY, RIGHT HERE. See `LIVE_RESIZE`'s own doc
+                // comment: this is the one point in a live border-drag
+                // where anything at all gets a chance to run before the
+                // drag ends.
+                LIVE_RESIZE.with(|cell| {
+                    if let Some(hook) = cell.borrow_mut().as_mut() {
+                        hook(width, height);
+                    }
+                });
                 push(hwnd, Event::Resized { width, height });
             }
             LRESULT(0)

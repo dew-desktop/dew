@@ -45,9 +45,11 @@ use dew_runtime::{RasterPainter, Rgb};
 #[cfg(windows)]
 use dew_window::{Button, Event, Pump, Surface, Window};
 use mlua::Lua;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(windows)]
@@ -1527,7 +1529,16 @@ fn run_applet(
     // an `Arc` clone -- the same dom, not a second one.
     let dom = dom.clone();
 
-    let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
+    // SHARED, NOT OWNED OUTRIGHT, from here on -- the live-resize hook
+    // registered below needs its own handle on both this and `window`,
+    // callable from inside `WM_SIZE` while this function's own loop is
+    // doing nothing at all (blocked inside `pump.poll()`, itself blocked
+    // inside Windows' own modal drag loop). A `RefCell` is enough rather
+    // than a `Mutex`: the hook and this loop's own code never run at once,
+    // only ever nested one inside the other, on this one thread.
+    let renderer = Rc::new(RefCell::new(create_renderer(
+        mounted, &vm, &clock, &surface, width, height,
+    )?));
 
     // WHICH DRAGGABLE BEHAVIOURS THIS SURFACE ASKED FOR, if it is a widget
     // at all. `None` for everything else, which turns the whole drag state
@@ -1557,7 +1568,30 @@ fn run_applet(
         }
     }
 
-    let mut window = Window::new(&resolved, width, height)?;
+    let window = Rc::new(RefCell::new(Window::new(&resolved, width, height)?));
+
+    // REPAINT LIVE, DURING A BORDER-DRAG RESIZE, NOT ONLY ONCE IT ENDS.
+    // `WM_SIZE` calls this synchronously from inside Windows' own modal
+    // drag loop -- see `dew_window::set_live_resize_hook`'s own doc
+    // comment for why nothing else reaches this window at all while that
+    // loop is running. `resized` before `present`, in that order: `blit`'s
+    // `StretchDIBits` destination is the window's OWN tracked size, and a
+    // present with a source that does not match it is exactly the stretch
+    // this whole hook exists to stop happening again.
+    {
+        let renderer = Rc::clone(&renderer);
+        let window = Rc::clone(&window);
+        dew_window::set_live_resize_hook(move |w, h| {
+            window.borrow_mut().resized(w, h);
+            let mut renderer = renderer.borrow_mut();
+            renderer.resize(w, h);
+            if renderer.frame(0.0).unwrap_or(false) {
+                if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
+                    window.borrow().present(bgra, w, h);
+                }
+            }
+        });
+    }
 
     // THE WINDOW'S CURRENT ON-SCREEN POSITION, TRACKED HERE because nothing
     // else does: `Window` itself only knows its size (`resized` exists for
@@ -1587,7 +1621,7 @@ fn run_applet(
     let mut pump = Pump::new();
     while let Some(events) = pump.poll() {
         for (from, event) in events {
-            if from != window.id() {
+            if from != window.borrow().id() {
                 continue;
             }
             match event {
@@ -1629,19 +1663,19 @@ fn run_applet(
                                 snap_to_edges,
                                 keep_on_screen,
                             );
-                            window.set_position(placed.0, placed.1);
+                            window.borrow().set_position(placed.0, placed.1);
                             position = placed;
                         }
                     }
                     if forward {
-                        renderer.moved(x, y, &service_pointer)?;
+                        renderer.borrow_mut().moved(x, y, &service_pointer)?;
                     }
                 }
                 Event::PointerDown { x, y, button } => {
                     // DISPATCHED UNCHANGED, EVERY TIME. A press-and-hold
                     // button must still work even on a draggable widget, so
                     // arming a drag never replaces this.
-                    renderer.down(button, x, y, &service_pointer)?;
+                    renderer.borrow_mut().down(button, x, y, &service_pointer)?;
                     if button == Button::Left {
                         if let Some((draggable, _, _, _)) = drag_options {
                             if draggable {
@@ -1672,42 +1706,41 @@ fn run_applet(
                         }
                     }
                     if !suppress {
-                        renderer.up(button, x, y, &service_pointer)?;
+                        renderer.borrow_mut().up(button, x, y, &service_pointer)?;
                     }
                 }
                 Event::Wheel { x, y, delta } => {
-                    renderer.wheel(x, y, delta, &service_pointer)?;
+                    renderer.borrow_mut().wheel(x, y, delta, &service_pointer)?;
                 }
                 Event::Resized {
                     width: w,
                     height: h,
                 } => {
-                    // THE SHELL APPLIES THE SIZE NOW. The window used to
-                    // catch its own resize while draining its own queue.
-                    window.resized(w, h);
-                    // AND THE RENDERER, AND THIS FUNCTION'S OWN `width`/
-                    // `height` -- THREE COPIES OF THE SAME NUMBER, and a
-                    // stretched-instead-of-redrawn window on every resize
-                    // was what leaving any one of them stale looked like.
-                    // `window.present(bgra, width, height)` below reads
-                    // these locals as the SOURCE buffer's size while
-                    // `Window`'s own (just-updated) size is the blit
-                    // destination -- mismatched, that call stretches
-                    // whatever `renderer.frame` produced to fill the new
-                    // client rect, which is `Renderer::resize`'s doc
-                    // comment in one sentence.
-                    renderer.resize(w, h);
+                    // THIS IS THE DEFERRED CATCH-UP, NOT THE LIVE REPAINT --
+                    // that already happened, synchronously, in the
+                    // `set_live_resize_hook` closure above, for every size
+                    // Windows reported during the drag. This handler exists
+                    // for a resize that was never a live drag at all
+                    // (maximizing, snapping to a screen edge, `Win`+arrow)
+                    // and, for a real drag, catches up this function's own
+                    // `window`/`renderer` handles to whatever the hook's
+                    // OWN clones already settled on -- redundant with the
+                    // hook's last call in that case, not wrong, since both
+                    // `resized` and `resize` are idempotent at a size they
+                    // are already at.
+                    window.borrow_mut().resized(w, h);
+                    renderer.borrow_mut().resize(w, h);
                     width = w;
                     height = h;
                 }
-                Event::Exposed => renderer.invalidate(),
+                Event::Exposed => renderer.borrow_mut().invalidate(),
                 // UNLOADS THIS APPLET, AND NOTHING ELSE. The process used to
                 // exit the moment its one window closed; the coordinator
                 // outlives every applet now, so this thread simply ends and
                 // leaves the registry entry for the coordinator to notice
                 // and drop.
                 Event::CloseRequested => return Ok(()),
-                Event::Key { name, .. } => renderer.key(&name)?,
+                Event::Key { name, .. } => renderer.borrow_mut().key(&name)?,
                 Event::Char(_) => {}
             }
         }
@@ -1716,18 +1749,19 @@ fn run_applet(
         last = Instant::now();
 
         if bench {
-            renderer.invalidate();
+            renderer.borrow_mut().invalidate();
         }
 
         let t0 = Instant::now();
         let painted = renderer
+            .borrow_mut()
             .frame(dt)
             .map_err(|e| format!("while rendering: {e}"))?;
         let t_frame = t0.elapsed();
 
         let t1 = Instant::now();
-        if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
-            window.present(bgra, width, height);
+        if let Some(bgra) = renderer.borrow_mut().painter_mut().canvas_mut().bgra() {
+            window.borrow().present(bgra, width, height);
         }
         let t_raster = t1.elapsed();
 
