@@ -90,6 +90,15 @@ list.Name = "List"
 list.Position = UDim2.new(0, 16, 0, 92)
 list.Size = UDim2.new(1, -32, 1, -108)
 list.BackgroundTransparency = 1
+-- A ROW IS SIZED AGAINST THE CANVAS, NOT THE FRAME'S OWN VISIBLE BOX --
+-- `render.rs` lays every child out inside `CanvasSize`'s box, and that
+-- defaults to zero on both axes. Without this, `UDim2.new(1, 0, 0, ...)`
+-- on a row resolves its width against a zero-wide canvas: every row
+-- exists, at zero width, which is indistinguishable from nothing at all.
+-- Width tracks the frame itself; height grows to fit whatever the list
+-- layout below actually lays out.
+list.CanvasSize = UDim2.new(1, 0, 0, 0)
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
 list.Parent = body
 
 local listLayout = Instance.new("UIListLayout")
