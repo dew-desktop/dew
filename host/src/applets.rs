@@ -635,6 +635,99 @@ pub mod tests {
         );
     }
 
+    /// `dew` NEVER APPEARS FOR AN ORDINARY APPLET, even one that only ever
+    /// asked for `widget`. `dew.Marketplace` is not a thing every applet
+    /// gets and merely finds gated members on -- unlike `desktop`, `dew`
+    /// itself does not exist unless something granted put a member on it.
+    #[test]
+    fn an_ordinary_applet_has_no_dew_global_at_all() {
+        let fixture = Fixture::new(
+            "no-dew",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 10, height = 10 },
+                    mount = function(desktop, root)
+                        assert(dew == nil, "an ordinary applet must not see a dew global")
+                    end,
+                }
+            "#,
+        );
+        assert!(fixture.load().is_ok());
+    }
+
+    /// THE POLL SHAPE, END TO END (milestone 23 sprint 3). `Discover` and
+    /// `Install` return immediately -- proven here by never blocking this
+    /// test on the network -- and `Discovered`/`Installed` start out `nil`
+    /// until the background thread they started lands a result.
+    ///
+    /// HERMETIC ON PURPOSE: `platform::clear_session()` guarantees no
+    /// session file exists before either call, so `platform::discover` and
+    /// `package::install_from_marketplace` both fail on `require_session`
+    /// before either would ever reach the network -- the same "not signed
+    /// in" error `dew discover`/`dew install @owner/id` give from a
+    /// terminal in the same state. What is under test is the wiring
+    /// (trigger, background thread, poll, shape of the answer), not
+    /// `dew-platform`'s own behaviour, which owes this test nothing.
+    #[cfg(windows)]
+    #[test]
+    fn dew_marketplace_triggers_and_polls_without_blocking() {
+        crate::platform::clear_session();
+
+        let fixture = BundledFixture::new(
+            "marketplace-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"discover\", \"install\"]\n",
+            PLAIN,
+        );
+        let loaded = fixture.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let marketplace: mlua::Table = dew.get("Marketplace").expect("Marketplace installed");
+
+        let poll = |name: &str, args: mlua::MultiValue| -> mlua::Table {
+            let trigger: mlua::Function = marketplace.get(name).expect("trigger installed");
+            trigger
+                .call::<()>(args)
+                .expect("triggering must return immediately, never blocking on the network");
+
+            let reader_name = if name == "Discover" {
+                "Discovered"
+            } else {
+                "Installed"
+            };
+            let reader: mlua::Function = marketplace.get(reader_name).expect("reader installed");
+
+            for _ in 0..200 {
+                if let mlua::Value::Table(t) = reader.call(()).expect("poll") {
+                    return t;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("{reader_name} never landed a result within 2 seconds");
+        };
+
+        let discovered = poll("Discover", mlua::MultiValue::new());
+        assert!(
+            !discovered.get::<bool>("ok").expect("ok field"),
+            "no session exists in this test, so discover must fail rather than succeed"
+        );
+        let error: String = discovered.get("error").expect("error field");
+        assert!(error.contains("not signed in"), "got: {error}");
+
+        let mut args = mlua::MultiValue::new();
+        args.push_back(mlua::Value::String(lua.create_string("owner").unwrap()));
+        args.push_back(mlua::Value::String(lua.create_string("applet").unwrap()));
+        let installed = poll("Install", args);
+        assert!(
+            !installed.get::<bool>("ok").expect("ok field"),
+            "no session exists in this test, so install must fail rather than succeed"
+        );
+        let error: String = installed.get("error").expect("error field");
+        assert!(error.contains("not signed in"), "got: {error}");
+    }
+
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing
     /// nothing -- the same choice an unknown permission makes.
     #[test]

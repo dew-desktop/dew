@@ -214,6 +214,46 @@ pub fn install_from_archive(zip_path: &Path, force: bool) -> Result<String, Stri
     crate::installed::install(&extracted, force)
 }
 
+/// Fetches a public package's bytes and installs them, exactly the path a
+/// local `.dewpkg` file already takes: a marketplace fetch is a second way
+/// of producing a `&Path` on disk, never a fork of install itself, per
+/// ADR-015. Shared by the CLI's `dew install @<owner>/<id>` and any other
+/// caller of "install from the marketplace," so they can never drift apart
+/// on what that means.
+pub fn install_from_marketplace(
+    owner_user_id: &str,
+    applet_id: &str,
+    force: bool,
+) -> Result<String, String> {
+    let bytes = crate::platform::fetch_package(owner_user_id, applet_id)?;
+
+    let temp_path = std::env::temp_dir().join(format!(
+        "dew-fetch-{applet_id}-{}-{}.dewpkg",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ));
+    std::fs::write(&temp_path, &bytes).map_err(|e| e.to_string())?;
+
+    let result = install_from_archive(&temp_path, force);
+    let _ = std::fs::remove_file(&temp_path);
+    result
+}
+
+/// Records a successful install in the signed-in account's synced list, if
+/// there is one. `Ok(())` when signed out entirely, since sync is optional,
+/// not a requirement to use Dew at all; `Err` only carries a soft warning
+/// about the sync request itself, never about the install that already
+/// succeeded before this was called.
+pub fn sync_after_install(id: &str) -> Result<(), String> {
+    if crate::platform::load_session().is_none() {
+        return Ok(());
+    }
+    crate::platform::add_synced(id).map_err(|e| format!("installed, but could not sync: {e}"))
+}
+
 /// Zip `dir` into a `.dewpkg` file, carrying everything `installed::install`
 /// itself copies -- including a vendored `roblox_packages`/`.pesde`, if the
 /// applet has one -- with the manifest at the archive's own root rather than

@@ -14,6 +14,7 @@ use crate::manifest::Permission;
 use crate::surface::{Request, Requested};
 use mlua::prelude::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -36,6 +37,34 @@ pub struct SurfaceGrant {
     pub requested: Requested,
     pub root: Option<LuaValue>,
     pub title: String,
+}
+
+/// Get or create `dew.Marketplace`, the sub-table every `Capability::Host`
+/// permission below adds its members to (ADR-018: `dew` grows by named
+/// sub-table from its first member, not by flat sibling, the shape
+/// `chrome.tabs`/`chrome.identity` already follow and `desktop`'s own flat
+/// members deliberately do not need to).
+#[cfg(windows)]
+type DiscoverResult = Result<Vec<crate::platform::DiscoveredPackage>, String>;
+
+#[cfg(windows)]
+fn marketplace_table(lua: &Lua) -> LuaResult<LuaTable> {
+    let dew: LuaTable = match lua.globals().get("dew") {
+        Ok(existing) => existing,
+        Err(_) => {
+            let fresh = lua.create_table()?;
+            lua.globals().set("dew", fresh.clone())?;
+            fresh
+        }
+    };
+    match dew.get::<LuaTable>("Marketplace") {
+        Ok(existing) => Ok(existing),
+        Err(_) => {
+            let fresh = lua.create_table()?;
+            dew.set("Marketplace", fresh.clone())?;
+            Ok(fresh)
+        }
+    }
 }
 
 /// Build the capability table for one mod.
@@ -198,13 +227,142 @@ pub fn build(
                 // Host-level capability for Content resolution; exposes no guest Lua table.
             }
 
-            // `Capability::Host` permissions (ADR-017). Granted -- `applets::load`
-            // already refused anything not bundled before this ran -- but not yet
-            // reachable from Luau at all. Milestone 23 sprint 3 is what puts a
-            // table behind these; landing the grant ahead of the guest-facing API
-            // it unlocks is deliberate, the same order `RbxAssetId` above already
-            // took.
-            Permission::Auth | Permission::Discover | Permission::Install => {}
+            // `Capability::Host` permissions (ADR-017), reachable from Luau
+            // under `dew.Marketplace` (ADR-018) rather than as members of
+            // `desktop` -- Dew's own platform layer, not the open vocabulary.
+            //
+            // TRIGGER AND POLL, THE SAME SHAPE `manage.rs` ALREADY PROVED,
+            // moved to Luau instead of a `Mutex<Option<_>>` a `WM_TIMER`
+            // drains. `Discover`/`Install` start a background thread and
+            // return immediately; `Discovered`/`Installed` read whatever has
+            // landed so far, or `nil` if nothing has. Neither ever blocks the
+            // calling applet's own frame, and a second trigger while one is
+            // already in flight is a no-op rather than a second thread.
+            //
+            // A PEEKED READ, NOT A DRAINED ONE -- unlike `manage.rs`'s own
+            // `SIGNIN_RESULT`/`DISCOVER_RESULT`. Those exist beside an
+            // imperative Win32 message loop that mutates a widget once and
+            // moves on; a reactive Luau applet wants a stable value it can
+            // read every frame without racing whichever frame happened to
+            // catch the one moment it was drained.
+            #[cfg(windows)]
+            Permission::Discover => {
+                let marketplace = marketplace_table(lua)?;
+
+                let in_flight = Arc::new(AtomicBool::new(false));
+                let result: Arc<Mutex<Option<DiscoverResult>>> = Arc::new(Mutex::new(None));
+
+                let discover_result = Arc::clone(&result);
+                marketplace.set(
+                    "Discover",
+                    lua.create_function(move |_, ()| {
+                        if !in_flight.swap(true, Ordering::SeqCst) {
+                            let flight = Arc::clone(&in_flight);
+                            let slot = Arc::clone(&discover_result);
+                            std::thread::spawn(move || {
+                                let outcome = crate::platform::discover();
+                                *slot.lock().expect("discover result") = Some(outcome);
+                                flight.store(false, Ordering::SeqCst);
+                            });
+                        }
+                        Ok(())
+                    })?,
+                )?;
+
+                marketplace.set(
+                    "Discovered",
+                    lua.create_function(move |lua, ()| {
+                        match &*result.lock().expect("discover result") {
+                            None => Ok(LuaValue::Nil),
+                            Some(Ok(packages)) => {
+                                let table = lua.create_table()?;
+                                table.set("ok", true)?;
+                                let list = lua.create_table()?;
+                                for (i, package) in packages.iter().enumerate() {
+                                    let row = lua.create_table()?;
+                                    row.set("ownerUserId", package.owner_user_id.as_str())?;
+                                    row.set("appletId", package.applet_id.as_str())?;
+                                    row.set("uploadedAt", package.uploaded_at.as_str())?;
+                                    list.set((i + 1) as i64, row)?;
+                                }
+                                table.set("packages", list)?;
+                                Ok(LuaValue::Table(table))
+                            }
+                            Some(Err(message)) => {
+                                let table = lua.create_table()?;
+                                table.set("ok", false)?;
+                                table.set("error", message.as_str())?;
+                                Ok(LuaValue::Table(table))
+                            }
+                        }
+                    })?,
+                )?;
+            }
+            #[cfg(not(windows))]
+            Permission::Discover => {}
+
+            #[cfg(windows)]
+            Permission::Install => {
+                let marketplace = marketplace_table(lua)?;
+
+                let in_flight = Arc::new(AtomicBool::new(false));
+                let result: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+
+                let install_result = Arc::clone(&result);
+                marketplace.set(
+                    "Install",
+                    lua.create_function(move |_, (owner_user_id, applet_id): (String, String)| {
+                        if !in_flight.swap(true, Ordering::SeqCst) {
+                            let flight = Arc::clone(&in_flight);
+                            let slot = Arc::clone(&install_result);
+                            std::thread::spawn(move || {
+                                let outcome = crate::package::install_from_marketplace(
+                                    &owner_user_id,
+                                    &applet_id,
+                                    false,
+                                )
+                                .inspect(|id| {
+                                    if let Err(e) = crate::package::sync_after_install(id) {
+                                        eprintln!("[dew] {id}: {e}");
+                                    }
+                                });
+                                *slot.lock().expect("install result") = Some(outcome);
+                                flight.store(false, Ordering::SeqCst);
+                            });
+                        }
+                        Ok(())
+                    })?,
+                )?;
+
+                marketplace.set(
+                    "Installed",
+                    lua.create_function(move |lua, ()| {
+                        match &*result.lock().expect("install result") {
+                            None => Ok(LuaValue::Nil),
+                            Some(Ok(id)) => {
+                                let table = lua.create_table()?;
+                                table.set("ok", true)?;
+                                table.set("id", id.as_str())?;
+                                Ok(LuaValue::Table(table))
+                            }
+                            Some(Err(message)) => {
+                                let table = lua.create_table()?;
+                                table.set("ok", false)?;
+                                table.set("error", message.as_str())?;
+                                Ok(LuaValue::Table(table))
+                            }
+                        }
+                    })?,
+                )?;
+            }
+            #[cfg(not(windows))]
+            Permission::Install => {}
+
+            // Not yet reachable from Luau (deferred; sign-in stays Win32 in
+            // `manage.rs` for this milestone). Granted like the two above --
+            // `applets::load` already refused anything not bundled -- but
+            // exposes nothing yet, the same order `RbxAssetId` took.
+            Permission::Auth => {}
         }
     }
 
