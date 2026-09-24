@@ -27,17 +27,29 @@
 use crate::manifest::Manifest;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 use std::thread;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HMODULE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{COLOR_WINDOW, HBRUSH};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 const BST_CHECKED: usize = 1;
 const BST_UNCHECKED: usize = 0;
+
+/// Login-section control ids. Clear of `ROW_BASE` (100+, the applet
+/// checkboxes) and of each other; a pure label `STATIC` we never touch
+/// again after creation gets no id at all, matching the existing "No
+/// applets installed" text.
+const EMAIL_EDIT_ID: i32 = 10;
+const PASSWORD_EDIT_ID: i32 = 11;
+const SIGNIN_BUTTON_ID: i32 = 12;
+const STATUS_STATIC_ID: i32 = 13;
+const SIGNED_IN_STATIC_ID: i32 = 14;
+const SIGNOUT_BUTTON_ID: i32 = 15;
 
 /// Where the per-row checkbox ids start. Clear of anything this window's own
 /// class uses, since a child control's id only has to be unique within its
@@ -46,8 +58,28 @@ const ROW_BASE: i32 = 100;
 const ROW_HEIGHT: i32 = 28;
 const ROW_X: i32 = 12;
 const ROW_WIDTH: i32 = 380;
-const ROW_Y0: i32 = 12;
+
+/// The login section occupies the top of the window; applet rows start
+/// below it. Both the signed-out form (email, password, sign-in button)
+/// and the signed-in state (an email line, a sign-out button) fit in this
+/// height, and `refresh` toggles which set is visible rather than
+/// resizing anything.
+const LOGIN_SECTION_HEIGHT: i32 = 96;
+const ROW_Y0: i32 = 12 + LOGIN_SECTION_HEIGHT;
 const TIMER_ID: usize = 1;
+
+/// Set while a background sign-in attempt is in flight, so a second click
+/// on the button before the first request returns is ignored rather than
+/// racing it. `platform::login` is a blocking `ureq` call; running it on
+/// a thread of its own is what keeps this window's own message loop
+/// responsive while it is outstanding, the same isolation this window
+/// already has from the coordinator's.
+static SIGNIN_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// The background sign-in thread's result, drained (not peeked) by
+/// `refresh` on the window's own thread. `None` means either nothing has
+/// been attempted yet or the last result was already drained.
+static SIGNIN_RESULT: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 
 /// The window handle of the management window, or 0 when none is open.
 ///
@@ -89,6 +121,20 @@ fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// Reads an `EDIT` control's current text. 256 UTF-16 units is well past
+/// any real email or password; `GetWindowTextW` truncates rather than
+/// overflowing if it is not, and truncating an email or password just
+/// means a resulting sign-in attempt fails cleanly rather than silently
+/// changing what was typed.
+unsafe fn window_text(hwnd: HWND, id: i32) -> String {
+    let Ok(ctrl) = GetDlgItem(Some(hwnd), id) else {
+        return String::new();
+    };
+    let mut buffer = [0u16; 256];
+    let len = GetWindowTextW(ctrl, &mut buffer);
+    String::from_utf16_lossy(&buffer[..len.max(0) as usize])
+}
+
 /// Open the management window, or bring the one already open to the front.
 ///
 /// CALLED FROM THE TRAY'S OWN WINDOW PROCEDURE, itself running on the
@@ -122,10 +168,61 @@ fn row_label(id: &str, dir: &Path, running: &HashSet<String>) -> String {
     format!("{name} ({id}) - {status}")
 }
 
+/// Shows the signed-out form or the signed-in state, whichever
+/// `platform::load_session()` currently says is true, and drains a
+/// background sign-in attempt's result into the status line if one has
+/// landed since the last call.
+unsafe fn refresh_login_section(hwnd: HWND) {
+    let signed_in = crate::platform::load_session();
+
+    let show = |id: i32, visible: bool| {
+        if let Ok(ctrl) = GetDlgItem(Some(hwnd), id) {
+            let _ = ShowWindow(ctrl, if visible { SW_SHOW } else { SW_HIDE });
+        }
+    };
+
+    show(EMAIL_EDIT_ID, signed_in.is_none());
+    show(PASSWORD_EDIT_ID, signed_in.is_none());
+    show(SIGNIN_BUTTON_ID, signed_in.is_none());
+    show(SIGNED_IN_STATIC_ID, signed_in.is_some());
+    show(SIGNOUT_BUTTON_ID, signed_in.is_some());
+
+    if let Some(session) = &signed_in {
+        if let Ok(ctrl) = GetDlgItem(Some(hwnd), SIGNED_IN_STATIC_ID) {
+            let text = wide(&format!("Signed in as {}", session.email));
+            let _ = SetWindowTextW(ctrl, PCWSTR(text.as_ptr()));
+        }
+    }
+
+    if let Ok(ctrl) = GetDlgItem(Some(hwnd), SIGNIN_BUTTON_ID) {
+        let in_flight = SIGNIN_IN_FLIGHT.load(Ordering::SeqCst);
+        let _ = EnableWindow(ctrl, !in_flight);
+        let label = wide(if in_flight {
+            "Signing in..."
+        } else {
+            "Sign in"
+        });
+        let _ = SetWindowTextW(ctrl, PCWSTR(label.as_ptr()));
+    }
+
+    let outcome = SIGNIN_RESULT.lock().expect("signin result").take();
+    if let Some(outcome) = outcome {
+        if let Ok(ctrl) = GetDlgItem(Some(hwnd), STATUS_STATIC_ID) {
+            let text = wide(&match outcome {
+                Ok(()) => String::new(),
+                Err(e) => e,
+            });
+            let _ = SetWindowTextW(ctrl, PCWSTR(text.as_ptr()));
+        }
+    }
+}
+
 /// Re-read disk and live state and push it into every row's control. Called
 /// once after each click, for instant feedback, and once per timer tick so a
 /// toggle the coordinator has not yet acted on catches up once it does.
 unsafe fn refresh(hwnd: HWND) {
+    refresh_login_section(hwnd);
+
     let rows = ROWS.lock().expect("manage rows").clone();
     let enabled: std::collections::HashMap<String, bool> = crate::installed::list()
         .into_iter()
@@ -149,6 +246,130 @@ unsafe fn refresh(hwnd: HWND) {
     }
 }
 
+/// Creates both the signed-out form and the signed-in state's controls,
+/// all at once, at fixed positions in the top `LOGIN_SECTION_HEIGHT`
+/// pixels of the window. `refresh_login_section` toggles which set is
+/// visible; neither set is ever destroyed or recreated for the life of
+/// the window, the same "built once, state refreshed" shape the applet
+/// rows below already use.
+unsafe fn create_login_section(hwnd: HWND, instance: HMODULE) {
+    let label = |text: &str, y: i32, width: i32| {
+        let wide_text = wide(text);
+        let _ = CreateWindowExW(
+            WINDOW_EX_STYLE::default(),
+            PCWSTR(wide("STATIC").as_ptr()),
+            PCWSTR(wide_text.as_ptr()),
+            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+            ROW_X,
+            y,
+            width,
+            20,
+            Some(hwnd),
+            None,
+            Some(instance.into()),
+            None,
+        );
+    };
+
+    label("Email:", 12, 60);
+    let _ = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide("EDIT").as_ptr()),
+        PCWSTR::null(),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_TABSTOP.0),
+        ROW_X + 64,
+        12,
+        ROW_WIDTH - 64,
+        20,
+        Some(hwnd),
+        Some(HMENU(EMAIL_EDIT_ID as isize as *mut _)),
+        Some(instance.into()),
+        None,
+    );
+
+    label("Password:", 36, 60);
+    let _ = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide("EDIT").as_ptr()),
+        PCWSTR::null(),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_BORDER.0 | WS_TABSTOP.0 | ES_PASSWORD as u32),
+        ROW_X + 64,
+        36,
+        ROW_WIDTH - 64,
+        20,
+        Some(hwnd),
+        Some(HMENU(PASSWORD_EDIT_ID as isize as *mut _)),
+        Some(instance.into()),
+        None,
+    );
+
+    let signin_label = wide("Sign in");
+    let _ = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide("BUTTON").as_ptr()),
+        PCWSTR(signin_label.as_ptr()),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
+        ROW_X,
+        60,
+        80,
+        24,
+        Some(hwnd),
+        Some(HMENU(SIGNIN_BUTTON_ID as isize as *mut _)),
+        Some(instance.into()),
+        None,
+    );
+
+    // SHARES THE ROW WITH THE SIGN-IN BUTTON, visible only while signed
+    // out: an error from a failed attempt, or blank otherwise.
+    let _ = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide("STATIC").as_ptr()),
+        PCWSTR::null(),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+        ROW_X + 88,
+        64,
+        ROW_WIDTH - 88,
+        20,
+        Some(hwnd),
+        Some(HMENU(STATUS_STATIC_ID as isize as *mut _)),
+        Some(instance.into()),
+        None,
+    );
+
+    let _ = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide("STATIC").as_ptr()),
+        PCWSTR::null(),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0),
+        ROW_X,
+        12,
+        ROW_WIDTH,
+        20,
+        Some(hwnd),
+        Some(HMENU(SIGNED_IN_STATIC_ID as isize as *mut _)),
+        Some(instance.into()),
+        None,
+    );
+
+    let signout_label = wide("Sign out");
+    let _ = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide("BUTTON").as_ptr()),
+        PCWSTR(signout_label.as_ptr()),
+        WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | WS_TABSTOP.0),
+        ROW_X,
+        36,
+        80,
+        24,
+        Some(hwnd),
+        Some(HMENU(SIGNOUT_BUTTON_ID as isize as *mut _)),
+        Some(instance.into()),
+        None,
+    );
+
+    refresh_login_section(hwnd);
+}
+
 unsafe extern "system" fn manage_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_TIMER => {
@@ -158,7 +379,21 @@ unsafe extern "system" fn manage_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
         WM_COMMAND => {
             let id = (wp.0 & 0xFFFF) as i32;
             let notification = (wp.0 >> 16) & 0xFFFF;
-            if notification == BN_CLICKED as usize && id >= ROW_BASE {
+            if notification == BN_CLICKED as usize && id == SIGNIN_BUTTON_ID {
+                if !SIGNIN_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+                    let email = window_text(hwnd, EMAIL_EDIT_ID);
+                    let password = window_text(hwnd, PASSWORD_EDIT_ID);
+                    thread::spawn(move || {
+                        let outcome = crate::platform::login(&email, &password).map(|_| ());
+                        *SIGNIN_RESULT.lock().expect("signin result") = Some(outcome);
+                        SIGNIN_IN_FLIGHT.store(false, Ordering::SeqCst);
+                    });
+                    refresh(hwnd);
+                }
+            } else if notification == BN_CLICKED as usize && id == SIGNOUT_BUTTON_ID {
+                crate::platform::clear_session();
+                refresh(hwnd);
+            } else if notification == BN_CLICKED as usize && id >= ROW_BASE {
                 let idx = (id - ROW_BASE) as usize;
                 let row = ROWS.lock().expect("manage rows").get(idx).cloned();
                 if let Some((applet_id, dir)) = row {
@@ -247,6 +482,8 @@ unsafe fn run_window() {
     };
 
     DIALOG_HWND.store(hwnd.0 as isize, Ordering::SeqCst);
+
+    create_login_section(hwnd, instance);
 
     if entries.is_empty() {
         let text = wide("No applets installed. Use `dew install <dir>` from a terminal.");

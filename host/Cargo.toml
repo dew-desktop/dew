@@ -122,6 +122,9 @@ windows = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
+    # `EnableWindow`, for greying out the "Sign in" button in the
+    # management window while a background attempt is in flight.
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_LibraryLoader",
     # A SECOND `dew run` HAS TO REACH THE FIRST. `Win32_System_Threading` is the
     # named mutex that says whether a coordinator is already running,
