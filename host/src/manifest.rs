@@ -9,7 +9,26 @@ use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// A capability a mod may ask for.
+/// The host-fixed class a `Permission` belongs to (ADR-017).
+///
+/// NEVER SOMETHING A MANIFEST DECLARES. `dew.toml` states permissions, not
+/// capabilities -- the same way it states `overlay` without also stating
+/// that an overlay asks for a great deal. Which capability a permission
+/// falls under is this file's own fixed table, not the mod's to assert.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Capability {
+    /// Anything any installed mod may ask for. Granted on the manifest's
+    /// say-so alone, the same as every permission worked before this
+    /// distinction existed.
+    User,
+    /// Auth, Discover, Install. Granted only to a mod the coordinator
+    /// itself loaded from its own bundled directory -- never to anything
+    /// under `installed::list()`'s user-writable one, regardless of what
+    /// that mod's own `dew.toml` claims.
+    Host,
+}
+
+/// A permission a mod may ask for.
 ///
 /// A CLOSED SET, not free-form strings. An unknown permission in a manifest is
 /// refused rather than ignored: silently dropping one means a mod that asks for
@@ -37,6 +56,15 @@ pub enum Permission {
     Window,
     Overlay,
     Popover,
+
+    // `Capability::Host` ONLY (ADR-017). Named after the CLI verbs they
+    // mirror -- `dew login`/`dew logout`, `dew discover`, `dew install` --
+    // rather than inventing new words for old ones. `applets::load` refuses
+    // to load a mod declaring any of these unless it came from the
+    // coordinator's own bundled directory; see `Permission::capability`.
+    Auth,
+    Discover,
+    Install,
 }
 
 impl Permission {
@@ -51,6 +79,26 @@ impl Permission {
             Permission::Window => "window",
             Permission::Overlay => "overlay",
             Permission::Popover => "popover",
+            Permission::Auth => "auth",
+            Permission::Discover => "discover",
+            Permission::Install => "install",
+        }
+    }
+
+    /// Which `Capability` this permission falls under (ADR-017). Fixed by
+    /// the host, not by anything a manifest says.
+    pub fn capability(self) -> Capability {
+        match self {
+            Permission::Auth | Permission::Discover | Permission::Install => Capability::Host,
+            Permission::Storage
+            | Permission::Audio
+            | Permission::Notifications
+            | Permission::Clipboard
+            | Permission::RbxAssetId
+            | Permission::Widget
+            | Permission::Window
+            | Permission::Overlay
+            | Permission::Popover => Capability::User,
         }
     }
 

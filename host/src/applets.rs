@@ -20,7 +20,7 @@
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
-use crate::manifest::Manifest;
+use crate::manifest::{Capability, Manifest};
 use crate::services::{self, Clock, PointerState, SharedClock, SharedPointer};
 use crate::surface::{Declared, Requested};
 use dew_runtime::{modules, Vm};
@@ -104,6 +104,31 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
 // 2026-09-04, came back the same day for this one consumer, and is now gone for
 // the reason it should always have been gone: nothing reads it.
 
+/// Did this applet load from the coordinator's own bundled directory
+/// (ADR-017), rather than `installed::list()`'s user-writable one or an
+/// arbitrary `dew run <dir>` path? Canonicalized on both sides so a
+/// relative `dir` or a symlink cannot read as bundled by accident.
+///
+/// `installed.rs`, and the bundled directory it defines, exist only on
+/// Windows; off it there is no bundling mechanism at all, so nothing ever
+/// reads as bundled and a `Capability::Host` permission can never be
+/// granted.
+#[cfg(windows)]
+fn is_bundled(dir: &Path) -> bool {
+    let Some(bundled) = crate::installed::bundled_applets_dir() else {
+        return false;
+    };
+    let (Ok(dir), Ok(bundled)) = (dir.canonicalize(), bundled.canonicalize()) else {
+        return false;
+    };
+    dir.starts_with(&bundled)
+}
+
+#[cfg(not(windows))]
+fn is_bundled(_dir: &Path) -> bool {
+    false
+}
+
 pub fn load(
     dir: &Path,
     aliases: &std::collections::HashMap<String, PathBuf>,
@@ -111,6 +136,33 @@ pub fn load(
 ) -> Result<Applet, String> {
     // 1 ── the manifest, before anything of the mod's runs.
     let manifest = Manifest::load(dir)?;
+
+    //      A HOST-ONLY PERMISSION IS A LOAD-TIME REFUSAL FROM ANYWHERE BUT
+    //      THE BUNDLE (ADR-017), not a permission the mod simply does not
+    //      get. `Permission::Widget` asked for and not granted is merely
+    //      absent from `dew` below; `Permission::Install` asked for by a
+    //      mod that can never receive it is the same "refused rather than
+    //      ignored" treatment `manifest.rs` already gives an unknown
+    //      permission, for the same reason -- a mod author believing
+    //      something was granted when it silently was not is the worse
+    //      failure.
+    let host_only: Vec<_> = manifest
+        .permissions
+        .iter()
+        .copied()
+        .filter(|p| p.capability() == Capability::Host)
+        .collect();
+    if !host_only.is_empty() && !is_bundled(dir) {
+        let names = host_only
+            .iter()
+            .map(|p| p.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "{}: {names} -- host-only, and this applet did not load from Dew's own bundled directory",
+            manifest.id
+        ));
+    }
 
     //      SAID OUT LOUD, BEFORE THE MOD RUNS. What the manifest asked for and
     //      the host will not do is reported here rather than discovered by an
@@ -505,6 +557,82 @@ pub mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// A mod inside the coordinator's OWN bundled directory, the one place
+    /// a `Capability::Host` permission can be granted from (ADR-017).
+    /// Writes into the real `bundled_applets_dir()` `applets::load` itself
+    /// checks against -- faking that path would test a different check
+    /// than the real one, the same reasoning `Fixture` above already gives
+    /// for using a real directory rather than a fake filesystem.
+    #[cfg(windows)]
+    pub struct BundledFixture(PathBuf);
+
+    #[cfg(windows)]
+    impl BundledFixture {
+        pub fn new(name: &str, manifest: &str, entry: &str) -> BundledFixture {
+            let dir = crate::installed::bundled_applets_dir()
+                .expect("bundled applets dir")
+                .join(format!("dew-mods-test-{name}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("bundled dir");
+            std::fs::write(dir.join("dew.toml"), manifest).expect("dew.toml");
+            std::fs::write(dir.join("main.luau"), entry).expect("entry");
+            BundledFixture(dir)
+        }
+
+        pub fn load(&self) -> Result<Applet, String> {
+            let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+            load(&self.0, &Default::default(), &state)
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for BundledFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A HOST-ONLY PERMISSION IS A LOAD REFUSAL, NOT A QUIET ABSENCE
+    /// (ADR-017). `install` is a real, known permission -- unlike the
+    /// unknown-word case `manifest.rs` already refuses -- and the applet
+    /// asking for it here is not bundled, so it must be refused the same
+    /// way, naming both the permission and why.
+    #[test]
+    fn a_host_only_permission_refuses_to_load_outside_the_bundle() {
+        let fixture = Fixture::new(
+            "install-unbundled",
+            "id = \"plain\"\npermissions = [\"widget\", \"install\"]\n",
+            PLAIN,
+        );
+
+        let err = match fixture.load() {
+            Err(e) => e,
+            Ok(_) => panic!("a host-only permission from outside the bundle must not load"),
+        };
+
+        assert!(
+            err.contains("install") && err.contains("bundle"),
+            "the refusal should name the permission and why, got: {err}"
+        );
+    }
+
+    /// THE OTHER HALF OF THE SAME CHECK: the identical manifest, loaded
+    /// from the one place that is allowed to hold it, loads clean.
+    #[cfg(windows)]
+    #[test]
+    fn a_host_only_permission_loads_from_the_bundle() {
+        let fixture = BundledFixture::new(
+            "install-bundled",
+            "id = \"plain\"\npermissions = [\"widget\", \"install\"]\n",
+            PLAIN,
+        );
+
+        assert!(
+            fixture.load().is_ok(),
+            "a host-only permission declared by a bundled applet must be granted"
+        );
     }
 
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing

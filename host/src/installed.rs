@@ -34,6 +34,18 @@ fn applets_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// Where the coordinator's OWN applets live, sibling to `Applets/` but never
+/// read or written by `dew install`, `dew package`, or anything else in this
+/// file. `applets::load` checks a loading applet's directory against this
+/// one before granting any `Capability::Host` permission it declared
+/// (ADR-017) -- a mod under `Applets/` cannot get one no matter what its own
+/// `dew.toml` claims. Nothing ships into it until milestone 23's dashboard.
+pub(crate) fn bundled_applets_dir() -> Option<PathBuf> {
+    let dir = dew_dir()?.join("Bundled");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 fn state_path() -> Option<PathBuf> {
     Some(dew_dir()?.join("installed.json"))
 }

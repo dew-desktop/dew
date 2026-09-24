@@ -197,6 +197,14 @@ pub fn build(
             Permission::RbxAssetId => {
                 // Host-level capability for Content resolution; exposes no guest Lua table.
             }
+
+            // `Capability::Host` permissions (ADR-017). Granted -- `applets::load`
+            // already refused anything not bundled before this ran -- but not yet
+            // reachable from Luau at all. Milestone 23 sprint 2 is what puts a
+            // table behind these; landing the grant ahead of the guest-facing API
+            // it unlocks is deliberate, the same order `RbxAssetId` above already
+            // took.
+            Permission::Auth | Permission::Discover | Permission::Install => {}
         }
     }
 
