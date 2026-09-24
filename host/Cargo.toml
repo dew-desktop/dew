@@ -152,6 +152,14 @@ windows = { version = "0.59", features = [
 # it here would have silently restored the 18fps debug build the note there
 # describes.
 
+# EMBEDS dew.ico INTO dew.exe ITSELF. A real downloaded release attaches
+# only the .exe (see .github/workflows/ci.yml's `release` job), so a tray
+# icon sourced from a file beside it was never actually reachable outside
+# a full source checkout; embedding it as a Win32 resource has no
+# external file dependency at all. No-op on non-Windows targets.
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "2"
+
 [[bin]]
 name = "upstream-probe"
 path = "src/bin/upstream_probe.rs"

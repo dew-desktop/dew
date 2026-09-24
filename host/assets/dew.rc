@@ -1,0 +1,4 @@
+// Compiled into dew.exe by build.rs (embed-resource), not shipped
+// alongside it: resource id 1 is what tray.rs loads at runtime via
+// LoadIconW against the running process's own module handle.
+1 ICON "dew.ico"

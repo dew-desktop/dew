@@ -396,10 +396,7 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
     // A TRAY THAT FAILS TO CREATE DOES NOT STOP THE SERVICE. `crate::run_applet`
     // used to make the same choice for the single-applet tray it created;
     // the coordinator's one tray inherits it.
-    let _tray = match crate::tray::Tray::new(
-        crate::icon_path().as_deref(),
-        "Dew — a desktop applet platform",
-    ) {
+    let _tray = match crate::tray::Tray::new("Dew") {
         Ok(tray) => Some(tray),
         Err(message) => {
             eprintln!("[dew] no tray icon: {message}");

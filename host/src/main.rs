@@ -2859,17 +2859,6 @@ fn run() -> Result<(), String> {
     }
 }
 
-/// Dew's tray icon, beside the executable or in the source tree.
-#[cfg(windows)]
-fn icon_path() -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from("host/assets/dew.ico"),
-        PathBuf::from("assets/dew.ico"),
-        PathBuf::from("../host/assets/dew.ico"),
-    ];
-    candidates.into_iter().find(|p| p.is_file())
-}
-
 /// Prints the build identifier before Rust's own panic message, so a crash
 /// report carries it without whoever files one needing to know to run `dew
 /// --version` separately -- which may not even be possible if the crash is a
