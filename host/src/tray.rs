@@ -68,11 +68,14 @@ const ID_APPLET_BASE: usize = 3000;
 
 /// The offered caps. `None` is uncapped and is the default.
 ///
-/// UNCAPPED MEANS UNCAPPED — the loop does not sleep. That is what was asked for
-/// and it is the right default for a machine with headroom, but it is worth
-/// knowing that an idle widget then spins a core: `Renderer::frame` returns
-/// false with nothing to paint and the loop immediately asks again. A cap is
-/// the only thing currently standing between Dew and 100% of one core.
+/// UNCAPPED NO LONGER MEANS "DO NOT SLEEP AT ALL." It used to, and an idle
+/// widget spun a whole core doing nothing -- `Renderer::frame` returns false
+/// with nothing to paint, and an applet polling `dew.Clock.OnFrame` (see
+/// examples/host/widget-behaviors) re-ran that poll again immediately, as
+/// fast as the CPU could manage. The frame loop's own `None` arm now calls
+/// `DwmFlush` instead of skipping the wait entirely: uncapped means "as fast
+/// as the desktop compositor can actually show a new frame," the same ceiling
+/// a real swap-chain present would impose, not "as fast as the CPU can spin."
 const CAPS: &[(usize, &str, u32)] = &[
     (2000, "Uncapped", 0),
     (2001, "30 FPS", 33_333),
