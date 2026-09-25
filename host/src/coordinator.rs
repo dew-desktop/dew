@@ -495,6 +495,14 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
             changed = true;
         }
 
+        // `dew.Library.Launch`'S OWN QUEUE (milestone 25), drained the same
+        // way -- see `library.rs` for why it is not `dashboard.rs`'s.
+        for dir in crate::library::take_load_requests() {
+            spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
+            next_id += 1;
+            changed = true;
+        }
+
         if changed {
             sync_tray(&registry);
             sync_running(&registry);

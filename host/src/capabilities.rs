@@ -48,7 +48,7 @@ pub struct SurfaceGrant {
 type DiscoverResult = Result<Vec<crate::platform::DiscoveredPackage>, String>;
 
 #[cfg(windows)]
-fn marketplace_table(lua: &Lua) -> LuaResult<LuaTable> {
+fn dew_subtable(lua: &Lua, name: &str) -> LuaResult<LuaTable> {
     let dew: LuaTable = match lua.globals().get("dew") {
         Ok(existing) => existing,
         Err(_) => {
@@ -57,14 +57,30 @@ fn marketplace_table(lua: &Lua) -> LuaResult<LuaTable> {
             fresh
         }
     };
-    match dew.get::<LuaTable>("Marketplace") {
+    match dew.get::<LuaTable>(name) {
         Ok(existing) => Ok(existing),
         Err(_) => {
             let fresh = lua.create_table()?;
-            dew.set("Marketplace", fresh.clone())?;
+            dew.set(name, fresh.clone())?;
             Ok(fresh)
         }
     }
+}
+
+/// The `{ ok = true }` / `{ ok = false, error = "..." }` shape every
+/// fallible synchronous call in `dew.Library` returns, matching what
+/// `Discovered`/`Installed` already hand back for the same two outcomes.
+#[cfg(windows)]
+fn result_table(lua: &Lua, result: Result<(), String>) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+    match result {
+        Ok(()) => table.set("ok", true)?,
+        Err(message) => {
+            table.set("ok", false)?;
+            table.set("error", message)?;
+        }
+    }
+    Ok(table)
 }
 
 /// Build the capability table for one mod.
@@ -247,7 +263,7 @@ pub fn build(
             // catch the one moment it was drained.
             #[cfg(windows)]
             Permission::Discover => {
-                let marketplace = marketplace_table(lua)?;
+                let marketplace = dew_subtable(lua, "Marketplace")?;
 
                 let in_flight = Arc::new(AtomicBool::new(false));
                 let result: Arc<Mutex<Option<DiscoverResult>>> = Arc::new(Mutex::new(None));
@@ -311,7 +327,7 @@ pub fn build(
 
             #[cfg(windows)]
             Permission::Install => {
-                let marketplace = marketplace_table(lua)?;
+                let marketplace = dew_subtable(lua, "Marketplace")?;
 
                 let in_flight = Arc::new(AtomicBool::new(false));
                 let result: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
@@ -369,6 +385,57 @@ pub fn build(
             }
             #[cfg(not(windows))]
             Permission::Install => {}
+
+            // `dew.Library` (milestone 25 sprint 1). SYNCHRONOUS, NOT
+            // TRIGGER-AND-POLL LIKE `Discover`/`Install` ABOVE -- every
+            // operation here is a local file read or write (`installed.rs`)
+            // or a named-pipe round trip already fast enough for `dew
+            // uninstall` to make on every invocation
+            // (`coordinator::query_running`), never a network call worth a
+            // background thread.
+            #[cfg(windows)]
+            Permission::Library => {
+                let library = dew_subtable(lua, "Library")?;
+
+                library.set(
+                    "List",
+                    lua.create_function(|lua, ()| {
+                        let list = lua.create_table()?;
+                        for (i, entry) in crate::library::list().into_iter().enumerate() {
+                            let row = lua.create_table()?;
+                            row.set("id", entry.id)?;
+                            row.set("name", entry.name)?;
+                            row.set("description", entry.description)?;
+                            row.set("enabled", entry.enabled)?;
+                            list.set((i + 1) as i64, row)?;
+                        }
+                        Ok(list)
+                    })?,
+                )?;
+
+                library.set(
+                    "Launch",
+                    lua.create_function(|lua, id: String| {
+                        result_table(lua, crate::library::launch(&id))
+                    })?,
+                )?;
+
+                library.set(
+                    "Uninstall",
+                    lua.create_function(|lua, id: String| {
+                        result_table(lua, crate::library::uninstall(&id))
+                    })?,
+                )?;
+
+                library.set(
+                    "SetEnabled",
+                    lua.create_function(|lua, (id, enabled): (String, bool)| {
+                        result_table(lua, crate::library::set_enabled(&id, enabled))
+                    })?,
+                )?;
+            }
+            #[cfg(not(windows))]
+            Permission::Library => {}
 
             // Not yet reachable from Luau (deferred; sign-in stays Win32 in
             // `manage.rs` for this milestone). Granted like the two above --

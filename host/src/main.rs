@@ -28,6 +28,8 @@ mod dashboard;
 #[cfg(windows)]
 mod installed;
 #[cfg(windows)]
+mod library;
+#[cfg(windows)]
 mod manage;
 #[cfg(windows)]
 mod package;

@@ -65,6 +65,11 @@ pub enum Permission {
     Auth,
     Discover,
     Install,
+    // `dew.Library` (milestone 25): list, launch, uninstall and
+    // enable/disable an installed applet. Host-only for the same reason as
+    // the three above -- it reaches every applet on the machine, not just
+    // the one that asked.
+    Library,
 }
 
 impl Permission {
@@ -82,6 +87,7 @@ impl Permission {
             Permission::Auth => "auth",
             Permission::Discover => "discover",
             Permission::Install => "install",
+            Permission::Library => "library",
         }
     }
 
@@ -89,7 +95,9 @@ impl Permission {
     /// the host, not by anything a manifest says.
     pub fn capability(self) -> Capability {
         match self {
-            Permission::Auth | Permission::Discover | Permission::Install => Capability::Host,
+            Permission::Auth | Permission::Discover | Permission::Install | Permission::Library => {
+                Capability::Host
+            }
             Permission::Storage
             | Permission::Audio
             | Permission::Notifications

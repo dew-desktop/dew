@@ -594,6 +594,39 @@ pub mod tests {
         }
     }
 
+    /// An applet actually run through `installed::install`, into the real
+    /// per-user store `installed::list()`/`dew.Library` themselves read --
+    /// faking that store would test a different `List`/`Launch`/`Uninstall`
+    /// than the ones a mod actually calls. Removed on drop with
+    /// `installed::uninstall`, best-effort: a test that already uninstalled
+    /// it (that is what it was testing) leaves nothing for this to do.
+    #[cfg(windows)]
+    pub struct InstalledFixture {
+        pub id: String,
+        source: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl InstalledFixture {
+        pub fn new(name: &str, manifest: &str, entry: &str) -> InstalledFixture {
+            let source = std::env::temp_dir().join(format!("dew-library-test-{name}"));
+            let _ = std::fs::remove_dir_all(&source);
+            std::fs::create_dir_all(&source).expect("temp source dir");
+            std::fs::write(source.join("dew.toml"), manifest).expect("dew.toml");
+            std::fs::write(source.join("main.luau"), entry).expect("entry");
+            let id = crate::installed::install(&source, true).expect("install fixture applet");
+            InstalledFixture { id, source }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for InstalledFixture {
+        fn drop(&mut self) {
+            let _ = crate::installed::uninstall(&self.id);
+            let _ = std::fs::remove_dir_all(&self.source);
+        }
+    }
+
     /// A HOST-ONLY PERMISSION IS A LOAD REFUSAL, NOT A QUIET ABSENCE
     /// (ADR-017). `install` is a real, known permission -- unlike the
     /// unknown-word case `manifest.rs` already refuses -- and the applet
@@ -726,6 +759,105 @@ pub mod tests {
         );
         let error: String = installed.get("error").expect("error field");
         assert!(error.contains("not signed in"), "got: {error}");
+    }
+
+    /// `dew.Library`'S FOUR CALLS, AGAINST A REAL FIXTURE-INSTALLED APPLET --
+    /// matching the shape of `dew_marketplace_triggers_and_polls_without_blocking`
+    /// above, but synchronous throughout rather than trigger-and-poll: every
+    /// one of `List`/`Launch`/`Uninstall`/`SetEnabled` is a local file
+    /// operation or a named-pipe round trip, never a network call, so there
+    /// is nothing here to poll for.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_lists_launches_toggles_and_uninstalls_a_real_applet() {
+        // DRAINED FIRST, in case an earlier test on this worker thread queued
+        // a load that nothing has since consumed -- `take_load_requests`
+        // asserting a queue's CONTENTS only makes sense starting from empty.
+        let _ = crate::library::take_load_requests();
+
+        let target = InstalledFixture::new("target", "id = \"lib-target\"\n", PLAIN);
+
+        let manager = BundledFixture::new(
+            "library-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let library: mlua::Table = dew.get("Library").expect("Library installed");
+
+        let list_by_id = |library: &mlua::Table, id: &str| -> Option<mlua::Table> {
+            let list: mlua::Function = library.get("List").expect("List installed");
+            let rows: mlua::Table = list.call(()).expect("List call");
+            for pair in rows.sequence_values::<mlua::Table>() {
+                let row = pair.expect("row");
+                if row.get::<String>("id").expect("id field") == id {
+                    return Some(row);
+                }
+            }
+            None
+        };
+
+        let row = list_by_id(&library, &target.id).expect("List must include the fixture applet");
+        assert_eq!(row.get::<String>("name").expect("name"), target.id);
+        assert!(
+            row.get::<bool>("enabled").expect("enabled"),
+            "a freshly installed applet defaults to enabled"
+        );
+
+        // Launch: not running (no coordinator is listening in this test, so
+        // `query_running` reads as false, the same "nothing to orphan"
+        // answer `dew uninstall` itself relies on), so it queues the
+        // fixture's own directory for the coordinator to pick up.
+        let launch: mlua::Function = library.get("Launch").expect("Launch installed");
+        let result: mlua::Table = launch.call(target.id.clone()).expect("Launch call");
+        assert!(
+            result.get::<bool>("ok").expect("ok field"),
+            "launching an installed, non-running applet must succeed"
+        );
+        let queued = crate::library::take_load_requests();
+        assert_eq!(
+            queued.len(),
+            1,
+            "Launch must queue exactly the one directory the coordinator should load"
+        );
+        assert!(queued[0].ends_with(&target.id));
+
+        // Launching an id nothing installed is refused, naming the id.
+        let result: mlua::Table = launch
+            .call("no-such-applet".to_string())
+            .expect("Launch call");
+        assert!(!result.get::<bool>("ok").expect("ok field"));
+        let error: String = result.get("error").expect("error field");
+        assert!(error.contains("no-such-applet"), "got: {error}");
+
+        // SetEnabled(false), then List reflects it.
+        let set_enabled: mlua::Function = library.get("SetEnabled").expect("SetEnabled installed");
+        let result: mlua::Table = set_enabled
+            .call((target.id.clone(), false))
+            .expect("SetEnabled call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+        let row = list_by_id(&library, &target.id).expect("still installed, only disabled");
+        assert!(!row.get::<bool>("enabled").expect("enabled"));
+
+        // Uninstall removes it from both the Luau-visible list and disk.
+        let uninstall: mlua::Function = library.get("Uninstall").expect("Uninstall installed");
+        let result: mlua::Table = uninstall.call(target.id.clone()).expect("Uninstall call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+        assert!(
+            list_by_id(&library, &target.id).is_none(),
+            "an uninstalled applet must not appear in List any more"
+        );
+        assert!(
+            !crate::installed::list().iter().any(|e| e.id == target.id),
+            "Uninstall must remove the directory from disk, not just hide the row"
+        );
+
+        // Uninstalling it again is refused: it is no longer installed.
+        let result: mlua::Table = uninstall.call(target.id.clone()).expect("Uninstall call");
+        assert!(!result.get::<bool>("ok").expect("ok field"));
     }
 
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing
