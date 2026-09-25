@@ -1,0 +1,13 @@
+# Click Through
+#
+# A widget that is fully visible but never receives a click -- the pointer
+# passes through it to whatever is behind, the way a Rainmeter monitor skin
+# does not want to be in the way.
+
+id = "click-through"
+name = "Click Through"
+description = "Fully visible, but every click passes through to what's behind it"
+
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `desktop.Widget` on the
+# table.
+permissions = ["widget"]

@@ -72,7 +72,7 @@ const ID_APPLET_BASE: usize = 3000;
 /// UNCAPPED NO LONGER MEANS "DO NOT SLEEP AT ALL." It used to, and an idle
 /// widget spun a whole core doing nothing -- `Renderer::frame` returns false
 /// with nothing to paint, and an applet polling `desktop.Clock.OnFrame` (see
-/// examples/host/widget-behaviors) re-ran that poll again immediately, as
+/// examples/host/widget-behaviors/draggable) re-ran that poll again immediately, as
 /// fast as the CPU could manage. The frame loop's own `None` arm now calls
 /// `DwmFlush` instead of skipping the wait entirely: uncapped means "as fast
 /// as the desktop compositor can actually show a new frame," the same ceiling

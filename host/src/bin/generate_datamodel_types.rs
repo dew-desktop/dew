@@ -37,7 +37,7 @@
 //! so a script calling `instance:Clone()`, connecting `RunService.Heartbeat`,
 //! or calling `GetPropertyChangedSignal` on ANY instance now gets a real
 //! "Key not found" editor error it did not get before this file existed --
-//! confirmed directly against `examples/host/widget-behaviors` (3 new
+//! confirmed directly against `examples/host/widget-behaviors/draggable` (3 new
 //! errors: `Instance.Clone`, `RunService.Heartbeat`,
 //! `Instance.GetPropertyChangedSignal`) and `examples/aether/timetracker` /
 //! `examples/aether/calculator` (32 new errors each, same shape). This is an

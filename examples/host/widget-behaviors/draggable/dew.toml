@@ -1,0 +1,12 @@
+# Draggable
+#
+# The base behavior every other example in this folder builds on: click and
+# hold the widget's body to move it.
+
+id = "draggable"
+name = "Draggable"
+description = "Click and drag me anywhere"
+
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `desktop.Widget` on the
+# table.
+permissions = ["widget"]

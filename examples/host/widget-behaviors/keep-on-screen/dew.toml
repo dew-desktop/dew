@@ -1,0 +1,12 @@
+# Keep On Screen
+#
+# A draggable widget clamped to the display -- you can push it to an edge,
+# not past it.
+
+id = "keep-on-screen"
+name = "Keep On Screen"
+description = "Drag me to an edge -- I won't go fully off it"
+
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `desktop.Widget` on the
+# table.
+permissions = ["widget"]

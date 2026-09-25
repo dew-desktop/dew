@@ -1,0 +1,12 @@
+# Save Position
+#
+# A draggable widget that remembers where you left it and reopens there,
+# instead of back at its declared anchor.
+
+id = "save-position"
+name = "Save Position"
+description = "Drag me, relaunch, and I'll reopen where you left me"
+
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `desktop.Widget` on the
+# table.
+permissions = ["widget"]

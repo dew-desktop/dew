@@ -96,7 +96,7 @@ pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
             // `roblox_packages/`, `luau_packages/` and `.pesde/` are NOT
             // skipped here, even though the root `.gitignore` excludes them
             // from git: an applet that `require`s a real dependency (see
-            // examples/host/widget-behaviors) has it resolved into exactly
+            // examples/host/widget-behaviors/draggable) has it resolved into exactly
             // these directories by pesde, and nothing downstream of this
             // copy re-resolves them. Skipping them at install time was
             // stripping the one thing that made such an applet runnable.

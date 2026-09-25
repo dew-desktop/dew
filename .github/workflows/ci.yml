@@ -359,7 +359,12 @@ jobs:
           # dashboard applet (milestone 23), not an example, so it lives at
           # the repo root rather than under `examples/`. Same install, same
           # redirect check, just not the same glob depth.
-          for m in examples/*/*/pesde.toml dashboard/pesde.toml; do
+          #
+          # ONE LEVEL DEEPER ALSO COVERED: `examples/host/widget-behaviors/`
+          # is a container of several small applets (draggable, snap-to-edges,
+          # ...), not an applet itself, so its own examples sit one glob
+          # level below where `examples/*/*/pesde.toml` alone would find them.
+          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
@@ -571,7 +576,12 @@ jobs:
           # dashboard applet (milestone 23), not an example, so it lives at
           # the repo root rather than under `examples/`. Same install, same
           # redirect check, just not the same glob depth.
-          for m in examples/*/*/pesde.toml dashboard/pesde.toml; do
+          #
+          # ONE LEVEL DEEPER ALSO COVERED: `examples/host/widget-behaviors/`
+          # is a container of several small applets (draggable, snap-to-edges,
+          # ...), not an applet itself, so its own examples sit one glob
+          # level below where `examples/*/*/pesde.toml` alone would find them.
+          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
