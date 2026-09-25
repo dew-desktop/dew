@@ -1,7 +1,10 @@
 //! `wgpu` presentation for a Win32 window, composed through `DirectComposition`.
 //!
-//! Milestone 24: this replaces `blit`'s `SetDIBitsToDevice` path, the one GDI
-//! measured to cost 25-50ms per present regardless of resize.
+//! Milestone 24: this replaces `blit`'s `SetDIBitsToDevice` path (sprint 1,
+//! an ordinary window) and `present_layered`'s `UpdateLayeredWindow` path
+//! (sprint 2, a widget/overlay's per-pixel alpha) with the same mechanism --
+//! one `wgpu` swap chain per surface, composed as a `DirectComposition`
+//! visual's content, differing only in `transparent` below.
 //!
 //! ## Why `DirectComposition` for an ORDINARY window too, not only a layered one
 //!
@@ -27,11 +30,22 @@
 //! this crate's behalf because it has no notion of the window's message loop
 //! or its `WS_EX_NOREDIRECTIONBITMAP` style.
 //!
-//! NO RENDER PIPELINE, NO SHADER. `dew_raster` already produced a finished
-//! BGRA buffer; the only job here is getting it onto the screen, so the
-//! surface's current texture is configured with `COPY_DST` and written to
-//! directly with `Queue::write_texture`, the same shape of operation the GDI
-//! blit it replaces performed.
+//! ## The backdrop visual is an ORDINARY WINDOW'S fix, not a widget's
+//!
+//! A widget or overlay is `transparent: true` and gets no backdrop at all.
+//! The backdrop exists to paper over an ordinary window's resize-position
+//! race with a solid colour instead of the desktop showing through -- for a
+//! click-through widget, a solid backdrop would BE the bug, occupying and
+//! hit-testing exactly the silhouette the whole surface kind exists to not
+//! have. `CompositeAlphaMode::PreMultiplied` is what makes the swap chain
+//! itself transparent instead.
+//!
+//! NO RENDER PIPELINE, NO SHADER. `dew_raster` already produced a finished,
+//! premultiplied BGRA buffer; the only job here is getting it onto the
+//! screen, so the surface's current texture is configured with `COPY_DST`
+//! and written to directly with `Queue::write_texture`, the same shape of
+//! operation the GDI blit and `UpdateLayeredWindow` calls it replaces
+//! performed.
 
 use windows::core::Interface;
 use windows::Foundation::Numerics::Matrix3x2;
@@ -84,6 +98,7 @@ pub struct Presenter {
     queue: wgpu::Queue,
     surface: wgpu::Surface<'static>,
     format: wgpu::TextureFormat,
+    alpha_mode: wgpu::CompositeAlphaMode,
     width: u32,
     height: u32,
     // KEPT ALIVE FOR THE VISUAL TREE'S LIFETIME, NEVER READ AGAIN. Dropping
@@ -94,20 +109,23 @@ pub struct Presenter {
     _dcomp_target: IDCompositionTarget,
     _root_visual: IDCompositionVisual,
     _content_visual: IDCompositionVisual,
-    // BELOW `_content_visual` IN THE TREE, NEVER RESIZED. See its own setup
-    // below for why a solid 1x1 surface stretched by a transform, rather
-    // than something sized to the window, is what makes it immune to the
-    // exact race it exists to paper over.
-    _backdrop_visual: IDCompositionVisual,
+    // `None` FOR A TRANSPARENT SURFACE -- see this module's own doc for why
+    // a widget/overlay gets no backdrop at all rather than one it would
+    // then have to punch a transparent hole through. BELOW `_content_visual`
+    // in the tree, never resized, for the ordinary window that does have
+    // one: a solid 1x1 surface stretched by a transform, rather than
+    // something sized to the window, is what makes it immune to the exact
+    // race it exists to paper over.
+    _backdrop_visual: Option<IDCompositionVisual>,
     // RE-PRESENTED EVERY FRAME ALONGSIDE `surface`, NOT JUST ONCE AT
-    // CONSTRUCTION. A composition swap chain that stops presenting while
-    // ANOTHER on the same window keeps advancing at the display's refresh
-    // rate is not a configuration wgpu or DirectComposition document
-    // support for -- measured, not assumed, presenting it once and never
-    // again is what preceded seconds-long stalls in this window's own
-    // message pump, on messages that never touch either swap chain
-    // directly (idle repaints, plain window moves).
-    backdrop_surface: wgpu::Surface<'static>,
+    // CONSTRUCTION, WHEN PRESENT AT ALL. A composition swap chain that stops
+    // presenting while ANOTHER on the same window keeps advancing at the
+    // display's refresh rate is not a configuration wgpu or DirectComposition
+    // document support for -- measured, not assumed, presenting it once and
+    // never again is what preceded seconds-long stalls in this window's own
+    // message pump, on messages that never touch either swap chain directly
+    // (idle repaints, plain window moves).
+    backdrop_surface: Option<wgpu::Surface<'static>>,
 }
 
 impl Presenter {
@@ -115,7 +133,13 @@ impl Presenter {
     /// without it, Windows still allocates the ordinary GDI redirection
     /// surface behind the composition visual, which is the exact thing this
     /// module exists to bypass.
-    pub fn new(hwnd: HWND, width: u32, height: u32) -> Result<Presenter, String> {
+    ///
+    /// `transparent` is what `Surface::Widget`/`Surface::Overlay` set and an
+    /// ordinary `Surface::Window` does not: it skips the backdrop visual
+    /// (see this module's own doc for why one would be a bug there, not a
+    /// safety net) and configures the swap chain for premultiplied alpha
+    /// instead of opaque.
+    pub fn new(hwnd: HWND, width: u32, height: u32, transparent: bool) -> Result<Presenter, String> {
         let (dcomp_device, dcomp_target, root_visual, content_visual, backdrop_visual) = unsafe {
             // `None`: DirectComposition is allowed to own its own rendering
             // device rather than share `wgpu`'s. The two devices never touch
@@ -128,15 +152,16 @@ impl Presenter {
                 .CreateTargetForHwnd(hwnd, true)
                 .map_err(|e| format!("binding DirectComposition to this window: {e}"))?;
 
-            // A ROOT WITH TWO CHILDREN, NOT ONE VISUAL DOING BOTH JOBS.
+            // A ROOT WITH UP TO TWO CHILDREN, NOT ONE VISUAL DOING BOTH JOBS.
             // `content_visual` is resized every live-resize message and can
             // therefore lag the window's own on-screen bounds by one message
             // during a top or left edge drag, when the window's ORIGIN moves
             // and not only its far edge -- see this module's own resize
-            // notes. `backdrop_visual` sits behind it and is never resized at
-            // all, so it has nothing to lag: whatever gap `content_visual`
-            // exposes for a moment shows this solid colour instead of the
-            // desktop behind the window.
+            // notes. `backdrop_visual`, when `!transparent` gives it one,
+            // sits behind it and is never resized at all, so it has nothing
+            // to lag: whatever gap `content_visual` exposes for a moment
+            // shows this solid colour instead of the desktop behind the
+            // window.
             let root_visual = dcomp_device
                 .CreateVisual()
                 .map_err(|e| format!("creating this window's root visual: {e}"))?;
@@ -144,19 +169,29 @@ impl Presenter {
                 .SetRoot(&root_visual)
                 .map_err(|e| format!("setting this window's composition root: {e}"))?;
 
-            let backdrop_visual = dcomp_device
-                .CreateVisual()
-                .map_err(|e| format!("creating the backdrop visual: {e}"))?;
-            root_visual
-                .AddVisual(&backdrop_visual, false, None)
-                .map_err(|e| format!("adding the backdrop visual: {e}"))?;
+            let backdrop_visual = if transparent {
+                None
+            } else {
+                let backdrop_visual = dcomp_device
+                    .CreateVisual()
+                    .map_err(|e| format!("creating the backdrop visual: {e}"))?;
+                root_visual
+                    .AddVisual(&backdrop_visual, false, None)
+                    .map_err(|e| format!("adding the backdrop visual: {e}"))?;
+                Some(backdrop_visual)
+            };
 
             let content_visual = dcomp_device
                 .CreateVisual()
                 .map_err(|e| format!("creating the content visual: {e}"))?;
-            root_visual
-                .AddVisual(&content_visual, true, &backdrop_visual)
-                .map_err(|e| format!("adding the content visual above the backdrop: {e}"))?;
+            match &backdrop_visual {
+                Some(backdrop_visual) => root_visual
+                    .AddVisual(&content_visual, true, backdrop_visual)
+                    .map_err(|e| format!("adding the content visual above the backdrop: {e}"))?,
+                None => root_visual
+                    .AddVisual(&content_visual, true, None)
+                    .map_err(|e| format!("adding the content visual: {e}"))?,
+            }
 
             (
                 dcomp_device,
@@ -228,7 +263,33 @@ impl Presenter {
             .find(|f| *f == wgpu::TextureFormat::Bgra8Unorm)
             .unwrap_or(caps.formats[0]);
 
+        // MEASURED, NOT ASSUMED: alpha-mode support genuinely varies by
+        // backend (gfx-rs/wgpu#3486, #5661), which is why milestone 24's own
+        // vision overview keeps `wgpu` off the layered-surface case
+        // everywhere except here, where `DirectComposition`'s own DX12
+        // backend is what is actually being asked, not `wgpu`'s cross-platform
+        // promise. `Opaque` is always in `caps.alpha_modes` per wgpu's own
+        // guarantee; `PreMultiplied` is checked rather than requested blind.
+        let alpha_mode = if transparent {
+            if caps
+                .alpha_modes
+                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+            {
+                wgpu::CompositeAlphaMode::PreMultiplied
+            } else {
+                return Err(format!(
+                    "this adapter's composition surface does not support premultiplied \
+                     alpha, only {:?}; a widget or overlay cannot present its transparency \
+                     without it",
+                    caps.alpha_modes
+                ));
+            }
+        } else {
+            wgpu::CompositeAlphaMode::Opaque
+        };
+
         // THE BACKDROP: A 1x1 SOLID SURFACE, STRETCHED, NEVER RESIZED AGAIN.
+        // `None` FOR A TRANSPARENT SURFACE, per this module's own doc.
         // Sizing it to the window the way `content_visual` is sized would
         // just give it the same resize race to lose -- the point is that it
         // has no size to be wrong about. `SetTransform2` scales it far
@@ -237,48 +298,56 @@ impl Presenter {
         // of the window's own compositing, which is exactly the step that
         // races `content_visual` and exactly the step this visual never
         // needs to keep up with.
-        let backdrop_surface = unsafe {
-            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(
-                Interface::as_raw(&backdrop_visual),
-            ))
-        }
-        .map_err(|e| format!("creating the backdrop's wgpu surface: {e:?}"))?;
-        backdrop_surface.configure(
-            &device,
-            &wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
-                format,
-                width: 1,
-                height: 1,
-                present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-                view_formats: vec![],
-                desired_maximum_frame_latency: 2,
-            },
-        );
-        present_solid(&queue, &backdrop_surface);
-        // FAR LARGER THAN ANY REAL WINDOW, DELIBERATELY. The visual's true
-        // extent is whatever the window's own bounds clip it to -- this
-        // number only has to be big enough never to be the limiting edge.
-        const BACKDROP_SCALE: f32 = 1.0e5;
-        unsafe {
-            backdrop_visual
-                .SetTransform2(&Matrix3x2 {
-                    M11: BACKDROP_SCALE,
-                    M12: 0.0,
-                    M21: 0.0,
-                    M22: BACKDROP_SCALE,
-                    M31: 0.0,
-                    M32: 0.0,
-                })
-                .map_err(|e| format!("scaling the backdrop visual: {e}"))?;
-        }
+        let backdrop_surface = match &backdrop_visual {
+            Some(backdrop_visual) => {
+                let backdrop_surface = unsafe {
+                    instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(
+                        Interface::as_raw(backdrop_visual),
+                    ))
+                }
+                .map_err(|e| format!("creating the backdrop's wgpu surface: {e:?}"))?;
+                backdrop_surface.configure(
+                    &device,
+                    &wgpu::SurfaceConfiguration {
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+                        format,
+                        width: 1,
+                        height: 1,
+                        present_mode: wgpu::PresentMode::Fifo,
+                        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                        view_formats: vec![],
+                        desired_maximum_frame_latency: 2,
+                    },
+                );
+                present_solid(&queue, &backdrop_surface);
+                // FAR LARGER THAN ANY REAL WINDOW, DELIBERATELY. The visual's
+                // true extent is whatever the window's own bounds clip it
+                // to -- this number only has to be big enough never to be
+                // the limiting edge.
+                const BACKDROP_SCALE: f32 = 1.0e5;
+                unsafe {
+                    backdrop_visual
+                        .SetTransform2(&Matrix3x2 {
+                            M11: BACKDROP_SCALE,
+                            M12: 0.0,
+                            M21: 0.0,
+                            M22: BACKDROP_SCALE,
+                            M31: 0.0,
+                            M32: 0.0,
+                        })
+                        .map_err(|e| format!("scaling the backdrop visual: {e}"))?;
+                }
+                Some(backdrop_surface)
+            }
+            None => None,
+        };
 
         let mut presenter = Presenter {
             device,
             queue,
             surface,
             format,
+            alpha_mode,
             width: 0,
             height: 0,
             _dcomp_device: dcomp_device,
@@ -316,7 +385,7 @@ impl Presenter {
                 width,
                 height,
                 present_mode: wgpu::PresentMode::Fifo,
-                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                alpha_mode: self.alpha_mode,
                 view_formats: vec![],
                 desired_maximum_frame_latency: 2,
             },
@@ -372,6 +441,8 @@ impl Presenter {
         self.queue.submit(std::iter::empty());
         frame.present();
 
-        present_solid(&self.queue, &self.backdrop_surface);
+        if let Some(backdrop_surface) = &self.backdrop_surface {
+            present_solid(&self.queue, backdrop_surface);
+        }
     }
 }

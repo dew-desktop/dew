@@ -354,15 +354,13 @@ pub struct Window {
     hwnd: HWND,
     width: u32,
     height: u32,
-    layered: bool,
-    /// The `wgpu` swap chain an ordinary window presents through.
-    ///
-    /// `None` for a layered window, which never presents through a swap
-    /// chain at all -- `present_layered` composites through
-    /// `UpdateLayeredWindow` against the screen's own DC instead. See
-    /// `crate::gpu`'s module doc for why an ordinary window's path and a
-    /// layered one's are not the same mechanism.
-    presenter: Option<Presenter>,
+    /// The `wgpu` swap chain every surface kind presents through now --
+    /// milestone 24 sprint 2 moved `Widget`/`Overlay` off `present_layered`'s
+    /// `UpdateLayeredWindow` path onto the same `DirectComposition`
+    /// mechanism an ordinary `Window` already used, adding per-pixel alpha
+    /// (`Presenter`'s `transparent` flag) on top rather than a second
+    /// mechanism beside it.
+    presenter: Presenter,
 }
 
 impl Window {
@@ -407,10 +405,14 @@ impl Window {
 
             // A WIDGET IS BORDERLESS, TOPMOST, AND OUT OF THE TASKBAR.
             //
-            // `WS_EX_TOOLWINDOW` is the one that keeps it out of Alt-Tab and the
-            // taskbar; without it a desktop clock is a window you can tab to,
-            // which is not what a widget is. `WS_EX_LAYERED` is what makes
-            // `UpdateLayeredWindow` available, and therefore per-pixel alpha.
+            // `WS_EX_TOOLWINDOW` is the one that keeps it out of Alt-Tab and
+            // the taskbar; without it a desktop clock is a window you can tab
+            // to, which is not what a widget is. `WS_EX_NOREDIRECTIONBITMAP`,
+            // NOT `WS_EX_LAYERED`: per-pixel alpha comes from `Presenter`'s
+            // `DirectComposition` visual now (`CompositeAlphaMode::PreMultiplied`),
+            // not `UpdateLayeredWindow`, so this needs the same style an
+            // ordinary `Window` already uses to opt out of the normal
+            // redirection surface, not the GDI-layered-window one.
             let (style, ex_style, x, y, z_order) = match surface {
                 // `WS_EX_NOREDIRECTIONBITMAP`: an ordinary window presents
                 // through `DirectComposition` (`crate::gpu`), not a blit
@@ -432,7 +434,7 @@ impl Window {
                     click_through,
                     z_order,
                 } => {
-                    let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                    let mut ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW;
                     // `WS_EX_TOPMOST` AT CREATION MATCHES THE COMMON CASE, and
                     // `SetWindowPos` below is what actually enforces all three
                     // tiers — this extended style alone has no way to express
@@ -453,7 +455,7 @@ impl Window {
                     z_order,
                     click_through,
                 } => {
-                    let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                    let mut ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW;
                     if *z_order == ZOrder::Topmost {
                         ex |= WS_EX_TOPMOST;
                     }
@@ -511,11 +513,14 @@ impl Window {
                 );
             }
 
-            let presenter = if layered {
-                None
-            } else {
-                Some(Presenter::new(hwnd, width, height)?)
-            };
+            // `layered` IS `Presenter`'s `transparent` FLAG, not a branch on
+            // whether one exists at all -- every surface kind presents
+            // through the same `DirectComposition` mechanism now, a widget
+            // just needs the extra per-pixel alpha and skips the opaque
+            // backdrop visual an ordinary window uses to paper over its own
+            // resize race, since a backdrop would be exactly the shape a
+            // click-through widget's silhouette must not have.
+            let presenter = Presenter::new(hwnd, width, height, layered)?;
 
             // SHOWN ONLY NOW, AFTER THE PRESENTER EXISTS AND HAS COMMITTED
             // ITS FIRST FRAME. `Presenter::new` creates a `wgpu` adapter and
@@ -533,7 +538,6 @@ impl Window {
                 hwnd,
                 width,
                 height,
-                layered,
                 presenter,
             })
         }
@@ -578,27 +582,23 @@ impl Window {
     pub fn resized(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        if let Some(presenter) = self.presenter.as_mut() {
-            presenter.configure(width, height);
-        }
+        self.presenter.configure(width, height);
     }
 
-    /// Put a BGRA buffer on screen, whichever kind of surface this is.
-    ///
-    /// A widget takes the layered path, where the buffer's ALPHA becomes the
-    /// window's shape; an ordinary window presents through its `wgpu` swap
-    /// chain, where it is ignored. The caller does not choose — it painted a
-    /// frame, and how that reaches the screen is a property of the window it
-    /// asked for.
+    /// Put a BGRA buffer on screen. A widget's alpha becomes the window's
+    /// shape; an ordinary window's is ignored -- both through the same
+    /// `Presenter`, which was told at construction which one this is.
     pub fn present(&mut self, bgra: &[u8], width: u32, height: u32) {
-        if self.layered {
-            self.present_layered(bgra, width, height);
-        } else if let Some(presenter) = self.presenter.as_mut() {
-            presenter.present(bgra, width, height);
-        }
+        self.presenter.present(bgra, width, height);
     }
 
     /// Composite a premultiplied BGRA buffer as the window itself.
+    ///
+    /// UNUSED SINCE MILESTONE 24 SPRINT 2, KEPT ON PURPOSE. `Window::present`
+    /// no longer calls this -- every surface presents through `Presenter`
+    /// now -- but the milestone's own plan says not to delete the GDI path
+    /// until both replacements are proven, so sprint 3 removes this rather
+    /// than this commit.
     ///
     /// `UpdateLayeredWindow` takes the bitmap AND the window's size and position
     /// in one call — the window has no client area being painted into, it simply
@@ -610,6 +610,7 @@ impl Window {
     /// PREMULTIPLIED is required, not preferred: `AC_SRC_ALPHA` says the colour
     /// channels are already scaled by alpha. `dew_raster` produces exactly
     /// that, so nothing converts on the way.
+    #[allow(dead_code)]
     fn present_layered(&self, bgra: &[u8], width: u32, height: u32) {
         if bgra.len() < (width * height * 4) as usize {
             return;
