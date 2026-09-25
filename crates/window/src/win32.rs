@@ -488,13 +488,12 @@ impl Window {
             )
             .map_err(|e| e.to_string())?;
 
-            let _ = ShowWindow(hwnd, SW_SHOW);
-
             // THE EXTENDED STYLE ALONE CANNOT PLACE A WINDOW AT THE BOTTOM of
             // the z-order — `WS_EX_TOPMOST` only ever says "above everything
             // else". `SetWindowPos`'s `hwndInsertAfter` is the one mechanism
             // that reaches all three tiers, so it runs for every widget and
-            // overlay rather than only the topmost ones.
+            // overlay rather than only the topmost ones. `SetWindowPos` works
+            // on a hidden window, so this does not need `ShowWindow` first.
             if let Some(z_order) = z_order {
                 let insert_after = match z_order {
                     ZOrder::Bottom => HWND_BOTTOM,
@@ -517,6 +516,18 @@ impl Window {
             } else {
                 Some(Presenter::new(hwnd, width, height)?)
             };
+
+            // SHOWN ONLY NOW, AFTER THE PRESENTER EXISTS AND HAS COMMITTED
+            // ITS FIRST FRAME. `Presenter::new` creates a `wgpu` adapter and
+            // device and sets up `DirectComposition`'s own device, target
+            // and visual tree -- real, measured, one-time setup cost. A
+            // window shown before any of that finishes has no composition
+            // content at all yet, `WS_EX_NOREDIRECTIONBITMAP` having opted
+            // it out of the ordinary redirection surface that would
+            // otherwise paper over the gap -- which is what showed up as a
+            // window that appears see-through for however long setup took,
+            // every time, on every open.
+            let _ = ShowWindow(hwnd, SW_SHOW);
 
             Ok(Window {
                 hwnd,

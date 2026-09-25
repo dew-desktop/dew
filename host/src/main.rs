@@ -1666,7 +1666,10 @@ fn run_applet(
     // silently applied to the wrong tree is not a failure that announces
     // itself.
     let mut pump = Pump::new();
+    let mut iter_end = Instant::now();
     while let Some(events) = pump.poll() {
+        let t_poll = iter_end.elapsed();
+        let t_dispatch_start = Instant::now();
         for (from, event) in events {
             if from != window.borrow().id() {
                 continue;
@@ -1791,6 +1794,7 @@ fn run_applet(
                 Event::Char(_) => {}
             }
         }
+        let t_dispatch = t_dispatch_start.elapsed();
 
         let dt = last.elapsed().as_secs_f32();
         last = Instant::now();
@@ -1843,6 +1847,7 @@ fn run_applet(
             return Ok(());
         }
 
+        let t_pace_start = Instant::now();
         match tray::frame_budget() {
             Some(target) => {
                 let elapsed = last.elapsed();
@@ -1863,6 +1868,26 @@ fn run_applet(
                 let _ = unsafe { DwmFlush() };
             }
         }
+        let t_pace = t_pace_start.elapsed();
+
+        // A CANARY, KEPT RATHER THAN THROWN AWAY AFTER DIAGNOSIS. This is
+        // what actually found the message-pump stall `solve`/`raster+present`
+        // alone could not explain (both stayed under 30ms even on the frame
+        // that was visibly slow) -- `crates/window`'s composition swap
+        // chains going quiet for a while and stalling `pump.poll()` itself,
+        // fixed by presenting the backdrop every frame instead of once. It
+        // costs a handful of comparisons per iteration and stays silent
+        // unless something takes this long again, so it stays on rather
+        // than being removed the moment this particular cause was found.
+        if stats {
+            let total = t_poll + t_dispatch + t_frame + t_raster + t_pace;
+            if total > Duration::from_millis(50) {
+                println!(
+                    "[dew] SLOW ITERATION {total:?} | poll {t_poll:?} | dispatch {t_dispatch:?} | frame {t_frame:?} | present {t_raster:?} | pace {t_pace:?}"
+                );
+            }
+        }
+        iter_end = Instant::now();
     }
 
     Ok(())

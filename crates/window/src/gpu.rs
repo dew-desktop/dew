@@ -44,6 +44,39 @@ use windows::Win32::Graphics::DirectComposition::{
 /// compositor during a resize race, not a colour Dew's design owns.
 const BACKDROP_BGRA: [u8; 4] = [32, 32, 32, 255];
 
+/// Write the one solid pixel into `surface`'s current texture and present
+/// it. Called every frame, not just once -- see `Presenter::backdrop_surface`'s
+/// own doc for why a swap chain that stops presenting is the actual problem
+/// this exists to avoid, not a detail cheap enough to skip.
+fn present_solid(queue: &wgpu::Queue, surface: &wgpu::Surface<'_>) {
+    let frame = match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(frame)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+        _ => return,
+    };
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &frame.texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &BACKDROP_BGRA,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+    );
+    queue.submit(std::iter::empty());
+    frame.present();
+}
+
 /// Presents a BGRA buffer to a window through a `wgpu` swap chain composed
 /// as a `DirectComposition` visual's content.
 pub struct Presenter {
@@ -61,12 +94,20 @@ pub struct Presenter {
     _dcomp_target: IDCompositionTarget,
     _root_visual: IDCompositionVisual,
     _content_visual: IDCompositionVisual,
-    // BELOW `_content_visual` IN THE TREE, NEVER RESIZED OR REPAINTED AFTER
-    // CONSTRUCTION. See its own setup below for why a solid 1x1 surface
-    // stretched by a transform, rather than something sized to the window,
-    // is what makes it immune to the exact race it exists to paper over.
+    // BELOW `_content_visual` IN THE TREE, NEVER RESIZED. See its own setup
+    // below for why a solid 1x1 surface stretched by a transform, rather
+    // than something sized to the window, is what makes it immune to the
+    // exact race it exists to paper over.
     _backdrop_visual: IDCompositionVisual,
-    _backdrop_surface: wgpu::Surface<'static>,
+    // RE-PRESENTED EVERY FRAME ALONGSIDE `surface`, NOT JUST ONCE AT
+    // CONSTRUCTION. A composition swap chain that stops presenting while
+    // ANOTHER on the same window keeps advancing at the display's refresh
+    // rate is not a configuration wgpu or DirectComposition document
+    // support for -- measured, not assumed, presenting it once and never
+    // again is what preceded seconds-long stalls in this window's own
+    // message pump, on messages that never touch either swap chain
+    // directly (idle repaints, plain window moves).
+    backdrop_surface: wgpu::Surface<'static>,
 }
 
 impl Presenter {
@@ -215,33 +256,7 @@ impl Presenter {
                 desired_maximum_frame_latency: 2,
             },
         );
-        match backdrop_surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(frame)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
-                queue.write_texture(
-                    wgpu::TexelCopyTextureInfo {
-                        texture: &frame.texture,
-                        mip_level: 0,
-                        origin: wgpu::Origin3d::ZERO,
-                        aspect: wgpu::TextureAspect::All,
-                    },
-                    &BACKDROP_BGRA,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(4),
-                        rows_per_image: Some(1),
-                    },
-                    wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                );
-                queue.submit(std::iter::empty());
-                frame.present();
-            }
-            _ => {}
-        }
+        present_solid(&queue, &backdrop_surface);
         // FAR LARGER THAN ANY REAL WINDOW, DELIBERATELY. The visual's true
         // extent is whatever the window's own bounds clip it to -- this
         // number only has to be big enough never to be the limiting edge.
@@ -271,7 +286,7 @@ impl Presenter {
             _root_visual: root_visual,
             _content_visual: content_visual,
             _backdrop_visual: backdrop_visual,
-            _backdrop_surface: backdrop_surface,
+            backdrop_surface,
         };
         presenter.configure(width, height);
 
@@ -356,5 +371,7 @@ impl Presenter {
 
         self.queue.submit(std::iter::empty());
         frame.present();
+
+        present_solid(&self.queue, &self.backdrop_surface);
     }
 }
