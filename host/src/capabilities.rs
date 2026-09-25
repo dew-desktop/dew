@@ -69,12 +69,86 @@ fn dew_subtable(lua: &Lua, name: &str) -> LuaResult<LuaTable> {
 
 /// The `{ ok = true }` / `{ ok = false, error = "..." }` shape every
 /// fallible synchronous call in `dew.Library` returns, matching what
-/// `Discovered`/`Installed` already hand back for the same two outcomes.
+/// `Discover`/`Install`'s own callbacks hand back for the same two outcomes.
 #[cfg(windows)]
 fn result_table(lua: &Lua, result: Result<(), String>) -> LuaResult<LuaTable> {
     let table = lua.create_table()?;
     match result {
         Ok(()) => table.set("ok", true)?,
+        Err(message) => {
+            table.set("ok", false)?;
+            table.set("error", message)?;
+        }
+    }
+    Ok(table)
+}
+
+/// Register `checker` as a `desktop.Clock.OnFrame` listener, the same list
+/// an ordinary Luau `desktop.Clock.OnFrame(...)` call joins.
+///
+/// THIS IS THE WHOLE OF HOW A TRIGGER-WITH-CALLBACK OPERATION EVER CALLS
+/// BACK INTO LUAU (ADR pending, milestone 26). `Discover`/`Install`'s own
+/// background thread cannot call a `LuaFunction` directly -- Luau's VM is
+/// single-threaded, and `mlua`'s handles are only ever safe to call from the
+/// thread that owns the VM. What the background thread CAN do is write its
+/// answer into a `Mutex<Option<_>>`; `checker` reads that, once a frame, from
+/// exactly the same per-frame point `desktop.Clock`'s own listeners already
+/// run from -- `services::tick`, called on the applet's own thread. Nothing
+/// here is a new pump; it reuses the one `desktop.Clock.OnFrame` already
+/// proved.
+///
+/// RELIES ON `services::install_with_pointer` HAVING ALREADY PUT `Clock` ON
+/// `desktop`, which `applets::load` calls before `capabilities::build` --
+/// confirmed by reading `applets.rs`, not assumed.
+///
+/// THE RETURNED UNSUBSCRIBE FUNCTION IS DISCARDED ON PURPOSE. This listener
+/// lives exactly as long as the applet's own VM does, the same as the
+/// `Discover`/`Install` capability itself -- there is no event that should
+/// ever turn it off early.
+#[cfg(windows)]
+fn register_frame_checker(desktop: &LuaTable, checker: LuaFunction) -> LuaResult<()> {
+    let clock: LuaTable = desktop.get("Clock")?;
+    let on_frame: LuaFunction = clock.get("OnFrame")?;
+    let _stop: LuaFunction = on_frame.call(checker)?;
+    Ok(())
+}
+
+/// The `{ ok = true, packages = [...] }` / `{ ok = false, error = "..." }`
+/// shape `Discover`'s callback receives.
+#[cfg(windows)]
+fn discover_result_table(lua: &Lua, outcome: DiscoverResult) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+    match outcome {
+        Ok(packages) => {
+            table.set("ok", true)?;
+            let list = lua.create_table()?;
+            for (i, package) in packages.iter().enumerate() {
+                let row = lua.create_table()?;
+                row.set("ownerUserId", package.owner_user_id.as_str())?;
+                row.set("appletId", package.applet_id.as_str())?;
+                row.set("uploadedAt", package.uploaded_at.as_str())?;
+                list.set((i + 1) as i64, row)?;
+            }
+            table.set("packages", list)?;
+        }
+        Err(message) => {
+            table.set("ok", false)?;
+            table.set("error", message)?;
+        }
+    }
+    Ok(table)
+}
+
+/// The `{ ok = true, id = "..." }` / `{ ok = false, error = "..." }` shape
+/// `Install`'s callback receives.
+#[cfg(windows)]
+fn install_result_table(lua: &Lua, outcome: Result<String, String>) -> LuaResult<LuaTable> {
+    let table = lua.create_table()?;
+    match outcome {
+        Ok(id) => {
+            table.set("ok", true)?;
+            table.set("id", id)?;
+        }
         Err(message) => {
             table.set("ok", false)?;
             table.set("error", message)?;
@@ -247,42 +321,43 @@ pub fn build(
             // under `dew.Marketplace` (ADR-018) rather than as members of
             // `desktop` -- Dew's own platform layer, not the open vocabulary.
             //
-            // TRIGGER AND POLL, THE SAME SHAPE `manage.rs` ALREADY PROVED,
-            // moved to Luau instead of a `Mutex<Option<_>>` a `WM_TIMER`
-            // drains. `Discover`/`Install` start a background thread and
-            // return immediately; `Discovered`/`Installed` read whatever has
-            // landed so far, or `nil` if nothing has. Neither ever blocks the
-            // calling applet's own frame, and a second trigger while one is
-            // already in flight is a no-op rather than a second thread.
-            //
-            // A PEEKED READ, NOT A DRAINED ONE -- unlike `manage.rs`'s own
-            // `SIGNIN_RESULT`/`DISCOVER_RESULT`. Those exist beside an
-            // imperative Win32 message loop that mutates a widget once and
-            // moves on; a reactive Luau applet wants a stable value it can
-            // read every frame without racing whichever frame happened to
-            // catch the one moment it was drained.
+            // TRIGGER WITH CALLBACK (milestone 26; was trigger-and-poll --
+            // `Discover()` plus a separately-polled `Discovered()` -- through
+            // milestone 25). `Discover`/`Install` start a background thread
+            // and return immediately, same as before; the difference is what
+            // happens when that thread's answer lands. It used to sit in a
+            // `Mutex<Option<_>>` for the caller to remember to poll every
+            // frame, peeked rather than drained so two reads of an unchanged
+            // answer were never mistaken for a new one -- `dashboard.luau`'s
+            // own `awaitingDiscover`/`awaitingInstall` booleans existed
+            // purely to manage that. Now the caller hands over a callback
+            // and the host calls it itself, exactly once, the instant the
+            // answer lands -- see `register_frame_checker`'s own doc comment
+            // for how that call reaches Luau without a background thread
+            // ever touching the VM directly. A second trigger while one is
+            // already in flight does not spawn a second thread; it replaces
+            // the pending callback, the same "last call wins" precedent a
+            // surface request already sets above -- the caller's most recent
+            // click is the one that gets the answer, not its first one.
             #[cfg(windows)]
             Permission::Discover => {
                 let marketplace = dew_subtable(lua, "Marketplace")?;
 
                 let in_flight = Arc::new(AtomicBool::new(false));
                 let result: Arc<Mutex<Option<DiscoverResult>>> = Arc::new(Mutex::new(None));
+                let pending: Arc<Mutex<Option<LuaFunction>>> = Arc::new(Mutex::new(None));
 
-                let discover_result = Arc::clone(&result);
+                let trigger_flight = Arc::clone(&in_flight);
+                let trigger_result = Arc::clone(&result);
+                let trigger_pending = Arc::clone(&pending);
                 marketplace.set(
                     "Discover",
-                    lua.create_function(move |_, ()| {
-                        if !in_flight.swap(true, Ordering::SeqCst) {
-                            // CLEARED HERE, SYNCHRONOUSLY, not left for the
-                            // spawned thread to overwrite whenever it gets
-                            // around to it. A second `Discover()` call while
-                            // a stale answer still sits in `discover_result`
-                            // must not hand that stale answer back as if it
-                            // were the new request's -- `Discovered()` goes
-                            // back to `nil` the instant a fresh fetch starts.
-                            *discover_result.lock().expect("discover result") = None;
-                            let flight = Arc::clone(&in_flight);
-                            let slot = Arc::clone(&discover_result);
+                    lua.create_function(move |_, callback: LuaFunction| {
+                        *trigger_pending.lock().expect("discover callback") = Some(callback);
+                        if !trigger_flight.swap(true, Ordering::SeqCst) {
+                            *trigger_result.lock().expect("discover result") = None;
+                            let flight = Arc::clone(&trigger_flight);
+                            let slot = Arc::clone(&trigger_result);
                             std::thread::spawn(move || {
                                 let outcome = crate::platform::discover();
                                 *slot.lock().expect("discover result") = Some(outcome);
@@ -293,34 +368,21 @@ pub fn build(
                     })?,
                 )?;
 
-                marketplace.set(
-                    "Discovered",
-                    lua.create_function(move |lua, ()| {
-                        match &*result.lock().expect("discover result") {
-                            None => Ok(LuaValue::Nil),
-                            Some(Ok(packages)) => {
-                                let table = lua.create_table()?;
-                                table.set("ok", true)?;
-                                let list = lua.create_table()?;
-                                for (i, package) in packages.iter().enumerate() {
-                                    let row = lua.create_table()?;
-                                    row.set("ownerUserId", package.owner_user_id.as_str())?;
-                                    row.set("appletId", package.applet_id.as_str())?;
-                                    row.set("uploadedAt", package.uploaded_at.as_str())?;
-                                    list.set((i + 1) as i64, row)?;
-                                }
-                                table.set("packages", list)?;
-                                Ok(LuaValue::Table(table))
-                            }
-                            Some(Err(message)) => {
-                                let table = lua.create_table()?;
-                                table.set("ok", false)?;
-                                table.set("error", message.as_str())?;
-                                Ok(LuaValue::Table(table))
-                            }
-                        }
-                    })?,
-                )?;
+                let checker_result = Arc::clone(&result);
+                let checker_pending = Arc::clone(&pending);
+                let checker = lua.create_function(move |lua, _dt: f64| {
+                    let Some(outcome) = checker_result.lock().expect("discover result").take()
+                    else {
+                        return Ok(());
+                    };
+                    let Some(callback) = checker_pending.lock().expect("discover callback").take()
+                    else {
+                        return Ok(());
+                    };
+                    let table = discover_result_table(lua, outcome)?;
+                    callback.call::<()>(table)
+                })?;
+                register_frame_checker(&desktop, checker)?;
             }
             #[cfg(not(windows))]
             Permission::Discover => {}
@@ -331,57 +393,55 @@ pub fn build(
 
                 let in_flight = Arc::new(AtomicBool::new(false));
                 let result: Arc<Mutex<Option<Result<String, String>>>> = Arc::new(Mutex::new(None));
+                let pending: Arc<Mutex<Option<LuaFunction>>> = Arc::new(Mutex::new(None));
 
-                let install_result = Arc::clone(&result);
+                let trigger_flight = Arc::clone(&in_flight);
+                let trigger_result = Arc::clone(&result);
+                let trigger_pending = Arc::clone(&pending);
                 marketplace.set(
                     "Install",
-                    lua.create_function(move |_, (owner_user_id, applet_id): (String, String)| {
-                        if !in_flight.swap(true, Ordering::SeqCst) {
-                            // Same reasoning as `Discover` above: cleared
-                            // synchronously so a second `Install` call never
-                            // hands back a previous install's result.
-                            *install_result.lock().expect("install result") = None;
-                            let flight = Arc::clone(&in_flight);
-                            let slot = Arc::clone(&install_result);
-                            std::thread::spawn(move || {
-                                let outcome = crate::package::install_from_marketplace(
-                                    &owner_user_id,
-                                    &applet_id,
-                                    false,
-                                )
-                                .inspect(|id| {
-                                    if let Err(e) = crate::package::sync_after_install(id) {
-                                        eprintln!("[dew] {id}: {e}");
-                                    }
+                    lua.create_function(
+                        move |_, (owner_user_id, applet_id, callback): (String, String, LuaFunction)| {
+                            *trigger_pending.lock().expect("install callback") = Some(callback);
+                            if !trigger_flight.swap(true, Ordering::SeqCst) {
+                                *trigger_result.lock().expect("install result") = None;
+                                let flight = Arc::clone(&trigger_flight);
+                                let slot = Arc::clone(&trigger_result);
+                                std::thread::spawn(move || {
+                                    let outcome = crate::package::install_from_marketplace(
+                                        &owner_user_id,
+                                        &applet_id,
+                                        false,
+                                    )
+                                    .inspect(|id| {
+                                        if let Err(e) = crate::package::sync_after_install(id) {
+                                            eprintln!("[dew] {id}: {e}");
+                                        }
+                                    });
+                                    *slot.lock().expect("install result") = Some(outcome);
+                                    flight.store(false, Ordering::SeqCst);
                                 });
-                                *slot.lock().expect("install result") = Some(outcome);
-                                flight.store(false, Ordering::SeqCst);
-                            });
-                        }
-                        Ok(())
-                    })?,
+                            }
+                            Ok(())
+                        },
+                    )?,
                 )?;
 
-                marketplace.set(
-                    "Installed",
-                    lua.create_function(move |lua, ()| {
-                        match &*result.lock().expect("install result") {
-                            None => Ok(LuaValue::Nil),
-                            Some(Ok(id)) => {
-                                let table = lua.create_table()?;
-                                table.set("ok", true)?;
-                                table.set("id", id.as_str())?;
-                                Ok(LuaValue::Table(table))
-                            }
-                            Some(Err(message)) => {
-                                let table = lua.create_table()?;
-                                table.set("ok", false)?;
-                                table.set("error", message.as_str())?;
-                                Ok(LuaValue::Table(table))
-                            }
-                        }
-                    })?,
-                )?;
+                let checker_result = Arc::clone(&result);
+                let checker_pending = Arc::clone(&pending);
+                let checker = lua.create_function(move |lua, _dt: f64| {
+                    let Some(outcome) = checker_result.lock().expect("install result").take()
+                    else {
+                        return Ok(());
+                    };
+                    let Some(callback) = checker_pending.lock().expect("install callback").take()
+                    else {
+                        return Ok(());
+                    };
+                    let table = install_result_table(lua, outcome)?;
+                    callback.call::<()>(table)
+                })?;
+                register_frame_checker(&desktop, checker)?;
             }
             #[cfg(not(windows))]
             Permission::Install => {}

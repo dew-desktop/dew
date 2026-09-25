@@ -359,21 +359,35 @@ listLayout.Parent = list
 local ROW_HEIGHT = 64
 
 -- STATE FIRST, EVERYTHING ELSE AFTER. `buildRow` below closes over
--- `awaitingInstall`; declaring it after `buildRow` would make that a
--- capture of a global instead of this local, since a Luau chunk resolves
--- an upvalue at the point a function is DEFINED, not where it is called.
+-- `onInstalled`; declaring it after `buildRow` would make that a capture of
+-- a global instead of this local, since a Luau chunk resolves an upvalue at
+-- the point a function is DEFINED, not where it is called.
 local packages = source(nil :: { Package }?)
 
--- AWAITING FLAGS, NOT A COMPARISON AGAINST THE LAST POLLED TABLE.
--- `Discovered()`/`Installed()` build a fresh Lua table every call (see
--- `capabilities.rs`), so two reads of an unchanged answer are never `==`
--- to each other -- polling every frame and writing straight into
--- `packages` would rebuild the whole row list every frame, forever, once
--- one result ever landed. A flag set at trigger time and cleared the one
--- time its answer is actually consumed is what keeps each result read
--- exactly once.
-local awaitingDiscover = false
-local awaitingInstall = false
+-- CALLBACKS, NOT AWAITING FLAGS (milestone 26; was a flag polled from
+-- `desktop.Clock.OnFrame` through milestone 25 -- see `capabilities.rs` for
+-- why that bookkeeping moved into the host). `Discover`/`Install` call these
+-- back exactly once, themselves, the instant an answer lands; nothing here
+-- polls for it any more.
+local function onDiscovered(discovered)
+	if discovered.ok then
+		packages(discovered.packages)
+		status.Text = if #discovered.packages == 0 then "No public packages yet" else ""
+	else
+		status.Text = discovered.error
+	end
+end
+
+local function onInstalled(installed)
+	status.Text = if installed.ok then `Installed '{installed.id}'` else installed.error
+	-- THE LIBRARY TAB IS WHAT SHOWS AN INSTALL'S RESULT, since a newly
+	-- installed applet is a Library entry, not a Store one -- refreshed
+	-- here too so switching tabs right after an install shows it without a
+	-- manual Refresh click.
+	if installed.ok then
+		refreshLibrary()
+	end
+end
 
 local function clearRows()
 	for _, child in ipairs(list:GetChildren()) do
@@ -411,8 +425,7 @@ local function buildRow(pkg: Package)
 
 	install.Activated:Connect(function()
 		status.Text = `Installing {pkg.appletId}...`
-		awaitingInstall = true
-		marketplace.Install(pkg.ownerUserId, pkg.appletId)
+		marketplace.Install(pkg.ownerUserId, pkg.appletId, onInstalled)
 	end)
 end
 
@@ -433,45 +446,13 @@ vide.root(function()
 	end)
 end)
 
-desktop.Clock.OnFrame(function()
-	if awaitingDiscover then
-		local discovered = marketplace.Discovered()
-		if discovered ~= nil then
-			awaitingDiscover = false
-			if discovered.ok then
-				packages(discovered.packages)
-				status.Text = if #discovered.packages == 0 then "No public packages yet" else ""
-			else
-				status.Text = discovered.error
-			end
-		end
-	end
-
-	if awaitingInstall then
-		local installed = marketplace.Installed()
-		if installed ~= nil then
-			awaitingInstall = false
-			status.Text = if installed.ok then `Installed '{installed.id}'` else installed.error
-			-- THE LIBRARY TAB IS WHAT SHOWS AN INSTALL'S RESULT, since a
-			-- newly installed applet is a Library entry, not a Store one --
-			-- refreshed here too so switching tabs right after an install
-			-- shows it without a manual Refresh click.
-			if installed.ok then
-				refreshLibrary()
-			end
-		end
-	end
-end)
-
 refreshButton.Activated:Connect(function()
 	status.Text = "Refreshing..."
-	awaitingDiscover = true
-	marketplace.Discover()
+	marketplace.Discover(onDiscovered)
 end)
 
 status.Text = "Loading..."
-awaitingDiscover = true
-marketplace.Discover()
+marketplace.Discover(onDiscovered)
 
 --------------------------------------------------------------------------
 -- ACCOUNT: who is signed in, and a way to sign out. Sign-IN stays in

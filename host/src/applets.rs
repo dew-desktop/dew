@@ -463,7 +463,7 @@ pub mod tests {
     use std::sync::{Arc, Mutex};
 
     /// Held for the duration of every test that reads or writes the real
-    /// `session.json` -- `dew_marketplace_triggers_and_polls_without_blocking`
+    /// `session.json` -- `dew_marketplace_triggers_with_a_callback_and_never_blocks`
     /// and `dew_account_reports_session_state_and_signs_out` both call
     /// `platform::clear_session()`/`save_session()` against the one file on
     /// disk, and Rust runs tests in parallel by default. Without this, one
@@ -701,10 +701,19 @@ pub mod tests {
         assert!(fixture.load().is_ok());
     }
 
-    /// THE POLL SHAPE, END TO END (milestone 23 sprint 3). `Discover` and
-    /// `Install` return immediately -- proven here by never blocking this
-    /// test on the network -- and `Discovered`/`Installed` start out `nil`
-    /// until the background thread they started lands a result.
+    /// THE CALLBACK SHAPE, END TO END (milestone 26 sprint 1; was
+    /// trigger-and-poll through milestone 23 sprint 3 -- `Discover()` plus a
+    /// separately-polled `Discovered()`). `Discover`/`Install` still return
+    /// immediately, proven here by never blocking this test on the network;
+    /// the difference is that nothing here ever calls a reader function --
+    /// the callback handed to `Discover`/`Install` is what receives the
+    /// answer, exactly once, the instant it lands.
+    ///
+    /// `services::tick` IS CALLED DIRECTLY, on `loaded.clock`, standing in
+    /// for `main.rs`'s own frame loop -- see `register_frame_checker`'s doc
+    /// comment in `capabilities.rs` for why a `desktop.Clock.OnFrame`
+    /// listener, driven by `tick`, is how the callback's answer ever reaches
+    /// Luau at all.
     ///
     /// HERMETIC ON PURPOSE: `platform::clear_session()` guarantees no
     /// session file exists before either call, so `platform::discover` and
@@ -712,11 +721,11 @@ pub mod tests {
     /// before either would ever reach the network -- the same "not signed
     /// in" error `dew discover`/`dew install @owner/id` give from a
     /// terminal in the same state. What is under test is the wiring
-    /// (trigger, background thread, poll, shape of the answer), not
+    /// (trigger, background thread, callback, shape of the answer), not
     /// `dew-platform`'s own behaviour, which owes this test nothing.
     #[cfg(windows)]
     #[test]
-    fn dew_marketplace_triggers_and_polls_without_blocking() {
+    fn dew_marketplace_triggers_with_a_callback_and_never_blocks() {
         let _session_guard = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::platform::clear_session();
 
@@ -728,32 +737,36 @@ pub mod tests {
         let loaded = fixture.load().expect("loads");
         let lua = loaded.vm.lua();
 
-        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
-        let marketplace: mlua::Table = dew.get("Marketplace").expect("Marketplace installed");
-
-        let poll = |name: &str, args: mlua::MultiValue| -> mlua::Table {
-            let trigger: mlua::Function = marketplace.get(name).expect("trigger installed");
-            trigger
-                .call::<()>(args)
-                .expect("triggering must return immediately, never blocking on the network");
-
-            let reader_name = if name == "Discover" {
-                "Discovered"
-            } else {
-                "Installed"
-            };
-            let reader: mlua::Function = marketplace.get(reader_name).expect("reader installed");
-
+        // AWAITED BY POLLING A LUA GLOBAL THE CALLBACK ITSELF WRITES, not by
+        // calling a reader function -- there is no reader function any more.
+        // `services::tick` is what actually runs the callback (through the
+        // `desktop.Clock.OnFrame` listener `capabilities.rs` registers), so
+        // this loop's job is only to keep calling it until that has happened.
+        let await_global = |lua: &mlua::Lua, clock: &SharedClock, name: &str| -> mlua::Table {
             for _ in 0..200 {
-                if let mlua::Value::Table(t) = reader.call(()).expect("poll") {
+                services::tick(clock, 0.0);
+                if let mlua::Value::Table(t) = lua.globals().get(name).expect("global") {
                     return t;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
-            panic!("{reader_name} never landed a result within 2 seconds");
+            panic!("{name} never landed a result within 2 seconds");
         };
 
-        let discovered = poll("Discover", mlua::MultiValue::new());
+        lua.load(
+            r#"
+                __discover_result = nil
+                __discover_calls = 0
+                dew.Marketplace.Discover(function(result)
+                    __discover_result = result
+                    __discover_calls += 1
+                end)
+            "#,
+        )
+        .exec()
+        .expect("triggering must return immediately, never blocking on the network");
+
+        let discovered = await_global(lua, &loaded.clock, "__discover_result");
         assert!(
             !discovered.get::<bool>("ok").expect("ok field"),
             "no session exists in this test, so discover must fail rather than succeed"
@@ -761,10 +774,27 @@ pub mod tests {
         let error: String = discovered.get("error").expect("error field");
         assert!(error.contains("not signed in"), "got: {error}");
 
-        let mut args = mlua::MultiValue::new();
-        args.push_back(mlua::Value::String(lua.create_string("owner").unwrap()));
-        args.push_back(mlua::Value::String(lua.create_string("applet").unwrap()));
-        let installed = poll("Install", args);
+        // FIRES EXACTLY ONCE, not once per frame it happens to still be
+        // registered for -- the whole point of moving the "did it land, do
+        // not call it twice" bookkeeping into the host.
+        for _ in 0..20 {
+            services::tick(&loaded.clock, 0.0);
+        }
+        let calls: i64 = lua.globals().get("__discover_calls").expect("calls");
+        assert_eq!(calls, 1, "the callback must not fire more than once per trigger");
+
+        lua.load(
+            r#"
+                __install_result = nil
+                dew.Marketplace.Install("owner", "applet", function(result)
+                    __install_result = result
+                end)
+            "#,
+        )
+        .exec()
+        .expect("triggering must return immediately, never blocking on the network");
+
+        let installed = await_global(lua, &loaded.clock, "__install_result");
         assert!(
             !installed.get::<bool>("ok").expect("ok field"),
             "no session exists in this test, so install must fail rather than succeed"
@@ -774,7 +804,7 @@ pub mod tests {
     }
 
     /// `dew.Library`'S FOUR CALLS, AGAINST A REAL FIXTURE-INSTALLED APPLET --
-    /// matching the shape of `dew_marketplace_triggers_and_polls_without_blocking`
+    /// matching the shape of `dew_marketplace_triggers_with_a_callback_and_never_blocks`
     /// above, but synchronous throughout rather than trigger-and-poll: every
     /// one of `List`/`Launch`/`Uninstall`/`SetEnabled` is a local file
     /// operation or a named-pipe round trip, never a network call, so there
@@ -870,7 +900,7 @@ pub mod tests {
         // load -- the other half of the same toggle `manage.rs`'s own
         // checkbox already makes -- and then waits for the coordinator to
         // confirm it actually started. NO REAL COORDINATOR IS LISTENING IN
-        // THIS TEST (see `dew_marketplace_triggers_and_polls_without_blocking`'s
+        // THIS TEST (see `dew_marketplace_triggers_with_a_callback_and_never_blocks`'s
         // own doc comment on what `query_running` reads as here), so
         // nothing ever drains the queue this pushes to and the wait times
         // out -- the one part of this call this hermetic test cannot
