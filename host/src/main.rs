@@ -1623,11 +1623,15 @@ fn run_applet(
 
             // GATED ON `--stats`, NOT PRINTED UNCONDITIONALLY: this fires on
             // every message during a live drag, which is far too often for
-            // a print nobody asked to see. `Window::resized` is where
-            // `Presenter::configure` lives -- wgpu's own doc on `configure`
-            // says it waits for the GPU to come idle before resizing the
-            // swap chain, which a steady-state `--bench` reading (constant
-            // size, `configure` called once) cannot show at all.
+            // a print nobody asked to see. `present` HERE IS NOT JUST GPU
+            // PRESENTATION -- `canvas.bgra()` calls into `dew_raster`'s
+            // `ar_bgra`, which renders the scene lazily on first read after
+            // a resize. `renderer.resize` REBUILDS the canvas from scratch,
+            // so Vello's own "already rendered" cache never survives a
+            // resize step, and this number is dominated by that full
+            // CPU rasterization, not by anything in `crates/window`. A
+            // steady-state `--bench` reading never resizes, so it never
+            // pays this cost and cannot show it.
             if stats {
                 println!(
                     "[dew] resize {w}x{h} | resized {t_resized:?} | resize {t_resize:?} | frame {t_frame:?} | present {t_present:?}"
