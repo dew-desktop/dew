@@ -19,13 +19,17 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// How long `uninstall` waits for a running applet's own unload to land
-/// before giving up. A live unload is a flag set on the applet's own
-/// thread and noticed at most one `coordinator::run` tick later (~15ms),
-/// so the ordinary case is a handful of `STOP_POLL_INTERVAL` steps, not
-/// this ceiling -- it exists for a thread that never notices at all.
-const STOP_TIMEOUT: Duration = Duration::from_secs(3);
-const STOP_POLL_INTERVAL: Duration = Duration::from_millis(20);
+/// How long `uninstall` and `set_enabled` wait for a live load/unload they
+/// queued to actually land before giving up. A queued request is drained
+/// on the coordinator's own thread and noticed at most one
+/// `coordinator::run` tick later (~15ms), so the ordinary case is a
+/// handful of `TRANSITION_POLL_INTERVAL` steps, not this ceiling -- it
+/// exists for a coordinator that never notices at all. Half a second is
+/// already ~30x that ordinary case; there is no real scenario this is
+/// meant to tolerate that takes longer; a coordinator loop that has not
+/// ticked in half a second has bigger problems than this wait.
+const TRANSITION_TIMEOUT: Duration = Duration::from_millis(500);
+const TRANSITION_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 static LOAD_QUEUE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
@@ -50,12 +54,25 @@ pub fn take_unload_requests() -> Vec<String> {
 
 /// One row `dew.Library.List()` hands back: `installed::list()`'s own
 /// id/dir/enabled, plus the name and description only that entry's own
-/// manifest carries.
+/// manifest carries, plus whether it is actually running under this
+/// coordinator right now.
+///
+/// `enabled` AND `running` ARE TWO DIFFERENT AXES, ON PURPOSE (see the
+/// design note on `dashboard.luau`'s own Library toggle for the full
+/// rationale). `enabled` is `installed.json`'s own persisted "load this
+/// automatically at the next service start"; `running` is
+/// `coordinator::running_snapshot()`'s transient, in-memory "is it loaded
+/// right now." They usually agree -- `set_enabled` below keeps them in
+/// sync live -- but they can drift: an applet stays `enabled` after its
+/// own window is closed by hand (the OS close button, not this API), or a
+/// crash. `running` is what a caller displaying this list actually wants
+/// to show; `enabled` alone cannot answer "is this up right now."
 pub struct Entry {
     pub id: String,
     pub name: String,
     pub description: String,
     pub enabled: bool,
+    pub running: bool,
 }
 
 /// Every installed applet, enabled or not, with its manifest read for
@@ -63,7 +80,14 @@ pub struct Entry {
 /// to the bare id as its name and an empty description rather than
 /// dropping the row -- the same "row survives, label degrades" choice
 /// `manage.rs`'s own `row_label` already makes.
+///
+/// `running_snapshot()` IS READ ONCE FOR THE WHOLE LIST, not once per
+/// entry -- it is an in-process read of a `Mutex<Vec<String>>`
+/// (`coordinator.rs`), cheap enough that there is no reason to turn an
+/// O(installed applets) list into that many separate reads of the same
+/// answer.
 pub fn list() -> Vec<Entry> {
+    let running = crate::coordinator::running_snapshot();
     crate::installed::list()
         .into_iter()
         .map(|entry| {
@@ -71,11 +95,13 @@ pub fn list() -> Vec<Entry> {
                 Ok(manifest) => (manifest.display_name().to_string(), manifest.description),
                 Err(_) => (entry.id.clone(), String::new()),
             };
+            let is_running = running.contains(&entry.id);
             Entry {
                 id: entry.id,
                 name,
                 description,
                 enabled: entry.enabled,
+                running: is_running,
             }
         })
         .collect()
@@ -113,23 +139,26 @@ pub fn uninstall(id: &str) -> Result<(), String> {
             .lock()
             .expect("library unload queue")
             .push(id.to_string());
-        wait_until_stopped(id)?;
+        wait_until_running_is(id, false)
+            .map_err(|_| format!("'{id}' did not stop in time to uninstall; try again"))?;
     }
     crate::installed::uninstall(id)
 }
 
-/// Polls `query_running` until it answers false or `STOP_TIMEOUT` elapses.
-fn wait_until_stopped(id: &str) -> Result<(), String> {
-    let deadline = Instant::now() + STOP_TIMEOUT;
+/// Polls `query_running` until it agrees with `want_running` or
+/// `TRANSITION_TIMEOUT` elapses. Used by both `uninstall` (waiting for a
+/// live unload to land before it is safe to delete the directory) and
+/// `set_enabled` (waiting for a live load/unload to land before `List`'s
+/// very next call could otherwise still report the old state).
+fn wait_until_running_is(id: &str, want_running: bool) -> Result<(), String> {
+    let deadline = Instant::now() + TRANSITION_TIMEOUT;
     while Instant::now() < deadline {
-        if !crate::coordinator::query_running(id)? {
+        if crate::coordinator::query_running(id)? == want_running {
             return Ok(());
         }
-        std::thread::sleep(STOP_POLL_INTERVAL);
+        std::thread::sleep(TRANSITION_POLL_INTERVAL);
     }
-    Err(format!(
-        "'{id}' did not stop in time to uninstall; try again"
-    ))
+    Err(format!("'{id}' did not reach the expected state in time"))
 }
 
 /// Set `id`'s enabled bit, live: disabling a running applet unloads it
@@ -138,11 +167,12 @@ fn wait_until_stopped(id: &str) -> Result<(), String> {
 /// toggle `manage.rs`'s own checkbox already makes, generalized from that
 /// window's own `LOAD_QUEUE`/`UNLOAD_QUEUE` to this module's.
 ///
-/// NEVER WAITS FOR THE UNLOAD TO LAND, UNLIKE `uninstall` ABOVE. Nothing
-/// here reads `id`'s directory afterward the way `uninstall`'s own disk
-/// delete would, so there is nothing for a wait to protect -- the disabled
-/// bit is already correct on disk the instant this returns, whether or not
-/// the coordinator has actually closed the window yet.
+/// WAITS FOR THE LOAD/UNLOAD TO LAND, THE SAME WAY `uninstall` DOES, so
+/// that a `List()` called the instant this returns already sees the new
+/// `running` state -- a caller rebuilding a row's own label right after
+/// toggling it (`dashboard.luau`'s Library tab does exactly this) would
+/// otherwise show the state from just before the click for one more
+/// frame, which reads as the click having done nothing.
 pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     let running = crate::coordinator::query_running(id)?;
     crate::installed::set_enabled(id, enabled)?;
@@ -154,11 +184,13 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
             .map(|e| e.dir)
             .ok_or_else(|| format!("no applet installed with id '{id}'"))?;
         LOAD_QUEUE.lock().expect("library load queue").push(dir);
+        wait_until_running_is(id, true)?;
     } else if !enabled && running {
         UNLOAD_QUEUE
             .lock()
             .expect("library unload queue")
             .push(id.to_string());
+        wait_until_running_is(id, false)?;
     }
 
     Ok(())

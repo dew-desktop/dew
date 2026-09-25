@@ -29,7 +29,7 @@ local account = assert(dew.Account, "dew.toml must grant `auth`")
 local root = window({ title = "Dew Dashboard", width = 420, height = 560 })
 
 type Package = { ownerUserId: string, appletId: string, uploadedAt: string }
-type LibraryEntry = { id: string, name: string, description: string, enabled: boolean }
+type LibraryEntry = { id: string, name: string, description: string, enabled: boolean, running: boolean }
 
 local function label(
 	parent: Instance,
@@ -199,13 +199,49 @@ end
 -- `buildLibraryRow` for each entry -- the two close over each other.
 --
 -- SEPARATE FROM `refreshLibrary` BELOW ON PURPOSE. A row's own action
--- already wrote its own result into `libraryStatus.Text` (`Launched 'x'`,
+-- already wrote its own result into `libraryStatus.Text` (`Enabled 'x'`,
 -- an error, ...); rebuilding the row list must not then overwrite that
 -- with the empty-store notice, which is `refreshLibrary`'s job for the
 -- Refresh button and the initial load, neither of which has a result of
 -- its own to preserve.
 local rebuildLibraryRows: () -> number
 
+--[[
+	DESIGN NOTE, REVISIT IF THIS STOPS FEELING RIGHT: only Enable/Disable
+	and Uninstall are shown here -- there used to be a third "Launch"
+	button, removed after it turned out to just be confusing rather than
+	load-bearing.
+
+	`enabled` (persisted in `installed.json`, "load this automatically at
+	the next service start") and "is this actually running right now" are
+	genuinely two different axes -- `dew.Library.SetEnabled` did not always
+	touch the second one. It used to be a disk write ONLY: an applet could
+	be enabled and running, enabled and NOT running (closed by hand, or
+	before this session's own live-toggle fix, simply "not yet restarted"),
+	or disabled while still running until the next restart. "Launch" was
+	the one way to force it running right now without touching the
+	persisted bit, which is why it existed as its own button next to
+	Enable/Disable rather than folded into it.
+
+	Once `SetEnabled` started live-loading/unloading (so the two axes stay
+	in sync the instant you click), the only case Launch still covered on
+	its own was an applet still `enabled` but no longer running -- closed
+	by hand, or crashed -- where the toggle would read "Disable" (since
+	`enabled` says so) and clicking it would turn the thing OFF, not bring
+	it back. That is confusing on its face: two controls that mostly do the
+	same thing, and the one time they diverge, the more prominent one
+	(Enable/Disable) does the wrong thing.
+
+	THE FIX: `LibraryEntry.running` (from `dew.Library.List`, backed by
+	`coordinator::running_snapshot()`, not `installed.json`) is what this
+	toggle's label and action are keyed on now, not `entry.enabled`. Off
+	(not running) always reads "Enable" and always starts it; on (running)
+	always reads "Disable" and always stops it. `SetEnabled(id, true)` on
+	an enabled-but-stopped applet is exactly the old `Launch`'s job --
+	start it without changing a bit that was already correct -- so nothing
+	is lost, and the enabled-but-stopped case now shows the right label
+	instead of the wrong one.
+]]
 local function buildLibraryRow(entry: LibraryEntry)
 	local row = Instance.new("Frame")
 	row.Name = "Row"
@@ -223,37 +259,29 @@ local function buildLibraryRow(entry: LibraryEntry)
 		label(row, "Description", UDim2.new(0, 12, 0, 28), UDim2.new(1, -24, 0, 16), 11, Color3.fromRGB(146, 162, 188))
 	description.Text = if entry.description == "" then entry.id else entry.description
 
-	local launchButton =
-		button(row, "Launch", UDim2.new(0, 12, 0, 52), UDim2.new(0, 64, 0, 24), "Launch", Color3.fromRGB(48, 90, 64), Color3.fromRGB(214, 240, 224))
 	local toggleButton = button(
 		row,
 		"Toggle",
-		UDim2.new(0, 84, 0, 52),
-		UDim2.new(0, 84, 0, 24),
-		if entry.enabled then "Disable" else "Enable",
+		UDim2.new(0, 12, 0, 52),
+		UDim2.new(0, 100, 0, 24),
+		if entry.running then "Disable" else "Enable",
 		Color3.fromRGB(38, 52, 74),
 		Color3.fromRGB(206, 222, 246)
 	)
 	local uninstallButton = button(
 		row,
 		"Uninstall",
-		UDim2.new(0, 176, 0, 52),
-		UDim2.new(0, 76, 0, 24),
+		UDim2.new(0, 124, 0, 52),
+		UDim2.new(0, 88, 0, 24),
 		"Uninstall",
 		Color3.fromRGB(90, 48, 48),
 		Color3.fromRGB(240, 214, 214)
 	)
 
-	launchButton.Activated:Connect(function()
-		local result = library.Launch(entry.id)
-		libraryStatus.Text = if result.ok then `Launched '{entry.id}'` else result.error
-		rebuildLibraryRows()
-	end)
-
 	toggleButton.Activated:Connect(function()
-		local result = library.SetEnabled(entry.id, not entry.enabled)
+		local result = library.SetEnabled(entry.id, not entry.running)
 		libraryStatus.Text = if result.ok
-			then `{if entry.enabled then "Disabled" else "Enabled"} '{entry.id}'`
+			then `{if entry.running then "Disabled" else "Enabled"} '{entry.id}'`
 			else result.error
 		rebuildLibraryRows()
 	end)

@@ -407,6 +407,7 @@ pub fn build(
                             row.set("name", entry.name)?;
                             row.set("description", entry.description)?;
                             row.set("enabled", entry.enabled)?;
+                            row.set("running", entry.running)?;
                             list.set((i + 1) as i64, row)?;
                         }
                         Ok(list)

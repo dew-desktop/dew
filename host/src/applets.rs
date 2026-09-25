@@ -819,6 +819,10 @@ pub mod tests {
             row.get::<bool>("enabled").expect("enabled"),
             "a freshly installed applet defaults to enabled"
         );
+        assert!(
+            !row.get::<bool>("running").expect("running"),
+            "nothing was ever actually spawned in this test, so it must read as not running"
+        );
 
         // Launch: not running (no coordinator is listening in this test, so
         // `query_running` reads as false, the same "nothing to orphan"
@@ -864,18 +868,33 @@ pub mod tests {
 
         // SetEnabled(true), on an applet that is not running, queues a live
         // load -- the other half of the same toggle `manage.rs`'s own
-        // checkbox already makes.
+        // checkbox already makes -- and then waits for the coordinator to
+        // confirm it actually started. NO REAL COORDINATOR IS LISTENING IN
+        // THIS TEST (see `dew_marketplace_triggers_and_polls_without_blocking`'s
+        // own doc comment on what `query_running` reads as here), so
+        // nothing ever drains the queue this pushes to and the wait times
+        // out -- the one part of this call this hermetic test cannot
+        // exercise end to end; the live checks in the milestone this
+        // shipped under covered that instead. The disk write and the queue
+        // push both still happen before the wait, so both are still
+        // checked here.
         let result: mlua::Table = set_enabled
             .call((target.id.clone(), true))
             .expect("SetEnabled call");
-        assert!(result.get::<bool>("ok").expect("ok field"));
+        assert!(
+            !result.get::<bool>("ok").expect("ok field"),
+            "nothing drains the load queue in this test, so the wait for it to land must time out"
+        );
         let row = list_by_id(&library, &target.id).expect("still installed, now re-enabled");
-        assert!(row.get::<bool>("enabled").expect("enabled"));
+        assert!(
+            row.get::<bool>("enabled").expect("enabled"),
+            "the disk write happens before the wait, so it lands even though the wait times out"
+        );
         let queued = crate::library::take_load_requests();
         assert_eq!(
             queued.len(),
             1,
-            "re-enabling a non-running applet must queue exactly one load"
+            "re-enabling a non-running applet must queue exactly one load, timeout or not"
         );
         assert!(queued[0].ends_with(&target.id));
 
