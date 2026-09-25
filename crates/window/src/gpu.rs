@@ -1,11 +1,31 @@
-//! `wgpu` presentation for an ordinary `Window` surface.
+//! `wgpu` presentation for a Win32 window, composed through `DirectComposition`.
 //!
-//! Milestone 24, sprint 1: this replaces `blit`'s `SetDIBitsToDevice` path, the
-//! one GDI measured to cost 25-50ms per present regardless of resize. `wgpu`
-//! rather than raw DXGI because Dew's ordinary-window rendering path is meant
-//! to carry over to Linux and Mac unchanged, not be re-derived per platform --
-//! see the milestone's vision overview for why the layered surface (widgets,
-//! overlays) does NOT follow this crate and stays `DirectComposition`.
+//! Milestone 24: this replaces `blit`'s `SetDIBitsToDevice` path, the one GDI
+//! measured to cost 25-50ms per present regardless of resize.
+//!
+//! ## Why `DirectComposition` for an ORDINARY window too, not only a layered one
+//!
+//! The milestone's original plan bound an ordinary `Window` surface's swap
+//! chain directly to its `HWND`, on the assumption that `DirectComposition`
+//! was only needed for a layered surface's per-pixel alpha. Measured, not
+//! assumed, that assumption was wrong: a flip-model swap chain bound directly
+//! to an `HWND` is a well-documented source of a "wrong direction" resize
+//! artifact -- during a live drag, Windows composites the swap chain's back
+//! buffer against the window's CURRENT client rect independent of when the
+//! app calls `Present`, so a buffer sized for the last configured size gets
+//! transiently stretched against a rect that has already moved on. The fix
+//! the industry actually uses is `DirectComposition`
+//! (`WS_EX_NOREDIRECTIONBITMAP` plus an `IDCompositionVisual`) even for an
+//! opaque window, because it is what removes the swap chain from the
+//! window's own redirection surface entirely -- not a transparency feature
+//! here, a resize-correctness one.
+//!
+//! `wgpu`'s DX12 backend accepts an `IDCompositionVisual` directly
+//! (`SurfaceTargetUnsafe::CompositionVisual`), so this still does not need a
+//! hand-rolled DXGI swap chain -- only the composition device, target and
+//! visual DirectComposition itself requires, which `wgpu` cannot set up on
+//! this crate's behalf because it has no notion of the window's message loop
+//! or its `WS_EX_NOREDIRECTIONBITMAP` style.
 //!
 //! NO RENDER PIPELINE, NO SHADER. `dew_raster` already produced a finished
 //! BGRA buffer; the only job here is getting it onto the screen, so the
@@ -13,41 +33,14 @@
 //! directly with `Queue::write_texture`, the same shape of operation the GDI
 //! blit it replaces performed.
 
+use windows::core::Interface;
 use windows::Win32::Foundation::HWND;
+use windows::Win32::Graphics::DirectComposition::{
+    DCompositionCreateDevice3, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+};
 
-/// An owned copy of a Win32 window handle, independent of the `Window` that
-/// produced it.
-///
-/// `wgpu::Instance::create_surface` wants a target that can outlive the
-/// surface. `Window` itself cannot be handed over — the caller keeps using it
-/// for input and lifetime — but an `HWND` is already just an integer the OS
-/// resolves, so a copy of it is exactly as valid as the original for as long
-/// as the real window is alive, which the caller (this crate's own `Window`)
-/// already guarantees.
-#[derive(Clone, Copy)]
-struct RawWin32Handle(isize);
-
-impl raw_window_handle::HasWindowHandle for RawWin32Handle {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        let hwnd = std::num::NonZeroIsize::new(self.0)
-            .ok_or(raw_window_handle::HandleError::Unavailable)?;
-        let handle = raw_window_handle::Win32WindowHandle::new(hwnd);
-        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(handle.into()) })
-    }
-}
-
-impl raw_window_handle::HasDisplayHandle for RawWin32Handle {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        let handle = raw_window_handle::WindowsDisplayHandle::new();
-        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(handle.into()) })
-    }
-}
-
-/// Presents a BGRA buffer to an ordinary window through a `wgpu` swap chain.
+/// Presents a BGRA buffer to a window through a `wgpu` swap chain composed
+/// as a `DirectComposition` visual's content.
 pub struct Presenter {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -55,15 +48,52 @@ pub struct Presenter {
     format: wgpu::TextureFormat,
     width: u32,
     height: u32,
+    // KEPT ALIVE FOR THE VISUAL TREE'S LIFETIME, NEVER READ AGAIN. Dropping
+    // any of these tears down what `Commit` published: the target owns the
+    // window's composition tree, and the visual is what the swap chain's
+    // content was set onto.
+    _dcomp_device: IDCompositionDevice,
+    _dcomp_target: IDCompositionTarget,
+    _visual: IDCompositionVisual,
 }
 
 impl Presenter {
+    /// `hwnd` must have been created with `WS_EX_NOREDIRECTIONBITMAP` --
+    /// without it, Windows still allocates the ordinary GDI redirection
+    /// surface behind the composition visual, which is the exact thing this
+    /// module exists to bypass.
     pub fn new(hwnd: HWND, width: u32, height: u32) -> Result<Presenter, String> {
+        let (dcomp_device, dcomp_target, visual) = unsafe {
+            // `None`: DirectComposition is allowed to own its own rendering
+            // device rather than share `wgpu`'s. The two devices never touch
+            // the same resource -- the visual tree is DirectComposition's,
+            // the swap chain's pixels are `wgpu`'s -- so there is nothing to
+            // keep in sync between them.
+            let dcomp_device: IDCompositionDevice = DCompositionCreateDevice3(None)
+                .map_err(|e| format!("creating a DirectComposition device: {e}"))?;
+            let dcomp_target = dcomp_device
+                .CreateTargetForHwnd(hwnd, true)
+                .map_err(|e| format!("binding DirectComposition to this window: {e}"))?;
+            let visual = dcomp_device
+                .CreateVisual()
+                .map_err(|e| format!("creating a DirectComposition visual: {e}"))?;
+            dcomp_target
+                .SetRoot(&visual)
+                .map_err(|e| format!("setting this window's composition root: {e}"))?;
+            (dcomp_device, dcomp_target, visual)
+        };
+
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
 
-        let surface = instance
-            .create_surface(RawWin32Handle(hwnd.0 as isize))
-            .map_err(|e| format!("creating a wgpu surface for this window: {e:?}"))?;
+        // SAFETY: `visual` is a valid `IDCompositionVisual`, kept alive for
+        // exactly as long as the `Presenter` that owns both it and the
+        // surface `wgpu` creates from it.
+        let surface = unsafe {
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CompositionVisual(
+                Interface::as_raw(&visual),
+            ))
+        }
+        .map_err(|e| format!("creating a wgpu surface from this window's visual: {e:?}"))?;
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::LowPower,
@@ -107,8 +137,18 @@ impl Presenter {
             format,
             width: 0,
             height: 0,
+            _dcomp_device: dcomp_device,
+            _dcomp_target: dcomp_target,
+            _visual: visual,
         };
         presenter.configure(width, height);
+
+        // PUBLISH THE VISUAL TREE. Nothing set above is visible on screen
+        // until this call -- `SetRoot` and the swap chain `wgpu` bound to
+        // the visual both stage changes that `Commit` is what applies.
+        unsafe { presenter._dcomp_device.Commit() }
+            .map_err(|e| format!("publishing this window's composition tree: {e}"))?;
+
         Ok(presenter)
     }
 

@@ -9,25 +9,26 @@ license-file = "../../LICENSE"
 # a buffer of bytes. It does not know what produced them, which is what lets the
 # CLI's preview and Dew's widgets share it without sharing anything else.
 #
-# An ordinary `Window` surface presents through `wgpu` (milestone 24, sprint 1)
-# rather than GDI, because Dew's ordinary-window rendering path is meant to
-# carry over unchanged to Linux and Mac, not be re-derived per platform. A
-# `Widget`/`Overlay`/`Popover` surface's per-pixel transparency stays a
-# separate, platform-specific mechanism -- `DirectComposition` on Windows --
-# because `wgpu`'s own alpha-mode portability across backends is not a solved
-# problem upstream (gfx-rs/wgpu#3486, #5661) and `winit` states window
-# transparency as unimplemented on Wayland outright. See milestone 24's vision
-# overview for the full reasoning.
+# EVERY WINDOWS SURFACE PRESENTS THROUGH `wgpu` COMPOSED OVER `DirectComposition`
+# (milestone 24), an ordinary `Window` included -- not only a layered
+# `Widget`/`Overlay`. A flip-model swap chain bound directly to an `HWND` is a
+# documented source of a "wrong direction" stretch during a live resize
+# (Windows composites the back buffer against the window's CURRENT rect
+# independent of when the app presents), and `DirectComposition` is the fix
+# the industry actually uses even for an opaque window, not a transparency
+# feature here. See `src/gpu.rs` and milestone 24's vision overview for the
+# full reasoning, including why this is Windows-specific rather than
+# something `wgpu`'s own cross-platform abstraction absorbs.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_DirectComposition",
     "Win32_System_LibraryLoader",
 ] }
 wgpu = "29"
-raw-window-handle = "0.6"
 pollster = "1.0.1"
 
 # CLIPPY DEBT THAT ARRIVED WITH THE CODE, NAMED AND COUNTED. The reasoning is in

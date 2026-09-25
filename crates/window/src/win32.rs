@@ -382,9 +382,16 @@ impl Window {
             // which is not what a widget is. `WS_EX_LAYERED` is what makes
             // `UpdateLayeredWindow` available, and therefore per-pixel alpha.
             let (style, ex_style, x, y, z_order) = match surface {
+                // `WS_EX_NOREDIRECTIONBITMAP`: an ordinary window presents
+                // through `DirectComposition` (`crate::gpu`), not a blit
+                // into the window's own device context. Without this style
+                // Windows still allocates the normal GDI redirection
+                // surface behind the composition visual, which is the
+                // exact per-HWND surface a flip-model swap chain bound to
+                // it would fight over during a live resize.
                 Surface::Window { .. } => (
                     WS_OVERLAPPEDWINDOW,
-                    WINDOW_EX_STYLE::default(),
+                    WS_EX_NOREDIRECTIONBITMAP,
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
                     None,
