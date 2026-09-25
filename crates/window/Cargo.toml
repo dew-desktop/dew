@@ -27,6 +27,7 @@ windows = { version = "0.59", features = [
     "Win32_Graphics_Gdi",
     "Win32_Graphics_DirectComposition",
     "Win32_System_LibraryLoader",
+    "Foundation_Numerics",
 ] }
 wgpu = "29"
 pollster = "1.0.1"
