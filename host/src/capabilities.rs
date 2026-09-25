@@ -494,6 +494,45 @@ pub fn build(
                         result_table(lua, crate::library::set_enabled(&id, enabled))
                     })?,
                 )?;
+
+                // A PERSISTENT SUBSCRIPTION, NOT A ONE-SHOT CALLBACK LIKE
+                // `Discover`/`Install` ABOVE. Those fire once per trigger and
+                // are done; `OnChange` fires every time
+                // `library::bump_generation()` runs again, for as long as
+                // this applet lives -- the same "keep firing until told
+                // otherwise" shape `desktop.Clock.OnFrame` itself already
+                // has, which is fitting since this is built on it. "Last
+                // call wins" on a second `OnChange` registration, the same
+                // precedent a surface request already sets.
+                //
+                // THE BASELINE IS READ AT GRANT TIME, not zero -- a change
+                // that already happened before this applet mounted is not
+                // this applet's to react to; only a change from here on is.
+                let pending: Arc<Mutex<Option<LuaFunction>>> = Arc::new(Mutex::new(None));
+                let last_seen: Arc<Mutex<u64>> = Arc::new(Mutex::new(crate::library::generation()));
+
+                let on_change_pending = Arc::clone(&pending);
+                library.set(
+                    "OnChange",
+                    lua.create_function(move |_, callback: LuaFunction| {
+                        *on_change_pending.lock().expect("library onchange") = Some(callback);
+                        Ok(())
+                    })?,
+                )?;
+
+                let checker = lua.create_function(move |_lua, _dt: f64| {
+                    let Some(callback) = pending.lock().expect("library onchange").clone() else {
+                        return Ok(());
+                    };
+                    let current = crate::library::generation();
+                    let mut seen = last_seen.lock().expect("library generation seen");
+                    if *seen != current {
+                        *seen = current;
+                        callback.call::<()>(())?;
+                    }
+                    Ok(())
+                })?;
+                register_frame_checker(&desktop, checker)?;
             }
             #[cfg(not(windows))]
             Permission::Library => {}

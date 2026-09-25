@@ -61,6 +61,17 @@ const PIPE_NAME: &str = r"\\.\pipe\Dew";
 /// single-instance mutex was added stays exactly as it was.
 const QUERY_PIPE_NAME: &str = r"\\.\pipe\DewQuery";
 
+/// A third pipe, inbound only like `PIPE_NAME` and for the same reason its
+/// own writer never wants an answer back: a ping saying "`installed.json`
+/// changed", not a payload worth reading. `installed::install`/`uninstall`/
+/// `set_enabled` write to it (`notify_library_changed`) after a successful
+/// write of their own, from ANY process -- this is the one channel that
+/// lets a plain terminal running `dew install`/`dew uninstall` reach an
+/// already-running coordinator at all (milestone 26). What arrives is never
+/// inspected; a successful connection is itself the whole message, and
+/// `library::bump_generation` is the only thing a receipt does.
+const LIBRARY_CHANGED_PIPE_NAME: &str = r"\\.\pipe\DewLibraryChanged";
+
 /// Whether this invocation is the one Dew process, or a request handed to it.
 pub enum Role {
     /// The first `dew run` reaching this machine. Holds the mutex alive for
@@ -136,6 +147,40 @@ pub fn send_to_running(dir: &Path) -> Result<(), String> {
 
     println!("[dew] {} handed to the running Dew service", full.display());
     Ok(())
+}
+
+/// Best-effort tell a running coordinator that `installed.json` changed.
+/// Called from `installed::install`/`uninstall`/`set_enabled`, from ANY
+/// process -- including one that is not the coordinator and never will be,
+/// like the CLI. NO LISTENER MEANS NOTHING NEEDS TELLING, the same
+/// tolerance `query_running` below already has, and for the identical
+/// reason: `dew install` run before any Dew service has ever started must
+/// not start failing, or even printing, because of this. Fire-and-forget
+/// from the writer's side too -- these three functions have never before
+/// had a reason to know or care whether a coordinator exists, and this must
+/// not give them one to fail over.
+pub fn notify_library_changed() {
+    let pipe_name = wide(LIBRARY_CHANGED_PIPE_NAME);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(pipe_name.as_ptr()),
+            FILE_GENERIC_WRITE.0,
+            FILE_SHARE_MODE::default(),
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    };
+    let Ok(handle) = handle else {
+        return;
+    };
+    // THE BYTES ARE NEVER READ BACK. A successful write is the whole
+    // message; see `spawn_library_changed_server`.
+    let _ = unsafe { WriteFile(handle, Some(b"changed"), None, None) };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
 }
 
 /// Ask a running coordinator whether `id` is one of its currently loaded
@@ -291,6 +336,56 @@ fn spawn_query_server() {
     });
 }
 
+/// Answer `notify_library_changed` pings forever. INBOUND ONLY, like
+/// `spawn_pipe_server` -- a ping is not a question, and nothing here ever
+/// writes back. What arrives is never inspected (see
+/// `notify_library_changed`'s own doc comment for why); a successful
+/// connection is the whole of the message, and bumping the generation is
+/// the only thing a receipt does.
+///
+/// `pub(crate)`, NOT PRIVATE, so a hermetic test can start this exact
+/// function directly rather than the whole of `coordinator::run` (which
+/// acquires the single-instance mutex and would collide with a real `dew`
+/// process on the same machine) just to prove the pipe's receiving half
+/// works.
+pub(crate) fn spawn_library_changed_server() {
+    thread::spawn(move || loop {
+        let name = wide(LIBRARY_CHANGED_PIPE_NAME);
+        let handle = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(name.as_ptr()),
+                PIPE_ACCESS_INBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                0,
+                64,
+                0,
+                None,
+            )
+        };
+        if handle.is_invalid() {
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+
+        let connected = unsafe { ConnectNamedPipe(handle, None) };
+        let ok = connected.is_ok() || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+        if ok {
+            let mut buf = [0u8; 64];
+            let mut read = 0u32;
+            let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
+            if got.is_ok() {
+                crate::library::bump_generation();
+            }
+        }
+
+        unsafe {
+            let _ = DisconnectNamedPipe(handle);
+            let _ = CloseHandle(handle);
+        }
+    });
+}
+
 /// One applet the coordinator currently has loaded.
 struct Loaded {
     /// Shown in the tray menu. The directory's own name, not the manifest's
@@ -392,6 +487,8 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
     spawn_pipe_server(load_tx);
 
     spawn_query_server();
+
+    spawn_library_changed_server();
 
     // A TRAY THAT FAILS TO CREATE DOES NOT STOP THE SERVICE. `crate::run_applet`
     // used to make the same choice for the single-applet tray it created;
@@ -514,6 +611,12 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
         if changed {
             sync_tray(&registry);
             sync_running(&registry);
+            // THE SECOND OF `dew.Library.OnChange`'S THREE PRODUCERS (see
+            // `library::bump_generation`'s own doc comment) -- a start or
+            // stop that changed the registry with no paired disk write:
+            // `launch`'s own queued load actually landing, a crash, a plain
+            // tray unload.
+            crate::library::bump_generation();
         }
 
         if crate::tray::exit_requested() {

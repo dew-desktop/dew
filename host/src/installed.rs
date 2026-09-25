@@ -162,6 +162,12 @@ pub fn enabled() -> Vec<(String, PathBuf)> {
 /// Copy `source` into the store under its own manifest id, and mark it
 /// enabled. Refuses if that id is already installed unless `force` is set,
 /// in which case the existing copy is replaced.
+///
+/// PINGS A RUNNING COORDINATOR AFTER THE WRITE (milestone 26), if there is
+/// one -- see `coordinator::notify_library_changed`'s own doc comment. This
+/// is what lets `dew install` run from a plain terminal, against a service
+/// already running elsewhere, show up in that service's own `dew.Library`
+/// listeners without either side polling for it.
 pub fn install(source: &Path, force: bool) -> Result<String, String> {
     let manifest = Manifest::load(source)?;
     let id = manifest.id;
@@ -191,6 +197,7 @@ pub fn install(source: &Path, force: bool) -> Result<String, String> {
     let mut state = read_state();
     state.insert(id.clone(), true);
     write_state(&state);
+    crate::coordinator::notify_library_changed();
 
     Ok(id)
 }
@@ -210,6 +217,7 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     let mut state = read_state();
     state.insert(id.to_string(), enabled);
     write_state(&state);
+    crate::coordinator::notify_library_changed();
     Ok(())
 }
 
@@ -230,6 +238,7 @@ pub fn uninstall(id: &str) -> Result<(), String> {
     let mut state = read_state();
     state.remove(id);
     write_state(&state);
+    crate::coordinator::notify_library_changed();
 
     Ok(())
 }

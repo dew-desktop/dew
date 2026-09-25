@@ -946,6 +946,123 @@ pub mod tests {
         assert!(!result.get::<bool>("ok").expect("ok field"));
     }
 
+    /// `dew.Library.OnChange` FIRES ON THE MODULE'S OWN ACTIONS (milestone 26
+    /// sprint 2). `library::launch`/`uninstall`/`set_enabled` bump the
+    /// generation `OnChange` watches directly, in-process, so this needs no
+    /// live coordinator loop or pipe server to prove -- the cross-process
+    /// half (a separate `dew install`/`dew uninstall`) is proved separately
+    /// below, against the real `DewLibraryChanged` pipe.
+    ///
+    /// DRIVEN BY `services::tick`, THE SAME WAY THE CALLBACK SHAPE ABOVE IS
+    /// -- `OnChange`'s own dispatch is one more `desktop.Clock.OnFrame`
+    /// listener under the hood, registered the same way.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_on_change_fires_on_its_own_actions() {
+        let _ = crate::library::take_load_requests();
+        let _ = crate::library::take_unload_requests();
+
+        let target = InstalledFixture::new("onchange-target", "id = \"lib-onchange-target\"\n", PLAIN);
+
+        let manager = BundledFixture::new(
+            "library-onchange",
+            "id = \"plain\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let library: mlua::Table = dew.get("Library").expect("Library installed");
+        let on_change: mlua::Function = library.get("OnChange").expect("OnChange installed");
+        let set_enabled: mlua::Function = library.get("SetEnabled").expect("SetEnabled installed");
+
+        lua.globals()
+            .set("__onchange_calls", 0i64)
+            .expect("set global");
+        let callback = lua
+            .create_function(|lua, ()| {
+                let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+                lua.globals().set("__onchange_calls", calls + 1)
+            })
+            .expect("create callback");
+        on_change.call::<()>(callback).expect("OnChange call");
+
+        // THE BASELINE IS READ AT GRANT TIME. Ticking now, before anything
+        // changes, must not fire it -- otherwise every applet holding
+        // `library` would see a spurious first call for whatever changed
+        // before it ever mounted.
+        for _ in 0..5 {
+            services::tick(&loaded.clock, 0.0);
+        }
+        let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+        assert_eq!(
+            calls, 0,
+            "OnChange must not fire for a change that predates its own registration"
+        );
+
+        // Not running in this test, so this is a disk write only --
+        // `set_enabled` bumps the generation directly regardless.
+        let result: mlua::Table = set_enabled
+            .call((target.id.clone(), false))
+            .expect("SetEnabled call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+
+        let mut fired = false;
+        for _ in 0..50 {
+            services::tick(&loaded.clock, 0.0);
+            let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+            if calls > 0 {
+                fired = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(fired, "OnChange never fired after SetEnabled changed the library");
+
+        let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+        assert_eq!(
+            calls, 1,
+            "OnChange must fire exactly once per change, not once per frame the generation stays different"
+        );
+    }
+
+    /// THE CROSS-PROCESS HALF: a bare ping to `DewLibraryChanged`, with
+    /// nothing going through `dew.Library` at all, still bumps the
+    /// generation -- this is what lets a separate `dew install`/`dew
+    /// uninstall` process reach an already-running coordinator's dashboard.
+    /// See `coordinator::notify_library_changed`'s own doc comment.
+    ///
+    /// `spawn_library_changed_server` IS STARTED DIRECTLY, not through
+    /// `coordinator::run` -- `run` acquires the single-instance mutex and
+    /// would collide with a real `dew` process on this machine; the pipe
+    /// server itself does not, and is the one thing this test needs.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_changed_pipe_bumps_the_generation_from_any_process() {
+        crate::coordinator::spawn_library_changed_server();
+        // GIVEN A MOMENT TO START LISTENING before the first ping --
+        // `CreateNamedPipeW` runs on the spawned thread, not before this
+        // call returns.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let before = crate::library::generation();
+        crate::coordinator::notify_library_changed();
+
+        let mut bumped = false;
+        for _ in 0..100 {
+            if crate::library::generation() != before {
+                bumped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            bumped,
+            "a ping to DewLibraryChanged must bump the generation within one second"
+        );
+    }
+
     /// `dew.Account`'S TWO CALLS, against a real (fixture) session file --
     /// `platform::save_session` writes through the same DPAPI encryption a
     /// real `dew login` would, so this proves `Whoami` against the actual

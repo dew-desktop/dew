@@ -278,18 +278,23 @@ local function buildLibraryRow(entry: LibraryEntry)
 		Color3.fromRGB(240, 214, 214)
 	)
 
+	-- NEITHER HANDLER REBUILDS THE ROW LIST ITSELF (milestone 26 sprint 2;
+	-- both used to call `rebuildLibraryRows()` here directly). `library.OnChange`
+	-- below does that now, for every change regardless of source -- these
+	-- two clicks are just one more source of one, the same as a terminal
+	-- running `dew install` is. Only the STATUS MESSAGE is this handler's
+	-- own to set, since `OnChange` has no way to know what a caller's own
+	-- action was trying to do.
 	toggleButton.Activated:Connect(function()
 		local result = library.SetEnabled(entry.id, not entry.running)
 		libraryStatus.Text = if result.ok
 			then `{if entry.running then "Disabled" else "Enabled"} '{entry.id}'`
 			else result.error
-		rebuildLibraryRows()
 	end)
 
 	uninstallButton.Activated:Connect(function()
 		local result = library.Uninstall(entry.id)
 		libraryStatus.Text = if result.ok then `Uninstalled '{entry.id}'` else result.error
-		rebuildLibraryRows()
 	end)
 end
 
@@ -306,6 +311,27 @@ local function refreshLibrary()
 	local count = rebuildLibraryRows()
 	libraryStatus.Text = if count == 0 then "No applets installed yet -- see the Store tab" else ""
 end
+
+-- THE ONE PLACE THE ROW LIST ACTUALLY GETS REBUILT, other than an explicit
+-- Refresh click or the initial load below. Fires for a change from ANY
+-- source: this dashboard's own Launch/Toggle/Uninstall, a crash, a plain
+-- tray unload, or a separate `dew install`/`dew uninstall` run from a
+-- terminal against this same running service (milestone 26) -- the point
+-- of building it this way rather than re-polling on a timer.
+--
+-- NEVER TOUCHES `libraryStatus.Text` EXCEPT WHEN THE LIST IS EMPTY.
+-- Clobbering it on every change would erase the result message a button's
+-- own handler just set, one frame later -- the exact bug fixed earlier this
+-- milestone for the manual-refresh case, reachable again here if this
+-- called `refreshLibrary()` instead of `rebuildLibraryRows()` directly.
+local function onLibraryChanged()
+	local count = rebuildLibraryRows()
+	if count == 0 then
+		libraryStatus.Text = "No applets installed yet -- see the Store tab"
+	end
+end
+
+library.OnChange(onLibraryChanged)
 
 libraryRefreshButton.Activated:Connect(refreshLibrary)
 

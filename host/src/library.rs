@@ -16,8 +16,41 @@
 
 use crate::manifest::Manifest;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// Bumped every time anything this module knows of would change what
+/// `list()` returns. `dew.Library.OnChange` (`capabilities.rs`) is a
+/// generation counter comparison, not a drained queue -- see that arm's own
+/// doc comment for why a queue would starve every registration but the
+/// first to read it. THREE THINGS BUMP THIS, on purpose:
+///
+/// 1. `launch`/`uninstall`/`set_enabled` below, directly, in-process --
+///    covers `dew.Library`'s own calls, from whichever applet made them,
+///    including in a hermetic test where nothing else here runs at all.
+/// 2. `coordinator.rs`'s own registry-change point, for a start/stop with no
+///    paired disk write (a crash, a plain tray unload, the moment `launch`'s
+///    own queued load actually lands).
+/// 3. `installed::install`/`uninstall`/`set_enabled`, via a ping to the
+///    `DewLibraryChanged` pipe `coordinator.rs` owns -- the one path that
+///    reaches this from a SEPARATE PROCESS (`dew install`/`dew uninstall`
+///    run from a terminal against an already-running service).
+///
+/// (1) and (3) overlap for a `dew.Library` call that goes through
+/// `installed::*` (most of them): the generation bumps twice for one
+/// change. Harmless -- a registration that sees the same "changed" answer
+/// on its next two checks just re-renders once more than strictly needed,
+/// which is not observable next to the alternative of a missed one.
+static GENERATION: AtomicU64 = AtomicU64::new(0);
+
+pub fn bump_generation() {
+    GENERATION.fetch_add(1, Ordering::SeqCst);
+}
+
+pub fn generation() -> u64 {
+    GENERATION.load(Ordering::SeqCst)
+}
 
 /// How long `uninstall` and `set_enabled` wait for a live load/unload they
 /// queued to actually land before giving up. A queued request is drained
@@ -122,6 +155,7 @@ pub fn launch(id: &str) -> Result<(), String> {
         .map(|e| e.dir)
         .ok_or_else(|| format!("no applet installed with id '{id}'"))?;
     LOAD_QUEUE.lock().expect("library load queue").push(dir);
+    bump_generation();
     Ok(())
 }
 
@@ -142,7 +176,9 @@ pub fn uninstall(id: &str) -> Result<(), String> {
         wait_until_running_is(id, false)
             .map_err(|_| format!("'{id}' did not stop in time to uninstall; try again"))?;
     }
-    crate::installed::uninstall(id)
+    crate::installed::uninstall(id)?;
+    bump_generation();
+    Ok(())
 }
 
 /// Polls `query_running` until it agrees with `want_running` or
@@ -176,6 +212,11 @@ fn wait_until_running_is(id: &str, want_running: bool) -> Result<(), String> {
 pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     let running = crate::coordinator::query_running(id)?;
     crate::installed::set_enabled(id, enabled)?;
+    // BUMPED HERE, BEFORE THE WAIT BELOW -- the disk write already
+    // succeeded, so a listener's `List()` already has a new answer even if
+    // the wait below times out. A live load/unload actually landing bumps
+    // it again, from `coordinator.rs`'s own registry-change point.
+    bump_generation();
 
     if enabled && !running {
         let dir = crate::installed::list()
