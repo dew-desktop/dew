@@ -83,7 +83,21 @@ impl Presenter {
             (dcomp_device, dcomp_target, visual)
         };
 
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // VALIDATION OFF BY DEFAULT, EVEN IN A DEV BUILD. `wgpu`'s own
+        // default (`InstanceFlags::from_build_config`) turns D3D12
+        // validation on whenever `debug_assertions` is set, which is every
+        // `cargo run`/`cargo build` in this workspace regardless of the
+        // `[profile.dev.package."*"]` opt-level override -- and validation
+        // is documented as adding real per-call overhead to exactly the
+        // calls a live resize repeats every message (`configure`,
+        // `write_texture`, `present`). `with_env()` still honours
+        // `WGPU_VALIDATION=1` for whoever is actually chasing a `wgpu`-level
+        // bug, which is what the flag is for; a live-resize feel test is not
+        // that, and should not pay development tooling's cost by default.
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            flags: wgpu::InstanceFlags::empty().with_env(),
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
 
         // SAFETY: `visual` is a valid `IDCompositionVisual`, kept alive for
         // exactly as long as the `Presenter` that owns both it and the

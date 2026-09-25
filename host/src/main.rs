@@ -1597,18 +1597,42 @@ fn run_applet(
         // of whichever monitor this window is actually on happens to be,
         // rather than a number picked in this file.
         dew_window::set_live_resize_hook(move |w, h| {
+            let t0 = Instant::now();
             window.borrow_mut().resized(w, h);
+            let t_resized = t0.elapsed();
 
+            let t1 = Instant::now();
             let mut renderer = renderer.borrow_mut();
             renderer.resize(w, h);
-            if renderer.frame(0.0).unwrap_or(false) {
+            let t_resize = t1.elapsed();
+
+            let t2 = Instant::now();
+            let painted = renderer.frame(0.0).unwrap_or(false);
+            let t_frame = t2.elapsed();
+
+            let t3 = Instant::now();
+            if painted {
                 if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
                     window.borrow_mut().present(bgra, w, h);
                 }
             }
+            let t_present = t3.elapsed();
             drop(renderer);
 
             let _ = unsafe { DwmFlush() };
+
+            // GATED ON `--stats`, NOT PRINTED UNCONDITIONALLY: this fires on
+            // every message during a live drag, which is far too often for
+            // a print nobody asked to see. `Window::resized` is where
+            // `Presenter::configure` lives -- wgpu's own doc on `configure`
+            // says it waits for the GPU to come idle before resizing the
+            // swap chain, which a steady-state `--bench` reading (constant
+            // size, `configure` called once) cannot show at all.
+            if stats {
+                println!(
+                    "[dew] resize {w}x{h} | resized {t_resized:?} | resize {t_resize:?} | frame {t_frame:?} | present {t_present:?}"
+                );
+            }
         });
     }
 
