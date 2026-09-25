@@ -85,6 +85,18 @@ pub fn take_unload_requests() -> Vec<String> {
     std::mem::take(&mut *UNLOAD_QUEUE.lock().expect("library unload queue"))
 }
 
+/// Queue `id` for a live unload. THE ONLY WRITER OF `UNLOAD_QUEUE`, called
+/// from exactly one place: `coordinator::spawn_unload_server`'s pipe
+/// receipt handler (milestone 26). `uninstall`/`set_enabled` below reach
+/// this indirectly, through `coordinator::request_unload` -- even when
+/// they are running in the same process as the coordinator (`dew.Library`'s
+/// own calls), not just when a separate `dew uninstall` invocation is. One
+/// path for populating this queue, used identically by every caller, is
+/// simpler to reason about than two.
+pub(crate) fn queue_unload_request(id: String) {
+    UNLOAD_QUEUE.lock().expect("library unload queue").push(id);
+}
+
 /// One row `dew.Library.List()` hands back: `installed::list()`'s own
 /// id/dir/enabled, plus the name and description only that entry's own
 /// manifest carries, plus whether it is actually running under this
@@ -163,16 +175,18 @@ pub fn launch(id: &str) -> Result<(), String> {
 /// live first -- the same request `set_enabled(id, false)` makes -- and
 /// this call waits for that to actually land before touching its
 /// directory on disk, rather than deleting files out from under a thread
-/// that might still be reading them. `dew uninstall` (the CLI) still
-/// refuses outright rather than doing this itself, because it has no
-/// coordinator of its own to ask for a live unload in the first place; this
-/// call does.
+/// that might still be reading them.
+///
+/// THIS IS `dew uninstall` (the CLI) TOO, NOW (milestone 26 follow-up) --
+/// `main.rs`'s `execute_uninstall` calls this function directly rather than
+/// its own copy of the same dance, which is what makes `coordinator::
+/// request_unload` go through a pipe even for `dew.Library`'s own in-process
+/// callers: the CLI is a different process and has no other way to reach
+/// `UNLOAD_QUEUE`, so this function cannot special-case "am I in the same
+/// process as the coordinator or not" and still be one function.
 pub fn uninstall(id: &str) -> Result<(), String> {
     if crate::coordinator::query_running(id)? {
-        UNLOAD_QUEUE
-            .lock()
-            .expect("library unload queue")
-            .push(id.to_string());
+        crate::coordinator::request_unload(id)?;
         wait_until_running_is(id, false)
             .map_err(|_| format!("'{id}' did not stop in time to uninstall; try again"))?;
     }
@@ -227,10 +241,7 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
         LOAD_QUEUE.lock().expect("library load queue").push(dir);
         wait_until_running_is(id, true)?;
     } else if !enabled && running {
-        UNLOAD_QUEUE
-            .lock()
-            .expect("library unload queue")
-            .push(id.to_string());
+        crate::coordinator::request_unload(id)?;
         wait_until_running_is(id, false)?;
     }
 

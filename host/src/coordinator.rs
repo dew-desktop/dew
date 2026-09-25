@@ -72,6 +72,17 @@ const QUERY_PIPE_NAME: &str = r"\\.\pipe\DewQuery";
 /// `library::bump_generation` is the only thing a receipt does.
 const LIBRARY_CHANGED_PIPE_NAME: &str = r"\\.\pipe\DewLibraryChanged";
 
+/// A fourth pipe, inbound like `PIPE_NAME` and `LIBRARY_CHANGED_PIPE_NAME`.
+/// Carries an applet id to unload live, straight into `library.rs`'s own
+/// `UNLOAD_QUEUE` -- the same queue `coordinator::run`'s main loop already
+/// drains for `dew.Library.SetEnabled`/`Uninstall`'s in-process calls.
+/// `request_unload` (below) is what `library::uninstall`/`set_enabled` call
+/// now, INSTEAD OF pushing to that queue directly, so the identical
+/// mechanism serves a caller in the same process (the dashboard) and one in
+/// a different process (`dew uninstall`, run from a terminal) without
+/// either needing to know which it is.
+const UNLOAD_PIPE_NAME: &str = r"\\.\pipe\DewUnload";
+
 /// Whether this invocation is the one Dew process, or a request handed to it.
 pub enum Role {
     /// The first `dew run` reaching this machine. Holds the mutex alive for
@@ -181,6 +192,37 @@ pub fn notify_library_changed() {
     unsafe {
         let _ = CloseHandle(handle);
     }
+}
+
+/// Ask a running coordinator to unload `id` live. UNLIKE
+/// `notify_library_changed`, a missing listener here IS an error --
+/// `library::uninstall`/`set_enabled` only ever call this after
+/// `query_running(id)` already said a coordinator has `id` loaded, so a
+/// connection failure now means that answer changed underneath the caller
+/// (the coordinator exited in the gap between the two calls), not "nothing
+/// needs telling." The caller still has to wait for the unload to actually
+/// land (`library::wait_until_running_is`) -- this only delivers the ask.
+pub fn request_unload(id: &str) -> Result<(), String> {
+    let pipe_name = wide(UNLOAD_PIPE_NAME);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(pipe_name.as_ptr()),
+            FILE_GENERIC_WRITE.0,
+            FILE_SHARE_MODE::default(),
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    }
+    .map_err(|e| format!("could not reach the running Dew service to unload '{id}': {e}"))?;
+
+    let wrote = unsafe { WriteFile(handle, Some(id.as_bytes()), None, None) };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    wrote.map_err(|e| format!("could not reach the running Dew service to unload '{id}': {e}"))?;
+    Ok(())
 }
 
 /// Ask a running coordinator whether `id` is one of its currently loaded
@@ -386,6 +428,51 @@ pub(crate) fn spawn_library_changed_server() {
     });
 }
 
+/// Answer `request_unload` calls forever. What arrives IS inspected here,
+/// unlike `LIBRARY_CHANGED_PIPE_NAME`'s server -- it is the applet id to
+/// unload, pushed straight into `library::queue_unload_request`, the same
+/// queue `coordinator::run`'s main loop already drains for `dew.Library`'s
+/// own in-process calls to `SetEnabled`/`Uninstall`.
+fn spawn_unload_server() {
+    thread::spawn(move || loop {
+        let name = wide(UNLOAD_PIPE_NAME);
+        let handle = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(name.as_ptr()),
+                PIPE_ACCESS_INBOUND,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                0,
+                4096,
+                0,
+                None,
+            )
+        };
+        if handle.is_invalid() {
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+
+        let connected = unsafe { ConnectNamedPipe(handle, None) };
+        let ok = connected.is_ok() || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+        if ok {
+            let mut buf = [0u8; 4096];
+            let mut read = 0u32;
+            let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
+            if got.is_ok() && read > 0 {
+                if let Ok(id) = std::str::from_utf8(&buf[..read as usize]) {
+                    crate::library::queue_unload_request(id.to_string());
+                }
+            }
+        }
+
+        unsafe {
+            let _ = DisconnectNamedPipe(handle);
+            let _ = CloseHandle(handle);
+        }
+    });
+}
+
 /// One applet the coordinator currently has loaded.
 struct Loaded {
     /// Shown in the tray menu. The directory's own name, not the manifest's
@@ -489,6 +576,8 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
     spawn_query_server();
 
     spawn_library_changed_server();
+
+    spawn_unload_server();
 
     // A TRAY THAT FAILS TO CREATE DOES NOT STOP THE SERVICE. `crate::run_applet`
     // used to make the same choice for the single-applet tray it created;

@@ -2046,9 +2046,11 @@ fn execute_package(dir: PathBuf, output: Option<PathBuf>) -> Result<(), String> 
     }
 }
 
-/// Remove an installed applet from the store. Refuses if that id is
-/// currently running in an active coordinator, so `dew uninstall` never
-/// leaves a running applet with no installed copy behind it.
+/// Remove an installed applet from the store. If it is currently running in
+/// an active coordinator, that coordinator is asked to unload it live
+/// first -- the same request the dashboard's own Library tab makes -- so
+/// `dew uninstall` never leaves a running applet with no installed copy
+/// behind it, and never needs a person to close it by hand first either.
 fn execute_uninstall(id: String) -> Result<(), String> {
     #[cfg(not(windows))]
     {
@@ -2058,16 +2060,14 @@ fn execute_uninstall(id: String) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        if coordinator::query_running(&id)? {
-            return Err(format!(
-                "'{id}' is currently running; exit it (or exit Dew) before uninstalling"
-            ));
-        }
-        installed::uninstall(&id)?;
+        // THE SAME FUNCTION THE DASHBOARD'S UNINSTALL BUTTON CALLS, not a
+        // second copy of "ask for a live unload, wait, then delete" here --
+        // see `library::uninstall`'s own doc comment for why that function
+        // has to reach `UNLOAD_QUEUE` through a pipe now, unconditionally,
+        // rather than special-casing this CLI call as the one caller
+        // outside the coordinator's own process.
+        library::uninstall(&id)?;
         println!("[dew] uninstalled '{id}'");
-        println!(
-            "[dew] a Dew service already running keeps what it started with until it is restarted"
-        );
         Ok(())
     }
 }
