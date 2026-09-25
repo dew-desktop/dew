@@ -19,10 +19,6 @@ use std::collections::HashMap;
 
 pub struct RasterPainter {
     canvas: Canvas,
-    /// Kept so a resize can rebuild `canvas` on the same backend it was
-    /// created with -- `Canvas::new` takes this by value and `Canvas` itself
-    /// exposes no way to ask a live one which backend it is.
-    backend: Backend,
     /// The face used for every run. One font for now, deliberately: the display
     /// list carries no font name yet, so pretending to select one would be a
     /// second place for text to diverge between hosts.
@@ -52,30 +48,24 @@ impl RasterPainter {
     pub fn new(width: u32, height: u32, backend: Backend) -> Option<Self> {
         Some(RasterPainter {
             canvas: Canvas::new(width, height, backend)?,
-            backend,
             font: None,
             uploaded: HashMap::new(),
         })
     }
 
-    /// Rebuild the drawing surface at a new size, e.g. when the window it is
-    /// presented into was resized.
+    /// Resize the drawing surface, e.g. when the window it is presented
+    /// into was resized.
     ///
-    /// A FRESH `Canvas`, NOT AN IN-PLACE RESIZE -- `dew_raster`'s `Surface`
-    /// has no resize entry point of its own, so this pays the same
-    /// allocation `RasterPainter::new` already pays once at mount, just
-    /// again. `uploaded` is untouched: an image id is a handle into the
-    /// rasteriser's own store, not into this specific `Canvas`, so nothing
-    /// here needs re-uploading just because the surface it eventually draws
-    /// onto changed size.
+    /// AN IN-PLACE RESIZE, NOT A FRESH `Canvas` -- `Canvas::new` used to run
+    /// here, which for the vello backend rebuilt its glyph cache from empty
+    /// on every single message of a live drag. Measured at 25-40ms on a
+    /// window with real text, against microseconds once `Canvas::resize`
+    /// carries that cache across instead. `uploaded` is untouched either
+    /// way: an image id is a handle into the rasteriser's own store, not
+    /// into this specific `Canvas`, so nothing here needs re-uploading just
+    /// because the surface it eventually draws onto changed size.
     pub fn resize(&mut self, width: u32, height: u32) -> bool {
-        match Canvas::new(width, height, self.backend) {
-            Some(canvas) => {
-                self.canvas = canvas;
-                true
-            }
-            None => false,
-        }
+        self.canvas.resize(width, height)
     }
 
     /// Use this font for text.
