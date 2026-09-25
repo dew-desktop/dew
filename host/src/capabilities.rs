@@ -537,17 +537,19 @@ pub fn build(
             #[cfg(not(windows))]
             Permission::Library => {}
 
-            // `dew.Account` (milestone 25 sprint 2), `Permission::Auth`'s
-            // first real content -- sign-in itself stays Win32-only in
-            // `manage.rs`, but reading who is signed in and signing out are
-            // both small enough not to need that surface.
+            // `dew.Account`. `Whoami`/`SignOut` (milestone 25 sprint 2) are
+            // synchronous, like `dew.Library` above and for the same reason:
+            // `platform::load_session()`/`clear_session()` are local,
+            // DPAPI-encrypted file operations, no network call, so neither
+            // needs a trigger-and-poll shape any more than `Discover`/
+            // `Install`'s own reasoning would ask of it.
             //
-            // BOTH SYNCHRONOUS, LIKE `dew.Library` ABOVE AND FOR THE SAME
-            // REASON. `platform::load_session()` is a local, DPAPI-encrypted
-            // file read -- no network call -- so `Whoami` needs no
-            // trigger-and-poll shape any more than `Discover`/`Install`'s
-            // own reasoning would ask of it. `platform::clear_session()` is
-            // just as local.
+            // `SignIn` (milestone 26 sprint 3) IS a network call --
+            // `platform::login` -- so it is trigger-with-callback, the same
+            // shape Sprint 1 gave `Discover`/`Install`, not a third shape
+            // invented just for this. Sign-in stayed Win32-only in
+            // `manage.rs` through milestone 25 only because this shape did
+            // not exist yet to build it in.
             #[cfg(windows)]
             Permission::Auth => {
                 let account = dew_subtable(lua, "Account")?;
@@ -572,6 +574,50 @@ pub fn build(
                         Ok(())
                     })?,
                 )?;
+
+                let in_flight = Arc::new(AtomicBool::new(false));
+                let result: Arc<Mutex<Option<Result<(), String>>>> = Arc::new(Mutex::new(None));
+                let pending: Arc<Mutex<Option<LuaFunction>>> = Arc::new(Mutex::new(None));
+
+                let trigger_flight = Arc::clone(&in_flight);
+                let trigger_result = Arc::clone(&result);
+                let trigger_pending = Arc::clone(&pending);
+                account.set(
+                    "SignIn",
+                    lua.create_function(
+                        move |_, (email, password, callback): (String, String, LuaFunction)| {
+                            *trigger_pending.lock().expect("signin callback") = Some(callback);
+                            if !trigger_flight.swap(true, Ordering::SeqCst) {
+                                *trigger_result.lock().expect("signin result") = None;
+                                let flight = Arc::clone(&trigger_flight);
+                                let slot = Arc::clone(&trigger_result);
+                                std::thread::spawn(move || {
+                                    let outcome =
+                                        crate::platform::login(&email, &password).map(|_| ());
+                                    *slot.lock().expect("signin result") = Some(outcome);
+                                    flight.store(false, Ordering::SeqCst);
+                                });
+                            }
+                            Ok(())
+                        },
+                    )?,
+                )?;
+
+                let checker_result = Arc::clone(&result);
+                let checker_pending = Arc::clone(&pending);
+                let checker = lua.create_function(move |lua, _dt: f64| {
+                    let Some(outcome) = checker_result.lock().expect("signin result").take()
+                    else {
+                        return Ok(());
+                    };
+                    let Some(callback) = checker_pending.lock().expect("signin callback").take()
+                    else {
+                        return Ok(());
+                    };
+                    let table = result_table(lua, outcome)?;
+                    callback.call::<()>(table)
+                })?;
+                register_frame_checker(&desktop, checker)?;
             }
             #[cfg(not(windows))]
             Permission::Auth => {}

@@ -1120,6 +1120,50 @@ pub mod tests {
         );
     }
 
+    /// `dew.Account.SignIn` NEVER BLOCKS THE CALLING THREAD (milestone 26
+    /// sprint 3), proven the same way `Discover`/`Install`'s own test proves
+    /// it for themselves. UNLIKE THOSE TWO, THIS CANNOT ALSO ASSERT ON THE
+    /// EVENTUAL ANSWER without a real network dependency: `platform::login`
+    /// has no `require_session` shortcut to fail on before ever reaching the
+    /// network -- signing in is the thing that establishes a session, so
+    /// there is no "not signed in" refusal to hermetically rely on here the
+    /// way `Discover`'s own test does. What this proves instead: the
+    /// trigger call itself returns immediately regardless of what the
+    /// network eventually says, and it is a real callback that is stored,
+    /// not called inline.
+    #[cfg(windows)]
+    #[test]
+    fn dew_account_sign_in_never_blocks_the_caller() {
+        let fixture = BundledFixture::new(
+            "account-signin-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"auth\"]\n",
+            PLAIN,
+        );
+        let loaded = fixture.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let account: mlua::Table = dew.get("Account").expect("Account installed");
+        let sign_in: mlua::Function = account.get("SignIn").expect("SignIn installed");
+
+        let callback = lua
+            .create_function(|_, _result: mlua::Table| Ok(()))
+            .expect("create callback");
+
+        let started = std::time::Instant::now();
+        sign_in
+            .call::<()>((
+                "nobody@example.com".to_string(),
+                "wrong-password".to_string(),
+                callback,
+            ))
+            .expect("triggering must return immediately, never blocking on the network");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "SignIn must return before its background thread's network call could possibly complete"
+        );
+    }
+
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing
     /// nothing -- the same choice an unknown permission makes.
     #[test]

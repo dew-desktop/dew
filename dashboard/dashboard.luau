@@ -3,10 +3,11 @@
 	The Dew dashboard -- Library, Store, and Account in one window
 	(milestone 25), grown from milestone 23's marketplace-only browser. The
 	Store tab below is that original browser, moved under a tab and
-	otherwise untouched; Library and Account are new, built on
-	`dew.Library` and `dew.Account` (ADR-017/ADR-018). `manage.rs`'s Win32
-	window still owns sign-IN itself -- this reads and acts on state that
-	already exists, the same boundary `dew.Account` draws.
+	otherwise untouched; Library and Account are built on `dew.Library` and
+	`dew.Account` (ADR-017/ADR-018). Account's own sign-in form (milestone
+	26 sprint 3) is what finally lets this window replace `manage.rs`'s
+	Win32 one, rather than only reading state that window still had to
+	create.
 
 	Bundled with the host rather than installed like a marketplace package
 	-- `dew.toml` asks for `discover`, `install`, `library` and `auth`,
@@ -481,44 +482,157 @@ status.Text = "Loading..."
 marketplace.Discover(onDiscovered)
 
 --------------------------------------------------------------------------
--- ACCOUNT: who is signed in, and a way to sign out. Sign-IN stays in
--- `manage.rs`'s Win32 window / `dew login` for this milestone -- see the
--- vision overview -- so a signed-out state points there rather than
--- offering a form this tab cannot back.
+-- ACCOUNT: who is signed in, a way to sign out, and -- new this milestone
+-- -- a way to sign IN, without a terminal. `dew.Account.SignIn` is
+-- trigger-with-callback (the same shape Sprint 1 gave `Discover`/`Install`),
+-- since `platform::login` is a real network call.
+--
+-- KNOWN LIMITATION, WORTH REVISITING: the password field below is a plain
+-- `TextBox`, not masked. This DataModel's own `TextBox` has no password/
+-- masking property the way `manage.rs`'s native `ES_PASSWORD` Win32 field
+-- did -- carrying that behavior over means intercepting every keystroke and
+-- substituting a placeholder character while tracking the real value
+-- separately, which is real work this sprint did not do. Flagged rather
+-- than silently shipped.
 --------------------------------------------------------------------------
 
 label(accountTab, "Title", UDim2.new(0, 16, 0, 12), UDim2.new(1, -32, 0, 24), 18, Color3.fromRGB(233, 239, 249)).Text =
 	"Account"
 
+-- SIGNED-IN STATE.
 local accountStatus =
-	label(accountTab, "Status", UDim2.new(0, 16, 0, 52), UDim2.new(1, -32, 0, 60), 13, Color3.fromRGB(206, 222, 246))
+	label(accountTab, "Status", UDim2.new(0, 16, 0, 52), UDim2.new(1, -32, 0, 24), 13, Color3.fromRGB(206, 222, 246))
 accountStatus.TextWrapped = true
-accountStatus.TextYAlignment = Enum.TextYAlignment.Top
 
 local signOutButton = button(
 	accountTab,
 	"SignOut",
-	UDim2.new(0, 16, 0, 116),
+	UDim2.new(0, 16, 0, 84),
 	UDim2.new(0, 96, 0, 28),
 	"Sign out",
 	Color3.fromRGB(90, 48, 48),
 	Color3.fromRGB(240, 214, 214)
 )
 
+-- SIGNED-OUT STATE: a plain sign-in form. Built once, alongside the
+-- signed-in controls above, and toggled by `refreshAccount` -- the same
+-- "both sets exist, only one is visible" shape `manage.rs`'s own
+-- `create_login_section` already used for the identical two states.
+local emailLabel =
+	label(accountTab, "EmailLabel", UDim2.new(0, 16, 0, 52), UDim2.new(0, 70, 0, 20), 12, Color3.fromRGB(146, 162, 188))
+emailLabel.Text = "Email:"
+
+local emailBox = Instance.new("TextBox")
+emailBox.Name = "Email"
+emailBox.Position = UDim2.new(0, 90, 0, 50)
+emailBox.Size = UDim2.new(1, -106, 0, 24)
+emailBox.BackgroundColor3 = Color3.fromRGB(28, 31, 40)
+emailBox.TextColor3 = Color3.fromRGB(233, 239, 249)
+emailBox.PlaceholderText = "you@example.com"
+emailBox.PlaceholderColor3 = Color3.fromRGB(110, 122, 140)
+emailBox.TextSize = 12
+emailBox.ClearTextOnFocus = false
+emailBox.Text = ""
+emailBox.Parent = accountTab
+
+local passwordLabel = label(
+	accountTab,
+	"PasswordLabel",
+	UDim2.new(0, 16, 0, 84),
+	UDim2.new(0, 70, 0, 20),
+	12,
+	Color3.fromRGB(146, 162, 188)
+)
+passwordLabel.Text = "Password:"
+
+local passwordBox = Instance.new("TextBox")
+passwordBox.Name = "Password"
+passwordBox.Position = UDim2.new(0, 90, 0, 82)
+passwordBox.Size = UDim2.new(1, -106, 0, 24)
+passwordBox.BackgroundColor3 = Color3.fromRGB(28, 31, 40)
+passwordBox.TextColor3 = Color3.fromRGB(233, 239, 249)
+passwordBox.PlaceholderText = "Password"
+passwordBox.PlaceholderColor3 = Color3.fromRGB(110, 122, 140)
+passwordBox.TextSize = 12
+passwordBox.ClearTextOnFocus = false
+passwordBox.Text = ""
+passwordBox.Parent = accountTab
+
+local signInButton = button(
+	accountTab,
+	"SignIn",
+	UDim2.new(0, 16, 0, 116),
+	UDim2.new(0, 96, 0, 28),
+	"Sign in",
+	Color3.fromRGB(38, 52, 74),
+	Color3.fromRGB(206, 222, 246)
+)
+
+local signInError =
+	label(accountTab, "SignInError", UDim2.new(0, 16, 0, 152), UDim2.new(1, -32, 0, 40), 11, Color3.fromRGB(224, 148, 148))
+signInError.Text = ""
+signInError.TextWrapped = true
+signInError.TextYAlignment = Enum.TextYAlignment.Top
+
+local function setSignInFormVisible(visible: boolean)
+	emailLabel.Visible = visible
+	emailBox.Visible = visible
+	passwordLabel.Visible = visible
+	passwordBox.Visible = visible
+	signInButton.Visible = visible
+	signInError.Visible = visible
+end
+
 local function refreshAccount()
 	local session = account.Whoami()
 	if session then
 		accountStatus.Text = `Signed in as {session.email}`
+		accountStatus.Visible = true
 		signOutButton.Visible = true
+		setSignInFormVisible(false)
 	else
-		accountStatus.Text = "Not signed in. Run `dew login` from a terminal to sign in."
+		accountStatus.Visible = false
 		signOutButton.Visible = false
+		setSignInFormVisible(true)
 	end
 end
 
 signOutButton.Activated:Connect(function()
 	account.SignOut()
 	refreshAccount()
+end)
+
+-- GUARDED THE SAME WAY `manage.rs`'s OWN `SIGNIN_IN_FLIGHT` GUARDED ITS
+-- button: a second click before the first request returns is ignored
+-- rather than starting a second sign-in, and the button's own label says
+-- so while one is outstanding.
+local signInInFlight = false
+
+signInButton.Activated:Connect(function()
+	if signInInFlight then
+		return
+	end
+	local email = emailBox.Text
+	local password = passwordBox.Text
+	if email == "" or password == "" then
+		signInError.Text = "Enter an email and password"
+		return
+	end
+
+	signInInFlight = true
+	signInButton.Text = "Signing in..."
+	signInError.Text = ""
+
+	account.SignIn(email, password, function(result)
+		signInInFlight = false
+		signInButton.Text = "Sign in"
+		if result.ok then
+			passwordBox.Text = ""
+			refreshAccount()
+		else
+			signInError.Text = result.error
+		end
+	end)
 end)
 
 refreshAccount()
