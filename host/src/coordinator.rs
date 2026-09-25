@@ -495,12 +495,20 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
             changed = true;
         }
 
-        // `dew.Library.Launch`'S OWN QUEUE (milestone 25), drained the same
-        // way -- see `library.rs` for why it is not `dashboard.rs`'s.
+        // `dew.Library`'S OWN QUEUES (milestone 25), drained the same way
+        // -- see `library.rs` for why they are not `dashboard.rs`'s or
+        // `manage.rs`'s.
         for dir in crate::library::take_load_requests() {
             spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
             next_id += 1;
             changed = true;
+        }
+        for applet_id in crate::library::take_unload_requests() {
+            for loaded in registry.values() {
+                if loaded.applet_id.as_deref() == Some(applet_id.as_str()) {
+                    loaded.close.store(true, Ordering::Relaxed);
+                }
+            }
         }
 
         if changed {

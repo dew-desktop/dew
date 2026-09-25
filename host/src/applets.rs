@@ -783,9 +783,10 @@ pub mod tests {
     #[test]
     fn dew_library_lists_launches_toggles_and_uninstalls_a_real_applet() {
         // DRAINED FIRST, in case an earlier test on this worker thread queued
-        // a load that nothing has since consumed -- `take_load_requests`
-        // asserting a queue's CONTENTS only makes sense starting from empty.
+        // a load or unload that nothing has since consumed -- asserting a
+        // queue's CONTENTS only makes sense starting from empty.
         let _ = crate::library::take_load_requests();
+        let _ = crate::library::take_unload_requests();
 
         let target = InstalledFixture::new("target", "id = \"lib-target\"\n", PLAIN);
 
@@ -845,7 +846,10 @@ pub mod tests {
         let error: String = result.get("error").expect("error field");
         assert!(error.contains("no-such-applet"), "got: {error}");
 
-        // SetEnabled(false), then List reflects it.
+        // SetEnabled(false), then List reflects it. Not running in this
+        // test (no coordinator is listening, so `query_running` reads as
+        // false), so this is a disk write only -- nothing to live-unload,
+        // and the unload queue stays empty.
         let set_enabled: mlua::Function = library.get("SetEnabled").expect("SetEnabled installed");
         let result: mlua::Table = set_enabled
             .call((target.id.clone(), false))
@@ -853,6 +857,27 @@ pub mod tests {
         assert!(result.get::<bool>("ok").expect("ok field"));
         let row = list_by_id(&library, &target.id).expect("still installed, only disabled");
         assert!(!row.get::<bool>("enabled").expect("enabled"));
+        assert!(
+            crate::library::take_unload_requests().is_empty(),
+            "disabling an applet that was never running must not queue an unload"
+        );
+
+        // SetEnabled(true), on an applet that is not running, queues a live
+        // load -- the other half of the same toggle `manage.rs`'s own
+        // checkbox already makes.
+        let result: mlua::Table = set_enabled
+            .call((target.id.clone(), true))
+            .expect("SetEnabled call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+        let row = list_by_id(&library, &target.id).expect("still installed, now re-enabled");
+        assert!(row.get::<bool>("enabled").expect("enabled"));
+        let queued = crate::library::take_load_requests();
+        assert_eq!(
+            queued.len(),
+            1,
+            "re-enabling a non-running applet must queue exactly one load"
+        );
+        assert!(queued[0].ends_with(&target.id));
 
         // Uninstall removes it from both the Luau-visible list and disk.
         let uninstall: mlua::Function = library.get("Uninstall").expect("Uninstall installed");
