@@ -206,7 +206,20 @@ pub fn install(source: &Path, force: bool) -> Result<String, String> {
 /// this function's question, the same way `uninstall` leaves it to the
 /// caller -- the management window decides separately whether the change
 /// means live-loading or live-unloading it.
+///
+/// `valid_id` IS CHECKED HERE TOO, NOT ONLY IN `install`. `applets_dir()?
+/// .join(id)` with an absolute path (`C:\...`, or one starting `\`) does not
+/// error and does not stay under `applets_dir()` -- `PathBuf::join` REPLACES
+/// the base entirely for an absolute argument, so an unchecked `id` here
+/// pointed `dest` at an arbitrary real directory elsewhere on disk, and
+/// `uninstall`'s own `remove_dir_all(&dest)` deleted it for real. Confirmed
+/// the hard way: `dew uninstall C:\...\examples\host\basic-widget` deleted
+/// that actual source directory, since `applets_dir()` happens to be on the
+/// same drive and the join discarded it entirely.
 pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err(format!("{id:?} is not a valid installed applet id"));
+    }
     let dest = applets_dir()
         .ok_or("could not find a per-user data directory")?
         .join(id);
@@ -224,7 +237,14 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
 /// Remove `id` from the store and forget its enabled bit. Whether `id` is
 /// currently running in an active coordinator is not this function's
 /// question -- callers that care check `coordinator::query_running` first.
+///
+/// `valid_id` IS CHECKED HERE, THE SAME AS `set_enabled` ABOVE -- see that
+/// function's own doc comment for the incident this closes. This is the
+/// function whose unchecked `join` actually deleted a real directory.
 pub fn uninstall(id: &str) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err(format!("{id:?} is not a valid installed applet id"));
+    }
     let dest = applets_dir()
         .ok_or("could not find a per-user data directory to uninstall from")?
         .join(id);
@@ -255,5 +275,43 @@ mod tests {
         assert!(!valid_id("."));
         assert!(!valid_id(""));
         assert!(valid_id("basic-widget"));
+    }
+
+    /// REPRODUCES A REAL INCIDENT: `dew uninstall C:\...\examples\host\basic-widget`
+    /// deleted that actual source directory. `applets_dir()?.join(id)` with
+    /// an absolute path does not error and does not stay under
+    /// `applets_dir()` -- `PathBuf::join` REPLACES the base entirely for an
+    /// absolute argument (this is documented `std` behavior, not a bug in
+    /// `join` itself), so an unvalidated `id` here can point `dest` at any
+    /// real directory the process can reach. `uninstall`/`set_enabled` must
+    /// refuse before ever building that path, not merely happen to survive
+    /// this particular victim.
+    #[test]
+    fn uninstall_refuses_a_path_shaped_id_without_touching_disk() {
+        let victim = std::env::temp_dir().join("dew-installed-test-victim");
+        std::fs::create_dir_all(&victim).expect("victim dir");
+        std::fs::write(victim.join("marker.txt"), "still here").expect("marker");
+
+        let path_id = victim.to_string_lossy().into_owned();
+        let err = uninstall(&path_id).expect_err("a path-shaped id must be refused, not accepted");
+        assert!(
+            err.contains("not a valid installed applet id"),
+            "got: {err}"
+        );
+        assert!(
+            victim.join("marker.txt").is_file(),
+            "the victim directory must survive completely untouched"
+        );
+
+        std::fs::remove_dir_all(&victim).expect("cleanup");
+    }
+
+    #[test]
+    fn set_enabled_refuses_a_path_shaped_id() {
+        let err = set_enabled(r"C:\Windows", false).expect_err("a path-shaped id must be refused");
+        assert!(
+            err.contains("not a valid installed applet id"),
+            "got: {err}"
+        );
     }
 }
