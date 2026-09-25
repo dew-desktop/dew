@@ -315,14 +315,13 @@ fn spawn_pipe_server(tx: mpsc::Sender<PathBuf>) {
 
 /// The manifest ids of every applet this coordinator currently has loaded.
 /// Written by `sync_running` whenever the registry changes, and read by
-/// `query_running`'s pipe server, and by `manage.rs`'s management window on
-/// its own thread -- both need the same fact and neither is the coordinator
-/// thread that actually knows it first-hand.
+/// `query_running`'s pipe server and by `library::list()` -- neither is the
+/// coordinator thread that actually knows it first-hand.
 static RUNNING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// The manifest ids currently running under this coordinator, as of the last
-/// registry change. Read by the management window to decide whether toggling
-/// an entry on or off is a live spawn/unload or just a disk write.
+/// registry change. Read by `dew.Library` to decide whether toggling an
+/// entry on or off is a live spawn/unload or just a disk write.
 pub fn running_snapshot() -> HashSet<String> {
     RUNNING
         .lock()
@@ -657,24 +656,9 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
             }
         }
 
-        // THE MANAGE-APPLETS WINDOW'S OWN TWO QUEUES, drained the same way as
-        // the tray's -- see `manage.rs` for why toggling a row there never
-        // spawns or closes an applet directly.
-        for dir in crate::manage::take_load_requests() {
-            spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
-            next_id += 1;
-            changed = true;
-        }
-        for applet_id in crate::manage::take_unload_requests() {
-            for loaded in registry.values() {
-                if loaded.applet_id.as_deref() == Some(applet_id.as_str()) {
-                    loaded.close.store(true, Ordering::Relaxed);
-                }
-            }
-        }
-
-        // THE DASHBOARD'S OWN QUEUE (milestone 23), drained the same way --
-        // see `dashboard.rs` for why it is not `manage.rs`'s.
+        // THE DASHBOARD'S OWN QUEUE (milestone 23), drained the same way as
+        // the tray's -- see `dashboard.rs` for why it keeps its own rather
+        // than sharing `library.rs`'s below.
         for dir in crate::dashboard::take_load_requests() {
             spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
             next_id += 1;
@@ -682,8 +666,7 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
         }
 
         // `dew.Library`'S OWN QUEUES (milestone 25), drained the same way
-        // -- see `library.rs` for why they are not `dashboard.rs`'s or
-        // `manage.rs`'s.
+        // -- see `library.rs` for why they are not `dashboard.rs`'s.
         for dir in crate::library::take_load_requests() {
             spawn_applet(dir, false, false, next_id, closed_tx.clone(), &mut registry);
             next_id += 1;

@@ -897,9 +897,9 @@ pub mod tests {
         );
 
         // SetEnabled(true), on an applet that is not running, queues a live
-        // load -- the other half of the same toggle `manage.rs`'s own
-        // checkbox already makes -- and then waits for the coordinator to
-        // confirm it actually started. NO REAL COORDINATOR IS LISTENING IN
+        // load -- the other half of the same toggle -- and then waits for
+        // the coordinator to confirm it actually started. NO REAL
+        // COORDINATOR IS LISTENING IN
         // THIS TEST (see `dew_marketplace_triggers_with_a_callback_and_never_blocks`'s
         // own doc comment on what `query_running` reads as here), so
         // nothing ever drains the queue this pushes to and the wait times

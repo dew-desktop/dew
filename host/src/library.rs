@@ -1,16 +1,16 @@
 //! `dew.Library` (milestone 25 sprint 1): list, launch, uninstall and
-//! enable/disable an installed applet from Luau, the same operations
-//! `manage.rs`'s Win32 window already offers a person from the tray.
+//! enable/disable an installed applet from Luau -- the same operations a
+//! Win32 "Manage applets" window once offered from the tray, before the
+//! dashboard grew a Library tab built on this and retired it (milestone 26).
 //!
 //! ITS OWN LOAD AND UNLOAD QUEUES, drained by `coordinator::run` the same
-//! way as `manage.rs`'s and `dashboard.rs`'s own -- see `dashboard.rs` for
-//! why a queue is not shared across surfaces that ask for different
-//! reasons. The load queue is keyed by directory, like `dashboard.rs`'s
-//! own: `launch`/`set_enabled(id, true)` have already resolved an applet
-//! id to its directory by the time anything reaches it. The unload queue is
-//! keyed by manifest id, like `manage.rs`'s own: `set_enabled(id, false)`
-//! does not know or care which in-memory registry slot `id` happens to be
-//! running in.
+//! way as `dashboard.rs`'s own -- see that module for why a queue is not
+//! shared across surfaces that ask for different reasons. The load queue is
+//! keyed by directory: `launch`/`set_enabled(id, true)` have already
+//! resolved an applet id to its directory by the time anything reaches it.
+//! The unload queue is keyed by manifest id instead, since `set_enabled(id,
+//! false)` does not know or care which in-memory registry slot `id` happens
+//! to be running in.
 
 #![cfg(windows)]
 
@@ -67,14 +67,14 @@ const TRANSITION_POLL_INTERVAL: Duration = Duration::from_millis(20);
 static LOAD_QUEUE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 /// Manifest ids `set_enabled(id, false)` has asked the coordinator to
-/// unload live since the last call. BY ID, LIKE `manage.rs`'S OWN
-/// `UNLOAD_QUEUE` -- this module knows an applet the way `installed::list`
-/// names it, not by which registry slot it happens to be running in.
+/// unload live since the last call. BY ID -- this module knows an applet the
+/// way `installed::list` names it, not by which registry slot it happens to
+/// be running in.
 static UNLOAD_QUEUE: Mutex<Vec<String>> = Mutex::new(Vec::new());
 
 /// Directories `launch`/`set_enabled(id, true)` have asked the coordinator
 /// to load live since the last call. Drained, not peeked -- the same shape
-/// `dashboard.rs`'s and `manage.rs`'s own queues already use.
+/// `dashboard.rs`'s own queue already uses.
 pub fn take_load_requests() -> Vec<PathBuf> {
     std::mem::take(&mut *LOAD_QUEUE.lock().expect("library load queue"))
 }
@@ -123,8 +123,7 @@ pub struct Entry {
 /// Every installed applet, enabled or not, with its manifest read for
 /// display. A manifest that fails to load (removed, corrupted) falls back
 /// to the bare id as its name and an empty description rather than
-/// dropping the row -- the same "row survives, label degrades" choice
-/// `manage.rs`'s own `row_label` already makes.
+/// dropping the row -- a row survives, its label just degrades.
 ///
 /// `running_snapshot()` IS READ ONCE FOR THE WHOLE LIST, not once per
 /// entry -- it is an in-process read of a `Mutex<Vec<String>>`
@@ -213,9 +212,7 @@ fn wait_until_running_is(id: &str, want_running: bool) -> Result<(), String> {
 
 /// Set `id`'s enabled bit, live: disabling a running applet unloads it
 /// immediately rather than only taking effect on the next service start,
-/// and enabling one that is not running loads it -- the same live
-/// toggle `manage.rs`'s own checkbox already makes, generalized from that
-/// window's own `LOAD_QUEUE`/`UNLOAD_QUEUE` to this module's.
+/// and enabling one that is not running loads it.
 ///
 /// WAITS FOR THE LOAD/UNLOAD TO LAND, THE SAME WAY `uninstall` DOES, so
 /// that a `List()` called the instant this returns already sees the new

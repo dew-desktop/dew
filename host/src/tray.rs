@@ -58,13 +58,11 @@ static UNLOAD_QUEUE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const ID_EXIT: usize = 1000;
-const ID_MANAGE: usize = 1001;
 const ID_ABOUT: usize = 1002;
 const ID_DASHBOARD: usize = 1003;
 /// Where the per-applet unload entries start. Clear of `CAPS` (2000-2005) and
-/// `ID_EXIT`/`ID_MANAGE`, with room for far more loaded applets than the menu
-/// could ever show usefully before the low word of `WM_COMMAND`'s `wParam`
-/// runs out.
+/// `ID_EXIT`, with room for far more loaded applets than the menu could ever
+/// show usefully before the low word of `WM_COMMAND`'s `wParam` runs out.
 const ID_APPLET_BASE: usize = 3000;
 
 /// The offered caps. `None` is uncapped and is the default.
@@ -135,8 +133,6 @@ unsafe extern "system" fn tray_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let id = wp.0 & 0xFFFF;
             if id == ID_EXIT {
                 EXIT_REQUESTED.store(1, Ordering::Relaxed);
-            } else if id == ID_MANAGE {
-                crate::manage::open_or_focus();
             } else if id == ID_DASHBOARD {
                 crate::dashboard::open_or_focus();
             } else if id == ID_ABOUT {
@@ -168,12 +164,12 @@ fn about_text() -> String {
 
 /// Shows the build identifier in a message box.
 ///
-/// ITS OWN THREAD, THE SAME PATTERN `manage::open_or_focus` USES. `tray_proc`
-/// runs on the coordinator's own thread, which its `poll()` also uses to
-/// drive every loaded applet's frame loop -- `MessageBoxW` is modal and does
-/// not return until dismissed, so calling it here directly would freeze
-/// every applet's rendering for as long as the box stays open, not just the
-/// tray menu.
+/// ITS OWN THREAD, THE SAME PATTERN `dashboard::open_or_focus` USES.
+/// `tray_proc` runs on the coordinator's own thread, which its `poll()` also
+/// uses to drive every loaded applet's frame loop -- `MessageBoxW` is modal
+/// and does not return until dismissed, so calling it here directly would
+/// freeze every applet's rendering for as long as the box stays open, not
+/// just the tray menu.
 fn show_about() {
     std::thread::spawn(|| unsafe {
         let title = wide("About Dew");
@@ -205,21 +201,14 @@ unsafe fn show_menu(hwnd: HWND) {
         PCWSTR(wide("Max FPS").as_ptr()),
     );
 
-    let _ = AppendMenuW(
-        menu,
-        MF_STRING,
-        ID_MANAGE,
-        PCWSTR(wide("Manage applets").as_ptr()),
-    );
-
-    // NATIVE, ALONGSIDE THE WIN32 ONE ABOVE, not in place of it (milestone
-    // 23). `manage.rs`'s window keeps sign-in and the installed-applet
-    // list until the native surface has actually been used for a while.
+    // THE ONLY SURFACE FOR SIGN-IN, THE INSTALLED-APPLET LIST, AND THE
+    // MARKETPLACE, since milestone 26 retired `manage.rs`'s Win32 window --
+    // no longer "(preview)" now that it covers everything that window did.
     let _ = AppendMenuW(
         menu,
         MF_STRING,
         ID_DASHBOARD,
-        PCWSTR(wide("Dashboard (preview)").as_ptr()),
+        PCWSTR(wide("Dashboard").as_ptr()),
     );
 
     let _ = AppendMenuW(
@@ -230,8 +219,8 @@ unsafe fn show_menu(hwnd: HWND) {
     );
 
     // ONE ENTRY PER LOADED APPLET, EACH ITS OWN UNLOAD -- a quick unload for
-    // whatever is already running, alongside the fuller install/enable view
-    // `Manage applets` opens.
+    // whatever is already running, alongside the fuller Library tab the
+    // Dashboard entry above opens.
     let applets = APPLETS.lock().expect("tray applets").clone();
     if !applets.is_empty() {
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());

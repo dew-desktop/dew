@@ -30,8 +30,6 @@ mod installed;
 #[cfg(windows)]
 mod library;
 #[cfg(windows)]
-mod manage;
-#[cfg(windows)]
 mod package;
 #[cfg(windows)]
 mod platform;

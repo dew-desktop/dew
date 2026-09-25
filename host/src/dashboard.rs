@@ -12,11 +12,9 @@
 //! tray entry) already only cares that the directory it is handed is the
 //! coordinator's own.
 //!
-//! A SEPARATE LOAD QUEUE FROM `manage.rs`'s, drained by `coordinator::run`
-//! the same way. `manage.rs`'s `LOAD_QUEUE` belongs to that window's own
-//! row-toggle mechanism -- reusing it here would blur which surface asked
-//! for what, the same reason `tray.rs` already keeps its own
-//! `UNLOAD_QUEUE` separate from `manage.rs`'s.
+//! ITS OWN LOAD QUEUE, drained by `coordinator::run` the same way as
+//! `tray.rs`'s and `library.rs`'s own -- reusing one of theirs would blur
+//! which surface asked for what.
 
 #![cfg(windows)]
 
@@ -24,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Directories this module has asked the coordinator to load live since the
-/// last call. Drained, not peeked -- the same shape `manage.rs`'s and
-/// `tray.rs`'s own queues already use.
+/// last call. Drained, not peeked -- the same shape `tray.rs`'s own queue
+/// already uses.
 static LOAD_QUEUE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
 pub fn take_load_requests() -> Vec<PathBuf> {
@@ -65,15 +63,13 @@ fn ensure_installed() -> Result<PathBuf, String> {
 ///
 /// CALLED FROM THE TRAY'S OWN WINDOW PROCEDURE, on the coordinator thread --
 /// `ensure_installed` is a handful of small file copies, not a network call
-/// or anything else worth spawning a thread over, the same judgment
-/// `manage::open_or_focus` already makes about creating its own window
-/// inline.
+/// or anything else worth spawning a thread over.
 ///
-/// NO FOCUS-AN-EXISTING-WINDOW PATH, unlike `manage::open_or_focus`. An
-/// ordinary loaded applet's window is not tracked by id anywhere a tray
-/// click could reach it -- only `running_snapshot()` says whether one is
-/// live at all -- so a second click while it is already open is a no-op
-/// rather than a crash, not a bring-to-front.
+/// NO FOCUS-AN-EXISTING-WINDOW PATH. An ordinary loaded applet's window is
+/// not tracked by id anywhere a tray click could reach it -- only
+/// `running_snapshot()` says whether one is live at all -- so a second
+/// click while it is already open is a no-op rather than a crash, not a
+/// bring-to-front.
 pub fn open_or_focus() {
     if crate::coordinator::running_snapshot().contains("dashboard") {
         return;
