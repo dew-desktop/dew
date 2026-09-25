@@ -437,10 +437,43 @@ pub fn build(
             #[cfg(not(windows))]
             Permission::Library => {}
 
-            // Not yet reachable from Luau (deferred; sign-in stays Win32 in
-            // `manage.rs` for this milestone). Granted like the two above --
-            // `applets::load` already refused anything not bundled -- but
-            // exposes nothing yet, the same order `RbxAssetId` took.
+            // `dew.Account` (milestone 25 sprint 2), `Permission::Auth`'s
+            // first real content -- sign-in itself stays Win32-only in
+            // `manage.rs`, but reading who is signed in and signing out are
+            // both small enough not to need that surface.
+            //
+            // BOTH SYNCHRONOUS, LIKE `dew.Library` ABOVE AND FOR THE SAME
+            // REASON. `platform::load_session()` is a local, DPAPI-encrypted
+            // file read -- no network call -- so `Whoami` needs no
+            // trigger-and-poll shape any more than `Discover`/`Install`'s
+            // own reasoning would ask of it. `platform::clear_session()` is
+            // just as local.
+            #[cfg(windows)]
+            Permission::Auth => {
+                let account = dew_subtable(lua, "Account")?;
+
+                account.set(
+                    "Whoami",
+                    lua.create_function(|lua, ()| match crate::platform::load_session() {
+                        Some(session) => {
+                            let table = lua.create_table()?;
+                            table.set("email", session.email)?;
+                            table.set("userId", session.user_id)?;
+                            Ok(LuaValue::Table(table))
+                        }
+                        None => Ok(LuaValue::Nil),
+                    })?,
+                )?;
+
+                account.set(
+                    "SignOut",
+                    lua.create_function(|_, ()| {
+                        crate::platform::clear_session();
+                        Ok(())
+                    })?,
+                )?;
+            }
+            #[cfg(not(windows))]
             Permission::Auth => {}
         }
     }

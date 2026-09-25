@@ -462,6 +462,17 @@ pub mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
 
+    /// Held for the duration of every test that reads or writes the real
+    /// `session.json` -- `dew_marketplace_triggers_and_polls_without_blocking`
+    /// and `dew_account_reports_session_state_and_signs_out` both call
+    /// `platform::clear_session()`/`save_session()` against the one file on
+    /// disk, and Rust runs tests in parallel by default. Without this, one
+    /// test's fixture session can be visible to the other mid-run -- not a
+    /// hermetic failure of either test's own logic, just two tests racing on
+    /// a real, unpartitioned shared resource.
+    #[cfg(windows)]
+    static SESSION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     /// A mod on disk, in a directory of its own, removed when the test ends.
     ///
     /// The loader reads `dew.toml` and an entry module from a real directory,
@@ -706,6 +717,7 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_marketplace_triggers_and_polls_without_blocking() {
+        let _session_guard = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::platform::clear_session();
 
         let fixture = BundledFixture::new(
@@ -858,6 +870,63 @@ pub mod tests {
         // Uninstalling it again is refused: it is no longer installed.
         let result: mlua::Table = uninstall.call(target.id.clone()).expect("Uninstall call");
         assert!(!result.get::<bool>("ok").expect("ok field"));
+    }
+
+    /// `dew.Account`'S TWO CALLS, against a real (fixture) session file --
+    /// `platform::save_session` writes through the same DPAPI encryption a
+    /// real `dew login` would, so this proves `Whoami` against the actual
+    /// on-disk format rather than a stand-in for it. Synchronous throughout,
+    /// like `dew.Library` above: `platform::load_session()`/`clear_session()`
+    /// are local file operations, never a network call.
+    #[cfg(windows)]
+    #[test]
+    fn dew_account_reports_session_state_and_signs_out() {
+        let _session_guard = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_session();
+
+        let manager = BundledFixture::new(
+            "account-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"auth\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let account: mlua::Table = dew.get("Account").expect("Account installed");
+        let whoami: mlua::Function = account.get("Whoami").expect("Whoami installed");
+        let sign_out: mlua::Function = account.get("SignOut").expect("SignOut installed");
+
+        let nobody: mlua::Value = whoami.call(()).expect("Whoami call");
+        assert!(
+            matches!(nobody, mlua::Value::Nil),
+            "no session exists yet, so Whoami must answer nil, not a table"
+        );
+
+        crate::platform::save_session(&crate::platform::Session {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            user_id: "u-1".to_string(),
+            email: "person@example.com".to_string(),
+        })
+        .expect("write fixture session");
+
+        let signed_in: mlua::Table = whoami.call(()).expect("Whoami call");
+        assert_eq!(
+            signed_in.get::<String>("email").expect("email field"),
+            "person@example.com"
+        );
+        assert_eq!(
+            signed_in.get::<String>("userId").expect("userId field"),
+            "u-1"
+        );
+
+        sign_out.call::<()>(()).expect("SignOut call");
+        let nobody_again: mlua::Value = whoami.call(()).expect("Whoami call");
+        assert!(
+            matches!(nobody_again, mlua::Value::Nil),
+            "SignOut must remove the session Whoami reads"
+        );
     }
 
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing

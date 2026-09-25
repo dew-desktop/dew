@@ -41,7 +41,7 @@ pub fn load_session() -> Option<Session> {
     serde_json::from_slice(&plaintext).ok()
 }
 
-fn save_session(session: &Session) -> Result<(), String> {
+pub(crate) fn save_session(session: &Session) -> Result<(), String> {
     let path = session_path().ok_or("no home directory to store a session in")?;
     let plaintext = serde_json::to_vec(session).map_err(|e| e.to_string())?;
     let ciphertext = dpapi_protect(&plaintext)?;
