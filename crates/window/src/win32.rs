@@ -52,8 +52,8 @@ fn push(hwnd: HWND, event: Event) {
 type LiveResizeHook = Box<dyn FnMut(u32, u32)>;
 
 thread_local! {
-    /// A repaint to run synchronously from inside `WM_SIZE`, during a live
-    /// border-drag resize.
+    /// A repaint to run synchronously from inside `WM_NCCALCSIZE`, during a
+    /// live border-drag resize.
     ///
     /// WHY THIS EXISTS, AND WHY `EVENTS` ABOVE IS NOT ENOUGH: grabbing a
     /// window's border and dragging it enters a modal loop inside
@@ -61,18 +61,22 @@ thread_local! {
     /// loop does not return to whoever called `DispatchMessageW` until the
     /// drag ends -- which means `Pump::poll`'s own loop, and therefore
     /// draining `EVENTS`, is blocked for the whole drag. Windows keeps
-    /// sending real `WM_SIZE` messages to this window procedure throughout
+    /// sending real resize messages to this window procedure throughout
     /// that time regardless, synchronously, nested inside the call that
     /// never returned; a repaint that only happens when `Event::Resized`
     /// is drained later is a repaint that happens once, when the mouse
     /// comes up, not while the drag is happening.
+    ///
+    /// `WM_NCCALCSIZE`, NOT `WM_SIZE` -- see the `wndproc` match arm's own
+    /// comment for why triggering from `WM_SIZE` left the content one
+    /// frame behind the border on a fast drag.
     ///
     /// ONE HOOK PER THREAD, matching `EVENTS`: one applet runs one window
     /// on one thread, so there is exactly one hook to call.
     static LIVE_RESIZE: RefCell<Option<LiveResizeHook>> = const { RefCell::new(None) };
 }
 
-/// Install the repaint `WM_SIZE` calls synchronously during a live resize.
+/// Install the repaint `WM_NCCALCSIZE` calls synchronously during a live resize.
 ///
 /// SEPARATE FROM THE EVENT QUEUE ON PURPOSE. This still fires beside a
 /// queued `Event::Resized`, not instead of it -- the queued one is what
@@ -199,20 +203,46 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
+        WM_NCCALCSIZE => {
+            // THE LIVE REPAINT FIRES HERE, NOT FROM `WM_SIZE` BELOW. Both
+            // messages arrive synchronously inside the same live-drag modal
+            // loop, but `WM_NCCALCSIZE` is sent FIRST, to compute the new
+            // client rect BEFORE Windows visually moves the border to match
+            // it -- `WM_SIZE` arrives one step later, after the border has
+            // already moved. A repaint triggered from `WM_SIZE` is therefore
+            // always a frame behind the border during a fast drag: the
+            // content the user sees was rendered for a size the border has
+            // already left behind, which reads as content sliding relative
+            // to the frame rather than tracking it. Repainting from
+            // `WM_NCCALCSIZE` instead closes that gap by rendering for the
+            // size the border is ABOUT to have, not the one it just had.
+            let result = DefWindowProcW(hwnd, msg, wp, lp);
+            if wp.0 != 0 {
+                // `wp` NONZERO means `lp` is an `NCCALCSIZE_PARAMS*`, whose
+                // `rgrc[0]` the call above already rewrote in place from
+                // "proposed new window rect" to "resulting new client
+                // rect" -- exactly the size a repaint needs, computed
+                // without hand-rolling the border/caption math `AdjustWindowRect`
+                // already owns elsewhere.
+                let params = &*(lp.0 as *const NCCALCSIZE_PARAMS);
+                let rect = params.rgrc[0];
+                let width = (rect.right - rect.left).max(0) as u32;
+                let height = (rect.bottom - rect.top).max(0) as u32;
+                if width > 0 && height > 0 {
+                    LIVE_RESIZE.with(|cell| {
+                        if let Some(hook) = cell.borrow_mut().as_mut() {
+                            hook(width, height);
+                        }
+                    });
+                }
+            }
+            result
+        }
         WM_SIZE => {
             let raw = lp.0 as u32;
             let width = (raw & 0xFFFF) as u32;
             let height = ((raw >> 16) & 0xFFFF) as u32;
             if width > 0 && height > 0 {
-                // SYNCHRONOUSLY, RIGHT HERE. See `LIVE_RESIZE`'s own doc
-                // comment: this is the one point in a live border-drag
-                // where anything at all gets a chance to run before the
-                // drag ends.
-                LIVE_RESIZE.with(|cell| {
-                    if let Some(hook) = cell.borrow_mut().as_mut() {
-                        hook(width, height);
-                    }
-                });
                 push(hwnd, Event::Resized { width, height });
             }
             LRESULT(0)

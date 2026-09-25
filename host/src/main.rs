@@ -1531,7 +1531,7 @@ fn run_applet(
 
     // SHARED, NOT OWNED OUTRIGHT, from here on -- the live-resize hook
     // registered below needs its own handle on both this and `window`,
-    // callable from inside `WM_SIZE` while this function's own loop is
+    // callable from inside `WM_NCCALCSIZE` while this function's own loop is
     // doing nothing at all (blocked inside `pump.poll()`, itself blocked
     // inside Windows' own modal drag loop). A `RefCell` is enough rather
     // than a `Mutex`: the hook and this loop's own code never run at once,
@@ -1571,13 +1571,17 @@ fn run_applet(
     let window = Rc::new(RefCell::new(Window::new(&resolved, width, height)?));
 
     // REPAINT LIVE, DURING A BORDER-DRAG RESIZE, NOT ONLY ONCE IT ENDS.
-    // `WM_SIZE` calls this synchronously from inside Windows' own modal
-    // drag loop -- see `dew_window::set_live_resize_hook`'s own doc
+    // `WM_NCCALCSIZE` calls this synchronously from inside Windows' own
+    // modal drag loop -- see `dew_window::set_live_resize_hook`'s own doc
     // comment for why nothing else reaches this window at all while that
-    // loop is running. `resized` before `present`, in that order: `blit`'s
-    // destination is the window's OWN tracked size, and a present with a
-    // source that does not match it is exactly the stretch this whole
-    // hook exists to stop happening again.
+    // loop is running, and `crate::win32`'s `WM_NCCALCSIZE` match arm for
+    // why this fires there rather than from `WM_SIZE`: `WM_NCCALCSIZE` is
+    // sent BEFORE the border visually moves to its new position, so
+    // rendering here keeps content in step with the border instead of one
+    // message behind it. `resized` before `present`, in that order: the
+    // presenter's destination is the window's OWN tracked size, and a
+    // present with a source that does not match it is exactly the stretch
+    // this whole hook exists to stop happening again.
     {
         let renderer = Rc::clone(&renderer);
         let window = Rc::clone(&window);
@@ -1586,8 +1590,8 @@ fn run_applet(
         // right wait, not a fixed interval guessed at here a second time.
         // `renderer.resize` rebuilds the native drawing surface from
         // scratch (`Canvas` has no in-place resize of its own), and a fast
-        // border drag fires `WM_SIZE` far more often than any display can
-        // show a new frame -- blocking here until the next vertical blank
+        // border drag fires `WM_NCCALCSIZE` far more often than any display
+        // can show a new frame -- blocking here until the next vertical blank
         // is what stops that from reallocating and repainting faster than
         // anything could ever be shown, at whatever the real refresh rate
         // of whichever monitor this window is actually on happens to be,
