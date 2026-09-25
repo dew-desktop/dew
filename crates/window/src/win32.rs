@@ -263,26 +263,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // between frames.
             LRESULT(1)
         }
-        WM_NCHITTEST => {
-            // `WS_EX_TRANSPARENT` ALONE STOPPED BEING ENOUGH once presentation
-            // moved to `DirectComposition`/`WS_EX_NOREDIRECTIONBITMAP` --
-            // measured with `WindowFromPoint`, not assumed: a click-through
-            // widget's own hwnd was still what the OS hit-tested, not
-            // whatever is behind it. Documented as a real interaction gap
-            // between `WS_EX_TRANSPARENT` and composition-backed windows,
-            // not something specific to this crate. `HTTRANSPARENT` is the
-            // older, more direct mechanism -- it tells the hit-test pass
-            // itself to keep looking underneath, independent of how this
-            // window presents -- and `GWLP_USERDATA` is where `Window::new`
-            // stashes whether this window asked for it, since a raw
-            // `WNDPROC` has no other way to reach a `Window`'s own fields.
-            let click_through = GetWindowLongPtrW(hwnd, GWLP_USERDATA) != 0;
-            if click_through {
-                LRESULT(HTTRANSPARENT as isize)
-            } else {
-                DefWindowProcW(hwnd, msg, wp, lp)
-            }
-        }
         WM_CLOSE => {
             push(hwnd, Event::CloseRequested);
             LRESULT(0)
@@ -374,13 +354,27 @@ pub struct Window {
     hwnd: HWND,
     width: u32,
     height: u32,
-    /// The `wgpu` swap chain every surface kind presents through now --
-    /// milestone 24 sprint 2 moved `Widget`/`Overlay` off `present_layered`'s
-    /// `UpdateLayeredWindow` path onto the same `DirectComposition`
-    /// mechanism an ordinary `Window` already used, adding per-pixel alpha
-    /// (`Presenter`'s `transparent` flag) on top rather than a second
-    /// mechanism beside it.
-    presenter: Presenter,
+    /// `true` for a surface that presents through `present_layered`'s
+    /// `UpdateLayeredWindow` path instead of `presenter`'s `DirectComposition`
+    /// one.
+    ///
+    /// NOT "every `Widget`/`Overlay`", the way milestone 24 sprint 2 first
+    /// drew this line. `DirectComposition` genuinely has no equivalent of
+    /// `UpdateLayeredWindow`'s native, per-pixel alpha-based hit-testing --
+    /// measured with `WindowFromPoint` and then with real clicks, not
+    /// assumed: `WS_EX_TRANSPARENT` plus `WM_NCHITTEST` returning
+    /// `HTTRANSPARENT` does not forward a click on a
+    /// `WS_EX_NOREDIRECTIONBITMAP` window, only *reports* that it should via
+    /// `WindowFromPoint`, which is a documented, separate gap. So this is
+    /// `true` for `Overlay` always (its whole identity is clicks falling
+    /// through wherever it did not paint, which only `UpdateLayeredWindow`'s
+    /// own hit-testing provides) and for a `Widget` that asked for
+    /// `click_through` specifically -- a `Widget` that did not ask for it
+    /// stays on `presenter`, since plain visual transparency (soft edges,
+    /// rounded corners) is confirmed working there and is not the part that
+    /// broke.
+    layered: bool,
+    presenter: Option<Presenter>,
 }
 
 impl Window {
@@ -392,7 +386,13 @@ impl Window {
             // Registering twice returns an error that is not one — a second window
             // of the same class is fine and the class is already there. The
             // result is deliberately discarded rather than checked.
-            let layered = matches!(surface, Surface::Widget { .. } | Surface::Overlay { .. });
+            //
+            // GEOMETRY ONLY -- a popup's outer rectangle IS its client area
+            // regardless of which presentation mechanism it ends up on, so
+            // this stays a plain surface-kind check. Which mechanism it
+            // actually gets is `layered`, computed after the match below,
+            // once each surface kind's own `click_through` is in scope.
+            let is_popup = matches!(surface, Surface::Widget { .. } | Surface::Overlay { .. });
 
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
@@ -427,28 +427,15 @@ impl Window {
             //
             // `WS_EX_TOOLWINDOW` is the one that keeps it out of Alt-Tab and
             // the taskbar; without it a desktop clock is a window you can tab
-            // to, which is not what a widget is. `WS_EX_NOREDIRECTIONBITMAP`,
-            // NOT `WS_EX_LAYERED`: per-pixel alpha comes from `Presenter`'s
-            // `DirectComposition` visual now (`CompositeAlphaMode::PreMultiplied`),
-            // not `UpdateLayeredWindow`, so this needs the same style an
-            // ordinary `Window` already uses to opt out of the normal
-            // redirection surface, not the GDI-layered-window one.
-            // STASHED IN `GWLP_USERDATA` BELOW, AFTER THE WINDOW EXISTS -- see
-            // `WM_NCHITTEST`'s own comment for why `WS_EX_TRANSPARENT` alone,
-            // set into `ex_style` below, is not the whole mechanism click
-            // pass-through needs any more.
-            let click_through = matches!(
-                surface,
-                Surface::Widget {
-                    click_through: true,
-                    ..
-                } | Surface::Overlay {
-                    click_through: true,
-                    ..
-                }
-            );
-
-            let (style, ex_style, x, y, z_order) = match surface {
+            // to, which is not what a widget is.
+            //
+            // `WS_EX_LAYERED` OR `WS_EX_NOREDIRECTIONBITMAP`, NOT ALWAYS THE
+            // SAME ONE -- see `Window::layered`'s own doc for why an
+            // `Overlay` always needs the former and a `Widget` only needs it
+            // when it asked for `click_through`. Getting this wrong the other
+            // way (`WS_EX_NOREDIRECTIONBITMAP` on a surface that needed real
+            // click-through) is the bug this match now exists to not repeat.
+            let (style, ex_style, x, y, z_order, layered) = match surface {
                 // `WS_EX_NOREDIRECTIONBITMAP`: an ordinary window presents
                 // through `DirectComposition` (`crate::gpu`), not a blit
                 // into the window's own device context. Without this style
@@ -462,6 +449,7 @@ impl Window {
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
                     None,
+                    false,
                 ),
                 Surface::Widget {
                     x,
@@ -469,7 +457,12 @@ impl Window {
                     click_through,
                     z_order,
                 } => {
-                    let mut ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW;
+                    let mut ex = WS_EX_TOOLWINDOW;
+                    ex |= if *click_through {
+                        WS_EX_LAYERED
+                    } else {
+                        WS_EX_NOREDIRECTIONBITMAP
+                    };
                     // `WS_EX_TOPMOST` AT CREATION MATCHES THE COMMON CASE, and
                     // `SetWindowPos` below is what actually enforces all three
                     // tiers — this extended style alone has no way to express
@@ -481,16 +474,23 @@ impl Window {
                         // TRANSPARENT means hit-testing falls through to whatever
                         // is behind. It is a property of the window, not of the
                         // painting, so a widget can be fully opaque and still be
-                        // clicked through.
+                        // clicked through -- but only paired with `WS_EX_LAYERED`
+                        // above, which is what makes the hit-test actually skip
+                        // it rather than merely reporting that it would.
                         ex |= WS_EX_TRANSPARENT;
                     }
-                    (WS_POPUP, ex, *x, *y, Some(*z_order))
+                    (WS_POPUP, ex, *x, *y, Some(*z_order), *click_through)
                 }
                 Surface::Overlay {
                     z_order,
                     click_through,
                 } => {
-                    let mut ex = WS_EX_NOREDIRECTIONBITMAP | WS_EX_TOOLWINDOW;
+                    // ALWAYS `WS_EX_LAYERED`, REGARDLESS OF `click_through` --
+                    // an overlay's own default (clicks fall through wherever
+                    // it did not paint) IS `UpdateLayeredWindow`'s native
+                    // alpha hit-testing, not something its `click_through`
+                    // flag turns on. See `Window::layered`'s own doc.
+                    let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
                     if *z_order == ZOrder::Topmost {
                         ex |= WS_EX_TOPMOST;
                     }
@@ -498,14 +498,14 @@ impl Window {
                         ex |= WS_EX_TRANSPARENT;
                     }
                     // The caller sized this to the screen; it starts at its origin.
-                    (WS_POPUP, ex, 0, 0, Some(*z_order))
+                    (WS_POPUP, ex, 0, 0, Some(*z_order), true)
                 }
             };
 
             // Only an ordinary window has chrome to account for. A popup's
             // outer rectangle IS its client area, and adjusting one would make
             // the widget larger than the surface it presents.
-            if !layered {
+            if !is_popup {
                 let _ = AdjustWindowRect(&mut rect, style, false);
             }
 
@@ -524,11 +524,6 @@ impl Window {
                 None,
             )
             .map_err(|e| e.to_string())?;
-
-            // READ BACK BY `WM_NCHITTEST`, on this same thread, before
-            // anything else runs on `hwnd` -- `SetWindowLongPtrW` on a
-            // freshly created window has nothing racing it here.
-            let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, click_through as isize);
 
             // THE EXTENDED STYLE ALONE CANNOT PLACE A WINDOW AT THE BOTTOM of
             // the z-order — `WS_EX_TOPMOST` only ever says "above everything
@@ -553,31 +548,36 @@ impl Window {
                 );
             }
 
-            // `layered` IS `Presenter`'s `transparent` FLAG, not a branch on
-            // whether one exists at all -- every surface kind presents
-            // through the same `DirectComposition` mechanism now, a widget
-            // just needs the extra per-pixel alpha and skips the opaque
-            // backdrop visual an ordinary window uses to paper over its own
-            // resize race, since a backdrop would be exactly the shape a
-            // click-through widget's silhouette must not have.
-            let presenter = Presenter::new(hwnd, width, height, layered)?;
+            // `None` FOR A `layered` SURFACE, which never touches `Presenter`
+            // at all -- `present_layered` composites through
+            // `UpdateLayeredWindow` against the screen's own DC instead. A
+            // non-click-through `Widget` still passes `transparent: true`
+            // here: it needs `Presenter`'s premultiplied alpha for its own
+            // soft edges and rounded corners, just not a backdrop, which is
+            // exactly what `transparent` already skips.
+            let presenter = if layered {
+                None
+            } else {
+                Some(Presenter::new(hwnd, width, height, is_popup)?)
+            };
 
-            // SHOWN ONLY NOW, AFTER THE PRESENTER EXISTS AND HAS COMMITTED
-            // ITS FIRST FRAME. `Presenter::new` creates a `wgpu` adapter and
-            // device and sets up `DirectComposition`'s own device, target
-            // and visual tree -- real, measured, one-time setup cost. A
-            // window shown before any of that finishes has no composition
-            // content at all yet, `WS_EX_NOREDIRECTIONBITMAP` having opted
-            // it out of the ordinary redirection surface that would
-            // otherwise paper over the gap -- which is what showed up as a
-            // window that appears see-through for however long setup took,
-            // every time, on every open.
+            // SHOWN ONLY NOW, AFTER THE PRESENTER (WHEN THERE IS ONE) EXISTS
+            // AND HAS COMMITTED ITS FIRST FRAME. `Presenter::new` creates a
+            // `wgpu` adapter and device and sets up `DirectComposition`'s own
+            // device, target and visual tree -- real, measured, one-time
+            // setup cost. A window shown before any of that finishes has no
+            // composition content at all yet, `WS_EX_NOREDIRECTIONBITMAP`
+            // having opted it out of the ordinary redirection surface that
+            // would otherwise paper over the gap -- which is what showed up
+            // as a window that appears see-through for however long setup
+            // took, every time, on every open.
             let _ = ShowWindow(hwnd, SW_SHOW);
 
             Ok(Window {
                 hwnd,
                 width,
                 height,
+                layered,
                 presenter,
             })
         }
@@ -622,23 +622,27 @@ impl Window {
     pub fn resized(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
-        self.presenter.configure(width, height);
+        if let Some(presenter) = self.presenter.as_mut() {
+            presenter.configure(width, height);
+        }
     }
 
-    /// Put a BGRA buffer on screen. A widget's alpha becomes the window's
-    /// shape; an ordinary window's is ignored -- both through the same
-    /// `Presenter`, which was told at construction which one this is.
+    /// Put a BGRA buffer on screen, whichever kind of surface this is.
+    ///
+    /// A `layered` surface takes `present_layered`, where the buffer's ALPHA
+    /// becomes the window's shape AND its hit-test -- the only mechanism
+    /// Windows actually provides for that combination, see `Window::layered`'s
+    /// own doc for why `DirectComposition` does not. Everything else
+    /// presents through `Presenter`.
     pub fn present(&mut self, bgra: &[u8], width: u32, height: u32) {
-        self.presenter.present(bgra, width, height);
+        if self.layered {
+            self.present_layered(bgra, width, height);
+        } else if let Some(presenter) = self.presenter.as_mut() {
+            presenter.present(bgra, width, height);
+        }
     }
 
     /// Composite a premultiplied BGRA buffer as the window itself.
-    ///
-    /// UNUSED SINCE MILESTONE 24 SPRINT 2, KEPT ON PURPOSE. `Window::present`
-    /// no longer calls this -- every surface presents through `Presenter`
-    /// now -- but the milestone's own plan says not to delete the GDI path
-    /// until both replacements are proven, so sprint 3 removes this rather
-    /// than this commit.
     ///
     /// `UpdateLayeredWindow` takes the bitmap AND the window's size and position
     /// in one call — the window has no client area being painted into, it simply
@@ -650,7 +654,6 @@ impl Window {
     /// PREMULTIPLIED is required, not preferred: `AC_SRC_ALPHA` says the colour
     /// channels are already scaled by alpha. `dew_raster` produces exactly
     /// that, so nothing converts on the way.
-    #[allow(dead_code)]
     fn present_layered(&self, bgra: &[u8], width: u32, height: u32) {
         if bgra.len() < (width * height * 4) as usize {
             return;
