@@ -263,6 +263,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // between frames.
             LRESULT(1)
         }
+        WM_NCHITTEST => {
+            // `WS_EX_TRANSPARENT` ALONE STOPPED BEING ENOUGH once presentation
+            // moved to `DirectComposition`/`WS_EX_NOREDIRECTIONBITMAP` --
+            // measured with `WindowFromPoint`, not assumed: a click-through
+            // widget's own hwnd was still what the OS hit-tested, not
+            // whatever is behind it. Documented as a real interaction gap
+            // between `WS_EX_TRANSPARENT` and composition-backed windows,
+            // not something specific to this crate. `HTTRANSPARENT` is the
+            // older, more direct mechanism -- it tells the hit-test pass
+            // itself to keep looking underneath, independent of how this
+            // window presents -- and `GWLP_USERDATA` is where `Window::new`
+            // stashes whether this window asked for it, since a raw
+            // `WNDPROC` has no other way to reach a `Window`'s own fields.
+            let click_through = GetWindowLongPtrW(hwnd, GWLP_USERDATA) != 0;
+            if click_through {
+                LRESULT(HTTRANSPARENT as isize)
+            } else {
+                DefWindowProcW(hwnd, msg, wp, lp)
+            }
+        }
         WM_CLOSE => {
             push(hwnd, Event::CloseRequested);
             LRESULT(0)
@@ -413,6 +433,21 @@ impl Window {
             // not `UpdateLayeredWindow`, so this needs the same style an
             // ordinary `Window` already uses to opt out of the normal
             // redirection surface, not the GDI-layered-window one.
+            // STASHED IN `GWLP_USERDATA` BELOW, AFTER THE WINDOW EXISTS -- see
+            // `WM_NCHITTEST`'s own comment for why `WS_EX_TRANSPARENT` alone,
+            // set into `ex_style` below, is not the whole mechanism click
+            // pass-through needs any more.
+            let click_through = matches!(
+                surface,
+                Surface::Widget {
+                    click_through: true,
+                    ..
+                } | Surface::Overlay {
+                    click_through: true,
+                    ..
+                }
+            );
+
             let (style, ex_style, x, y, z_order) = match surface {
                 // `WS_EX_NOREDIRECTIONBITMAP`: an ordinary window presents
                 // through `DirectComposition` (`crate::gpu`), not a blit
@@ -489,6 +524,11 @@ impl Window {
                 None,
             )
             .map_err(|e| e.to_string())?;
+
+            // READ BACK BY `WM_NCHITTEST`, on this same thread, before
+            // anything else runs on `hwnd` -- `SetWindowLongPtrW` on a
+            // freshly created window has nothing racing it here.
+            let _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, click_through as isize);
 
             // THE EXTENDED STYLE ALONE CANNOT PLACE A WINDOW AT THE BOTTOM of
             // the z-order — `WS_EX_TOPMOST` only ever says "above everything
