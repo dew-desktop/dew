@@ -1575,9 +1575,9 @@ fn run_applet(
     // drag loop -- see `dew_window::set_live_resize_hook`'s own doc
     // comment for why nothing else reaches this window at all while that
     // loop is running. `resized` before `present`, in that order: `blit`'s
-    // `StretchDIBits` destination is the window's OWN tracked size, and a
-    // present with a source that does not match it is exactly the stretch
-    // this whole hook exists to stop happening again.
+    // destination is the window's OWN tracked size, and a present with a
+    // source that does not match it is exactly the stretch this whole
+    // hook exists to stop happening again.
     {
         let renderer = Rc::clone(&renderer);
         let window = Rc::clone(&window);

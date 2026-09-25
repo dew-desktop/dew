@@ -6,8 +6,8 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, GetDC,
-    ReleaseDC, ScreenToClient, SelectObject, StretchDIBits, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, PAINTSTRUCT, SRCCOPY,
+    ReleaseDC, ScreenToClient, SelectObject, SetDIBitsToDevice, AC_SRC_ALPHA, AC_SRC_OVER,
+    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -324,6 +324,18 @@ pub struct Window {
     width: u32,
     height: u32,
     layered: bool,
+    /// The window's own DC, held for its whole lifetime rather than
+    /// acquired and released around every `blit`.
+    ///
+    /// `GetDC`/`ReleaseDC` PAIRED TIGHTLY AROUND ONE DRAW CALL IS THE SLOW
+    /// SHAPE, not merely a wasted pair of calls: releasing a DC is also
+    /// where GDI's own batching flushes and synchronizes with the display
+    /// driver, so a `blit` that gets, draws, and immediately releases pays
+    /// that synchronization on every single present rather than letting
+    /// consecutive draws batch. `None` for a layered window, which never
+    /// blits to this DC at all -- `present_layered` composites through
+    /// `UpdateLayeredWindow` against the screen's own DC instead.
+    hdc: Option<HDC>,
 }
 
 impl Window {
@@ -466,11 +478,19 @@ impl Window {
                 );
             }
 
+            let hdc = if layered {
+                None
+            } else {
+                let dc = GetDC(Some(hwnd));
+                (!dc.is_invalid()).then_some(dc)
+            };
+
             Ok(Window {
                 hwnd,
                 width,
                 height,
                 layered,
+                hdc,
             })
         }
     }
@@ -621,12 +641,8 @@ impl Window {
         if bgra.len() < (width * height * 4) as usize {
             return;
         }
+        let Some(hdc) = self.hdc else { return };
         unsafe {
-            let hdc: HDC = GetDC(Some(self.hwnd));
-            if hdc.is_invalid() {
-                return;
-            }
-
             let info = BITMAPINFO {
                 bmiHeader: BITMAPINFOHEADER {
                     biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -644,23 +660,27 @@ impl Window {
                 ..Default::default()
             };
 
-            StretchDIBits(
+            // `SetDIBitsToDevice`, NOT `StretchDIBits` -- source and
+            // destination are always the same size here (the buffer is
+            // `self.width`x`self.height`, freshly rendered at exactly that
+            // size), so there is never actually a stretch to perform.
+            // `StretchDIBits` still has to check for and handle one on
+            // every call regardless; a plain copy has no reason to pay for
+            // that.
+            SetDIBitsToDevice(
                 hdc,
                 0,
                 0,
-                self.width as i32,
-                self.height as i32,
+                width,
+                height,
                 0,
                 0,
-                width as i32,
-                height as i32,
-                Some(bgra.as_ptr() as *const _),
+                0,
+                height,
+                bgra.as_ptr() as *const _,
                 &info,
                 DIB_RGB_COLORS,
-                SRCCOPY,
             );
-
-            ReleaseDC(Some(self.hwnd), hdc);
         }
     }
 }
@@ -672,6 +692,9 @@ impl Drop for Window {
     /// one that stayed on screen would be a leak the user can see.
     fn drop(&mut self) {
         unsafe {
+            if let Some(hdc) = self.hdc.take() {
+                let _ = ReleaseDC(Some(self.hwnd), hdc);
+            }
             let _ = DestroyWindow(self.hwnd);
         }
     }
