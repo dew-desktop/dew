@@ -1,4 +1,4 @@
 id = "dashboard"
 name = "Dew Dashboard"
-description = "Browse public packages and install one, without a terminal."
-permissions = ["window", "discover", "install"]
+description = "Library, Store, and Account, all in one window."
+permissions = ["window", "discover", "install", "library", "auth"]
