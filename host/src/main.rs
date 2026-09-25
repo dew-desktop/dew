@@ -1599,7 +1599,7 @@ fn run_applet(
             renderer.resize(w, h);
             if renderer.frame(0.0).unwrap_or(false) {
                 if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
-                    window.borrow().present(bgra, w, h);
+                    window.borrow_mut().present(bgra, w, h);
                 }
             }
             drop(renderer);
@@ -1776,7 +1776,7 @@ fn run_applet(
 
         let t1 = Instant::now();
         if let Some(bgra) = renderer.borrow_mut().painter_mut().canvas_mut().bgra() {
-            window.borrow().present(bgra, width, height);
+            window.borrow_mut().present(bgra, width, height);
         }
         let t_raster = t1.elapsed();
 
@@ -1790,7 +1790,7 @@ fn run_applet(
             if last_report.elapsed() >= Duration::from_secs(1) {
                 let n = painted_frames.max(1);
                 println!(
-                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
+                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+present {:?}",
                     sum_frame / n,
                     sum_present / n
                 );

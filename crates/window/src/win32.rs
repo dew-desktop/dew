@@ -1,13 +1,14 @@
 //! The Win32 implementation.
 
+use crate::gpu::Presenter;
 use crate::{Button, Event, Surface, ZOrder};
 use std::cell::RefCell;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, GetDC,
-    ReleaseDC, ScreenToClient, SelectObject, SetDIBitsToDevice, AC_SRC_ALPHA, AC_SRC_OVER,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, PAINTSTRUCT,
+    ReleaseDC, ScreenToClient, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -324,18 +325,14 @@ pub struct Window {
     width: u32,
     height: u32,
     layered: bool,
-    /// The window's own DC, held for its whole lifetime rather than
-    /// acquired and released around every `blit`.
+    /// The `wgpu` swap chain an ordinary window presents through.
     ///
-    /// `GetDC`/`ReleaseDC` PAIRED TIGHTLY AROUND ONE DRAW CALL IS THE SLOW
-    /// SHAPE, not merely a wasted pair of calls: releasing a DC is also
-    /// where GDI's own batching flushes and synchronizes with the display
-    /// driver, so a `blit` that gets, draws, and immediately releases pays
-    /// that synchronization on every single present rather than letting
-    /// consecutive draws batch. `None` for a layered window, which never
-    /// blits to this DC at all -- `present_layered` composites through
-    /// `UpdateLayeredWindow` against the screen's own DC instead.
-    hdc: Option<HDC>,
+    /// `None` for a layered window, which never presents through a swap
+    /// chain at all -- `present_layered` composites through
+    /// `UpdateLayeredWindow` against the screen's own DC instead. See
+    /// `crate::gpu`'s module doc for why an ordinary window's path and a
+    /// layered one's are not the same mechanism.
+    presenter: Option<Presenter>,
 }
 
 impl Window {
@@ -478,11 +475,10 @@ impl Window {
                 );
             }
 
-            let hdc = if layered {
+            let presenter = if layered {
                 None
             } else {
-                let dc = GetDC(Some(hwnd));
-                (!dc.is_invalid()).then_some(dc)
+                Some(Presenter::new(hwnd, width, height)?)
             };
 
             Ok(Window {
@@ -490,7 +486,7 @@ impl Window {
                 width,
                 height,
                 layered,
-                hdc,
+                presenter,
             })
         }
     }
@@ -534,19 +530,23 @@ impl Window {
     pub fn resized(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        if let Some(presenter) = self.presenter.as_mut() {
+            presenter.configure(width, height);
+        }
     }
 
     /// Put a BGRA buffer on screen, whichever kind of surface this is.
     ///
     /// A widget takes the layered path, where the buffer's ALPHA becomes the
-    /// window's shape; an ordinary window takes the blit, where it is ignored.
-    /// The caller does not choose — it painted a frame, and how that reaches the
-    /// screen is a property of the window it asked for.
-    pub fn present(&self, bgra: &[u8], width: u32, height: u32) {
+    /// window's shape; an ordinary window presents through its `wgpu` swap
+    /// chain, where it is ignored. The caller does not choose — it painted a
+    /// frame, and how that reaches the screen is a property of the window it
+    /// asked for.
+    pub fn present(&mut self, bgra: &[u8], width: u32, height: u32) {
         if self.layered {
             self.present_layered(bgra, width, height);
-        } else {
-            self.blit(bgra, width, height);
+        } else if let Some(presenter) = self.presenter.as_mut() {
+            presenter.present(bgra, width, height);
         }
     }
 
@@ -636,53 +636,6 @@ impl Window {
         }
     }
 
-    /// Put a BGRA buffer on screen. `bgra` must be `width * height * 4` bytes.
-    fn blit(&self, bgra: &[u8], width: u32, height: u32) {
-        if bgra.len() < (width * height * 4) as usize {
-            return;
-        }
-        let Some(hdc) = self.hdc else { return };
-        unsafe {
-            let info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width as i32,
-                    // NEGATIVE, for a TOP-DOWN bitmap. A DIB is bottom-up by
-                    // default, so a positive height presents every frame flipped
-                    // vertically — which reads as a renderer bug and is a header
-                    // field.
-                    biHeight: -(height as i32),
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-
-            // `SetDIBitsToDevice`, NOT `StretchDIBits` -- source and
-            // destination are always the same size here (the buffer is
-            // `self.width`x`self.height`, freshly rendered at exactly that
-            // size), so there is never actually a stretch to perform.
-            // `StretchDIBits` still has to check for and handle one on
-            // every call regardless; a plain copy has no reason to pay for
-            // that.
-            SetDIBitsToDevice(
-                hdc,
-                0,
-                0,
-                width,
-                height,
-                0,
-                0,
-                0,
-                height,
-                bgra.as_ptr() as *const _,
-                &info,
-                DIB_RGB_COLORS,
-            );
-        }
-    }
 }
 
 impl Drop for Window {
@@ -692,9 +645,6 @@ impl Drop for Window {
     /// one that stayed on screen would be a leak the user can see.
     fn drop(&mut self) {
         unsafe {
-            if let Some(hdc) = self.hdc.take() {
-                let _ = ReleaseDC(Some(self.hwnd), hdc);
-            }
             let _ = DestroyWindow(self.hwnd);
         }
     }
