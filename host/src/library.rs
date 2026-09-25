@@ -17,6 +17,15 @@
 use crate::manifest::Manifest;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+/// How long `uninstall` waits for a running applet's own unload to land
+/// before giving up. A live unload is a flag set on the applet's own
+/// thread and noticed at most one `coordinator::run` tick later (~15ms),
+/// so the ordinary case is a handful of `STOP_POLL_INTERVAL` steps, not
+/// this ceiling -- it exists for a thread that never notices at all.
+const STOP_TIMEOUT: Duration = Duration::from_secs(3);
+const STOP_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 static LOAD_QUEUE: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
 
@@ -90,16 +99,37 @@ pub fn launch(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Remove `id` from the store. Refused, not queued for later, while `id`
-/// is running -- matching `dew uninstall`'s own check
-/// (`coordinator::query_running`) exactly.
+/// Remove `id` from the store. If it is currently running, it is unloaded
+/// live first -- the same request `set_enabled(id, false)` makes -- and
+/// this call waits for that to actually land before touching its
+/// directory on disk, rather than deleting files out from under a thread
+/// that might still be reading them. `dew uninstall` (the CLI) still
+/// refuses outright rather than doing this itself, because it has no
+/// coordinator of its own to ask for a live unload in the first place; this
+/// call does.
 pub fn uninstall(id: &str) -> Result<(), String> {
     if crate::coordinator::query_running(id)? {
-        return Err(format!(
-            "'{id}' is currently running; exit it before uninstalling"
-        ));
+        UNLOAD_QUEUE
+            .lock()
+            .expect("library unload queue")
+            .push(id.to_string());
+        wait_until_stopped(id)?;
     }
     crate::installed::uninstall(id)
+}
+
+/// Polls `query_running` until it answers false or `STOP_TIMEOUT` elapses.
+fn wait_until_stopped(id: &str) -> Result<(), String> {
+    let deadline = Instant::now() + STOP_TIMEOUT;
+    while Instant::now() < deadline {
+        if !crate::coordinator::query_running(id)? {
+            return Ok(());
+        }
+        std::thread::sleep(STOP_POLL_INTERVAL);
+    }
+    Err(format!(
+        "'{id}' did not stop in time to uninstall; try again"
+    ))
 }
 
 /// Set `id`'s enabled bit, live: disabling a running applet unloads it
@@ -108,11 +138,11 @@ pub fn uninstall(id: &str) -> Result<(), String> {
 /// toggle `manage.rs`'s own checkbox already makes, generalized from that
 /// window's own `LOAD_QUEUE`/`UNLOAD_QUEUE` to this module's.
 ///
-/// UNLIKE `uninstall` BELOW, THIS NEVER REFUSES ON ACCOUNT OF `id` RUNNING.
-/// Uninstalling removes the directory from disk while it may still be
-/// reading from it; disabling only ever asks the coordinator to close the
-/// window and stop the thread, the same request `Exit` already makes of
-/// every loaded applet.
+/// NEVER WAITS FOR THE UNLOAD TO LAND, UNLIKE `uninstall` ABOVE. Nothing
+/// here reads `id`'s directory afterward the way `uninstall`'s own disk
+/// delete would, so there is nothing for a wait to protect -- the disabled
+/// bit is already correct on disk the instant this returns, whether or not
+/// the coordinator has actually closed the window yet.
 pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     let running = crate::coordinator::query_running(id)?;
     crate::installed::set_enabled(id, enabled)?;
