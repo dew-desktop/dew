@@ -285,6 +285,28 @@ const MEMBERS: &[Member] = &[
         name: "SetAttribute",
         introduced_on: "Instance",
     },
+    // -- `StyleRule`'s own property table, milestone 27 sprint 2 --------------
+    //
+    // NOT ATTRIBUTES. A `StyleRule`'s properties are names it holds for
+    // whatever it ends up applied to by the cascade (sprint 3 onward), the
+    // same shape as `SetAttribute` but a different table -- see
+    // `Dom::style_properties`'s own doc comment for why they cannot share one.
+    Member {
+        name: "SetProperty",
+        introduced_on: "StyleRule",
+    },
+    Member {
+        name: "SetProperties",
+        introduced_on: "StyleRule",
+    },
+    Member {
+        name: "GetProperty",
+        introduced_on: "StyleRule",
+    },
+    Member {
+        name: "GetProperties",
+        introduced_on: "StyleRule",
+    },
 ];
 
 /// Does `class` match `ancestor`, or descend from it?
@@ -706,7 +728,7 @@ pub fn lookup(
         })?,
         "SetAttribute" => lua.create_function(
             move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
-                let variant = super::coerce_attribute_value(&value)?;
+                let variant = super::coerce_variant_value("SetAttribute", &value)?;
                 let mut dom = this.dom.lock().expect("dom");
                 if dom.node(this.id).is_none() {
                     return Err(dead());
@@ -724,6 +746,54 @@ pub fn lookup(
             drop(dom);
             let out = lua.create_table()?;
             for (k, v) in attrs {
+                out.set(k, super::to_lua(lua, &v, None)?)?;
+            }
+            Ok(out)
+        })?,
+        "SetProperty" => lua.create_function(
+            move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
+                let variant = super::coerce_variant_value("SetProperty", &value)?;
+                let mut dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                dom.set_style_property(this.id, &name, variant);
+                Ok(())
+            },
+        )?,
+        "SetProperties" => lua.create_function(move |_lua, (_, table): (LuaValue, LuaTable)| {
+            let mut dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            for pair in table.pairs::<String, LuaValue>() {
+                let (name, value) = pair?;
+                let variant = super::coerce_variant_value("SetProperties", &value)?;
+                dom.set_style_property(this.id, &name, variant);
+            }
+            Ok(())
+        })?,
+        "GetProperty" => lua.create_function(move |lua, (_, name): (LuaValue, String)| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            let val = dom.get_style_property(this.id, &name);
+            drop(dom);
+            match val {
+                Some(v) => super::to_lua(lua, &v, None),
+                None => Ok(LuaValue::Nil),
+            }
+        })?,
+        "GetProperties" => lua.create_function(move |lua, _: LuaValue| {
+            let dom = this.dom.lock().expect("dom");
+            if dom.node(this.id).is_none() {
+                return Err(dead());
+            }
+            let props = dom.get_style_properties(this.id);
+            drop(dom);
+            let out = lua.create_table()?;
+            for (k, v) in props {
                 out.set(k, super::to_lua(lua, &v, None)?)?;
             }
             Ok(out)
@@ -1213,5 +1283,144 @@ mod tests {
         )
         .expect("eval");
         assert_eq!(got, 1);
+    }
+
+    // ── `StyleRule`'s own property table, milestone 27 sprint 2 ──────────────
+
+    #[test]
+    fn a_style_property_round_trips_and_clears_on_nil() {
+        let got: (bool, bool, bool) = eval(
+            r#"
+            local rule = Instance.new("StyleRule")
+            rule:SetProperty("BackgroundTransparency", 0.5)
+            local before = rule:GetProperty("BackgroundTransparency") == 0.5
+
+            rule:SetProperty("BackgroundTransparency", nil)
+            local after = rule:GetProperty("BackgroundTransparency") == nil
+
+            local unset = rule:GetProperty("NeverSet") == nil
+            return before, after, unset
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (true, true, true));
+    }
+
+    #[test]
+    fn set_properties_writes_every_entry_and_get_properties_reads_them_all() {
+        let got: (f64, usize) = eval(
+            r#"
+            local rule = Instance.new("StyleRule")
+            rule:SetProperties({
+                BackgroundTransparency = 0.25,
+                Visible = false,
+            })
+            local all = rule:GetProperties()
+            local count = 0
+            for _ in pairs(all) do
+                count += 1
+            end
+            return all.BackgroundTransparency, count
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (0.25, 2));
+    }
+
+    #[test]
+    fn style_properties_are_not_attributes() {
+        // TWO DIFFERENT TABLES, PROVEN RATHER THAN ASSUMED: a name set through
+        // one must not answer through the other, or a rule and an ordinary
+        // instance attribute would be silently sharing storage.
+        let got: (bool, bool) = eval(
+            r#"
+            local rule = Instance.new("StyleRule")
+            rule:SetProperty("Foo", "styled")
+            rule:SetAttribute("Foo", "attributed")
+            return rule:GetProperty("Foo") == "styled", rule:GetAttribute("Foo") == "attributed"
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (true, true));
+    }
+
+    #[test]
+    fn style_properties_are_not_reachable_on_a_class_that_is_not_a_style_rule() {
+        let message = err(r#"Instance.new("Frame"):SetProperty("X", 1)"#);
+        assert!(message.contains("not a valid member"), "{message}");
+    }
+
+    // ── `StyleRule.Selector` and the derived `SelectorError` ─────────────────
+
+    #[test]
+    fn a_valid_selector_parses_with_no_error() {
+        let got: (String, String) = eval(
+            r#"
+            local rule = Instance.new("StyleRule")
+            rule.Selector = ".Enemy"
+            return rule.Selector, rule.SelectorError
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (".Enemy".to_string(), String::new()));
+    }
+
+    #[test]
+    fn an_invalid_selector_is_stored_with_a_selector_error_rather_than_thrown() {
+        // A FACT ABOUT THE RULE, NOT A THROWN ERROR -- matching the engine:
+        // an unparseable `Selector` is legal to assign, and `SelectorError`
+        // is where a guest (or a future cascade sprint) finds out why it
+        // will not match anything.
+        let got: (String, bool) = eval(
+            r#"
+            local rule = Instance.new("StyleRule")
+            rule.Selector = "Frame.Enemy"
+            return rule.SelectorError, #rule.SelectorError > 0
+        "#,
+        )
+        .expect("eval");
+        assert!(got.1, "{got:?}");
+    }
+
+    #[test]
+    fn selector_error_cannot_be_written_directly() {
+        let message = err(r#"Instance.new("StyleRule").SelectorError = "made up""#);
+        assert!(
+            message.contains("read-only") || message.contains("not a valid member"),
+            "{message}"
+        );
+    }
+
+    // ── `StyleLink.StyleSheet`, an instance reference ─────────────────────────
+
+    #[test]
+    fn a_style_link_round_trips_its_style_sheet_and_clears_on_nil() {
+        let got: (bool, bool) = eval(
+            r#"
+            local sheet = Instance.new("StyleSheet")
+            local link = Instance.new("StyleLink")
+            link.StyleSheet = sheet
+            local before = link.StyleSheet == sheet
+
+            link.StyleSheet = nil
+            local after = link.StyleSheet == nil
+            return before, after
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (true, true));
+    }
+
+    #[test]
+    fn an_unset_style_link_reads_nil() {
+        let got: bool =
+            eval(r#"return Instance.new("StyleLink").StyleSheet == nil"#).expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn a_style_link_refuses_a_non_style_sheet_instance() {
+        let message = err(r#"Instance.new("StyleLink").StyleSheet = Instance.new("Frame")"#);
+        assert!(message.contains("StyleSheet instance"), "{message}");
     }
 }

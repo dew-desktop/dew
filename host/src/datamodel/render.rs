@@ -96,14 +96,14 @@ fn draws_image(class: &str) -> bool {
 }
 
 fn udim(dom: &Dom, id: usize, key: &str) -> (f32, f32) {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::UDim(v)) => (v.scale, v.offset as f32),
         _ => (0.0, 0.0),
     }
 }
 
 fn udim2(dom: &Dom, id: usize, key: &str) -> (f32, f32, f32, f32) {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::UDim2(v)) => (v.x.scale, v.x.offset as f32, v.y.scale, v.y.offset as f32),
         _ => (0.0, 0.0, 0.0, 0.0),
     }
@@ -135,14 +135,14 @@ pub(crate) fn content_box(dom: &Dom, id: usize, own: Box2) -> Box2 {
 }
 
 fn vector2(dom: &Dom, id: usize, key: &str) -> Vector2 {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::Vector2(v)) => v,
         _ => Vector2::new(0.0, 0.0),
     }
 }
 
 fn number(dom: &Dom, id: usize, key: &str) -> Option<f32> {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::Float32(v)) => Some(v),
         Some(Variant::Float64(v)) => Some(v as f32),
         Some(Variant::Int32(v)) => Some(v as f32),
@@ -152,14 +152,14 @@ fn number(dom: &Dom, id: usize, key: &str) -> Option<f32> {
 }
 
 fn boolean(dom: &Dom, id: usize, key: &str) -> Option<bool> {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::Bool(v)) => Some(v),
         _ => None,
     }
 }
 
 fn text(dom: &Dom, id: usize, key: &str) -> Option<String> {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::String(v)) => Some(v),
         _ => None,
     }
@@ -177,7 +177,7 @@ fn text_for(dom: &Dom, id: usize, class: &str) -> Option<String> {
 
 /// A `Color3` is 0 to 1 per channel; the display list is 0 to 255.
 fn colour(dom: &Dom, id: usize, key: &str) -> Option<Rgb> {
-    match dom.property(id, key) {
+    match dom.styled_property(id, key) {
         Some(Variant::Color3(c)) => Some(Rgb(
             (c.r.clamp(0.0, 1.0) * 255.0).round() as u8,
             (c.g.clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -197,7 +197,7 @@ fn alpha_from(dom: &Dom, id: usize, key: &str) -> f32 {
 }
 
 fn align(dom: &Dom, id: usize, key: &str, enum_name: &str) -> Option<Align> {
-    let Some(Variant::Enum(raw)) = dom.property(id, key) else {
+    let Some(Variant::Enum(raw)) = dom.styled_property(id, key) else {
         return None;
     };
     let item = super::enums::item_by_value(enum_name, raw.to_u32())?;
@@ -252,7 +252,7 @@ fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
 fn corner_radius(dom: &Dom, id: usize) -> f32 {
     for child in dom.children(id) {
         if dom.class_of(child).as_deref() == Some("UICorner") {
-            if let Some(Variant::UDim(u)) = dom.property(child, "CornerRadius") {
+            if let Some(Variant::UDim(u)) = dom.styled_property(child, "CornerRadius") {
                 return u.offset as f32;
             }
         }
@@ -275,14 +275,14 @@ fn corner_radius(dom: &Dom, id: usize) -> f32 {
 /// whenever they disagree -- and an application that sets only `Image` never
 /// reaches the tie at all.
 fn image_uri(dom: &Dom, id: usize) -> Option<String> {
-    if let Some(Variant::Content(content)) = dom.property(id, "ImageContent") {
+    if let Some(Variant::Content(content)) = dom.styled_property(id, "ImageContent") {
         if let Some(uri) = content.as_uri() {
             if !uri.is_empty() {
                 return Some(uri.to_string());
             }
         }
     }
-    match dom.property(id, "Image") {
+    match dom.styled_property(id, "Image") {
         Some(Variant::ContentId(legacy)) if !legacy.as_str().is_empty() => {
             Some(legacy.as_str().to_string())
         }
@@ -316,7 +316,7 @@ fn image_source(dom: &Dom, id: usize) -> Option<Rect> {
 /// The two it cannot are reported by name rather than mapped in silence; see
 /// this module's own header for what that costs and why it is not free.
 fn image_scale(dom: &mut Dom, id: usize) -> Scale {
-    let Some(Variant::Enum(raw)) = dom.property(id, "ScaleType") else {
+    let Some(Variant::Enum(raw)) = dom.styled_property(id, "ScaleType") else {
         return Scale::Stretch;
     };
     let Some(item) = super::enums::item_by_value("ScaleType", raw.to_u32()) else {
@@ -385,7 +385,7 @@ fn stroke_of(dom: &Dom, id: usize) -> Option<Stroke> {
 /// this applet, so `dom.property` answers `None` and every node keeps the
 /// ordinary `Alpha` compositing it always had.
 fn blend_mode_of(dom: &Dom, id: usize) -> BlendMode {
-    match dom.property(id, "BlendingMode") {
+    match dom.styled_property(id, "BlendingMode") {
         Some(Variant::Enum(raw)) => match raw.to_u32() {
             1 => BlendMode::Additive,
             2 => BlendMode::Multiply,
@@ -396,7 +396,7 @@ fn blend_mode_of(dom: &Dom, id: usize) -> BlendMode {
 }
 
 fn gradient_kind(dom: &Dom, id: usize) -> GradientKind {
-    if let Some(prop) = dom.property(id, "Type") {
+    if let Some(prop) = dom.styled_property(id, "Type") {
         match prop {
             Variant::Enum(raw) => {
                 if let Some(item) = super::enums::item_by_value("GradientType", raw.to_u32()) {
@@ -414,7 +414,7 @@ fn gradient_kind(dom: &Dom, id: usize) -> GradientKind {
             _ => {}
         }
     }
-    if let Some(Variant::String(s)) = dom.property(id, "Shape") {
+    if let Some(Variant::String(s)) = dom.styled_property(id, "Shape") {
         if s.eq_ignore_ascii_case("radial") {
             return GradientKind::Radial;
         }
@@ -431,7 +431,7 @@ fn gradient_of(dom: &Dom, id: usize) -> Option<Gradient> {
             let rotation = number(dom, child, "Rotation").unwrap_or(0.0);
             let kind = gradient_kind(dom, child);
             let mut stops = Vec::new();
-            if let Some(Variant::ColorSequence(cs)) = dom.property(child, "Color") {
+            if let Some(Variant::ColorSequence(cs)) = dom.styled_property(child, "Color") {
                 for kp in &cs.keypoints {
                     stops.push(Stop {
                         at: kp.time,
@@ -444,7 +444,7 @@ fn gradient_of(dom: &Dom, id: usize) -> Option<Gradient> {
                 }
             }
             let mut alpha_stops = Vec::new();
-            if let Some(Variant::NumberSequence(ns)) = dom.property(child, "Transparency") {
+            if let Some(Variant::NumberSequence(ns)) = dom.styled_property(child, "Transparency") {
                 for kp in &ns.keypoints {
                     alpha_stops.push(AlphaStop {
                         at: kp.time,
@@ -504,7 +504,7 @@ pub struct Placed {
 
 /// The AutomaticSize axes requested by a node: (grow_x, grow_y).
 fn automatic_axes(dom: &Dom, id: usize) -> (bool, bool) {
-    let Some(Variant::Enum(raw)) = dom.property(id, "AutomaticSize") else {
+    let Some(Variant::Enum(raw)) = dom.styled_property(id, "AutomaticSize") else {
         return (false, false);
     };
     let Some(item) = super::enums::item_by_value("AutomaticSize", raw.to_u32()) else {
@@ -520,7 +520,7 @@ fn automatic_axes(dom: &Dom, id: usize) -> (bool, bool) {
 
 /// The AutomaticCanvasSize axes requested by a ScrollingFrame: (grow_x, grow_y).
 pub(crate) fn automatic_canvas_axes(dom: &Dom, id: usize) -> (bool, bool) {
-    let Some(Variant::Enum(raw)) = dom.property(id, "AutomaticCanvasSize") else {
+    let Some(Variant::Enum(raw)) = dom.styled_property(id, "AutomaticCanvasSize") else {
         return (false, false);
     };
     let Some(item) = super::enums::item_by_value("AutomaticSize", raw.to_u32()) else {
@@ -1031,7 +1031,7 @@ enum CrossAlign {
 }
 
 fn alignment_of(dom: &Dom, layout_id: usize, property: &str) -> CrossAlign {
-    let Some(Variant::Enum(raw)) = dom.property(layout_id, property) else {
+    let Some(Variant::Enum(raw)) = dom.styled_property(layout_id, property) else {
         return CrossAlign::Start;
     };
     match super::enums::item_by_value(property, raw.to_u32()).map(|item| item.name) {
@@ -1064,7 +1064,7 @@ fn place_children(
     if let Some(layout_id) = list_layout_of(dom, id) {
         let (_, pad_offset) = udim(dom, layout_id, "Padding");
         let is_horizontal =
-            if let Some(Variant::Enum(raw)) = dom.property(layout_id, "FillDirection") {
+            if let Some(Variant::Enum(raw)) = dom.styled_property(layout_id, "FillDirection") {
                 super::enums::item_by_value("FillDirection", raw.to_u32())
                     .map(|item| item.name == "Horizontal")
                     .unwrap_or(false)
@@ -1815,6 +1815,117 @@ mod tests {
             100.0,
         );
         assert_eq!(f.nodes[0].fill, Some(Rgb(18, 23, 34)));
+    }
+
+    // ── The StyleSheet cascade reaching paint ─────────────────────────────────
+
+    #[test]
+    fn a_style_rule_colours_an_instance_that_left_the_property_unset() {
+        let f = render(
+            r#"
+            local sheet = Instance.new("StyleSheet")
+            sheet.Parent = root
+
+            local rule = Instance.new("StyleRule")
+            rule.Selector = "Frame"
+            rule:SetProperty("BackgroundColor3", Color3.fromRGB(18, 23, 34))
+            rule.Parent = sheet
+
+            local a = Instance.new("Frame")
+            a.Size = UDim2.new(0, 10, 0, 10)
+            a.Parent = root
+        "#,
+            100.0,
+            100.0,
+        );
+        assert_eq!(f.nodes[0].fill, Some(Rgb(18, 23, 34)));
+    }
+
+    #[test]
+    fn an_instance_s_own_explicit_colour_still_wins_over_a_matching_rule() {
+        // THE DECISION THIS FILE'S OWN CASCADE MAKES, PROVEN AT PAINT: an
+        // explicit assignment is not merely a stronger rule, it is not a
+        // rule at all, and stays outside the contest `Priority` decides.
+        let f = render(
+            r#"
+            local sheet = Instance.new("StyleSheet")
+            sheet.Parent = root
+
+            local rule = Instance.new("StyleRule")
+            rule.Selector = "Frame"
+            rule:SetProperty("BackgroundColor3", Color3.fromRGB(18, 23, 34))
+            rule.Parent = sheet
+
+            local a = Instance.new("Frame")
+            a.Size = UDim2.new(0, 10, 0, 10)
+            a.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+            a.Parent = root
+        "#,
+            100.0,
+            100.0,
+        );
+        assert_eq!(f.nodes[0].fill, Some(Rgb(200, 200, 200)));
+    }
+
+    #[test]
+    fn mutating_a_style_rule_live_marks_the_tree_dirty_and_repaints() {
+        // THE GAP THIS CLOSES: `SetProperty` and `SetProperties` wrote into
+        // `Dom::style_properties` without marking anything dirty, so a mod
+        // that restyled a rule at runtime would sit on a frame the render
+        // loop never knew to redraw -- correct once painted, and never
+        // painted again. No restart: one `Lua`, one `Dom`, one long-lived
+        // `rule` handle, mutated between two reads of the same frame.
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+
+        lua.load(
+            r#"
+            local sheet = Instance.new("StyleSheet")
+            sheet.Parent = root
+
+            rule = Instance.new("StyleRule")
+            rule.Selector = "Frame"
+            rule:SetProperty("BackgroundColor3", Color3.fromRGB(10, 10, 10))
+            rule.Parent = sheet
+
+            local a = Instance.new("Frame")
+            a.Size = UDim2.new(0, 10, 0, 10)
+            a.Parent = root
+        "#,
+        )
+        .exec()
+        .expect("guest");
+
+        let before = frame_of(&dom, root, 100.0, 100.0);
+        assert_eq!(before.nodes[0].fill, Some(Rgb(10, 10, 10)));
+
+        // Drain whatever setup above already marked dirty, so the assertion
+        // below is about the mutation that follows and nothing earlier.
+        dom.lock().expect("dom").take_dirty();
+
+        lua.load(r#"rule:SetProperty("BackgroundColor3", Color3.fromRGB(200, 100, 50))"#)
+            .exec()
+            .expect("mutate live");
+
+        assert!(
+            dom.lock().expect("dom").take_dirty(),
+            "a live StyleRule mutation should mark the tree dirty"
+        );
+
+        let after = frame_of(&dom, root, 100.0, 100.0);
+        assert_eq!(after.nodes[0].fill, Some(Rgb(200, 100, 50)));
     }
 
     #[test]

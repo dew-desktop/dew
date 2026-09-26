@@ -34,6 +34,7 @@
 //! than reporting a rejection, because "this host has not built that yet" and
 //! "your program is wrong" must never arrive as the same message.
 
+mod cascade;
 mod collection_service;
 mod content;
 pub mod enums;
@@ -43,6 +44,7 @@ pub mod members;
 pub mod render;
 mod service_provider;
 pub mod signal;
+mod style;
 mod vocabulary;
 
 use content::{LuaContent, LuaFont};
@@ -138,6 +140,21 @@ pub struct Dom {
     /// reachable from a guest as an `Instance`, and is never destroyed -- there is
     /// nothing that would call `Dom::destroy` on it.
     collection_service_id: Option<usize>,
+    /// `StyleRule`'s own property table: instance id to the name/value pairs
+    /// `SetProperty` has stored on it. NOT `Node::props` -- those hold values
+    /// declared on the rule's own class (`Priority`, `Selector`), while these
+    /// are arbitrary names a `StyleRule` carries for whatever it ends up
+    /// applied to, exactly as `attributes` are arbitrary names an ordinary
+    /// instance carries rather than reflected properties of its own class.
+    style_properties: BTreeMap<usize, BTreeMap<String, Variant>>,
+    /// `StyleLink.StyleSheet`: the link's own id to the `StyleSheet` it points
+    /// at. AN INSTANCE REFERENCE, WHICH `Node::props` CANNOT HOLD -- `Variant`
+    /// (`rbx_types`) has no case for one of this arena's own ids, only the
+    /// serialised `Ref` shape a file format uses. `Parent` is the only other
+    /// property with this problem, and it is solved the same way one arena id
+    /// lower: a side table, read and written by the same special case in
+    /// `Index`/`NewIndex` that already carries `Parent`.
+    style_links: BTreeMap<usize, usize>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -155,6 +172,8 @@ impl Default for Dom {
             tags: BTreeMap::new(),
             instance_tags: BTreeMap::new(),
             collection_service_id: None,
+            style_properties: BTreeMap::new(),
+            style_links: BTreeMap::new(),
         }
     }
 }
@@ -288,6 +307,10 @@ impl Dom {
                 .entry(id)
                 .or_default()
                 .insert(tag.to_string());
+            // A `.class` selector reads this, so a tag change can change
+            // what the cascade resolves for `id` -- the same reason any
+            // other property write below marks the tree dirty.
+            self.dirty = true;
         }
         added
     }
@@ -309,6 +332,7 @@ impl Dom {
                     self.instance_tags.remove(&id);
                 }
             }
+            self.dirty = true;
         }
         removed
     }
@@ -354,6 +378,64 @@ impl Dom {
             }
         }
         held.into_iter().collect()
+    }
+
+    // ── `StyleRule` properties ────────────────────────────────────────────────
+
+    /// `SetProperty`, with `None` clearing the name the same as `SetAttribute`
+    /// does -- a `StyleRule` un-setting a property it changed its mind about
+    /// is the ordinary case, not a special one.
+    fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) {
+        let table = self.style_properties.entry(id).or_default();
+        // SAME VALUE, NO CHANGE, NO REPAINT -- the rule every other property
+        // write in this file already follows, and a `StyleRule` a mod
+        // reassigns every tick needs it as much as any of them.
+        let changed = match &value {
+            Some(v) => table.get(name) != Some(v),
+            None => table.contains_key(name),
+        };
+        match value {
+            Some(v) => {
+                table.insert(name.to_string(), v);
+            }
+            None => {
+                table.remove(name);
+            }
+        }
+        if table.is_empty() {
+            self.style_properties.remove(&id);
+        }
+        if changed {
+            self.dirty = true;
+        }
+    }
+
+    fn get_style_property(&self, id: usize, name: &str) -> Option<Variant> {
+        self.style_properties.get(&id)?.get(name).cloned()
+    }
+
+    fn get_style_properties(&self, id: usize) -> BTreeMap<String, Variant> {
+        self.style_properties.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// `StyleLink.StyleSheet`, or `None` for an unset link or one whose target
+    /// has since been destroyed -- a dangling id reads as unset rather than
+    /// naming a slot that is not there any more.
+    fn get_style_link(&self, id: usize) -> Option<usize> {
+        let target = *self.style_links.get(&id)?;
+        self.node(target)?;
+        Some(target)
+    }
+
+    fn set_style_link(&mut self, id: usize, target: Option<usize>) {
+        match target {
+            Some(target) => {
+                self.style_links.insert(id, target);
+            }
+            None => {
+                self.style_links.remove(&id);
+            }
+        }
     }
 
     // ── Connections ──────────────────────────────────────────────────────────
@@ -474,6 +556,17 @@ impl Dom {
             // Ids are never recycled -- `insert` pushes -- so a cache entry that
             // outlives this by a moment cannot come to mean a different instance.
             self.released.push(current);
+            // A `StyleRule`'s own property table dies with it, the same as its
+            // connections do -- nothing else can reach it by id once the slot
+            // above is gone.
+            self.style_properties.remove(&current);
+            // A destroyed `StyleLink` forgets what it pointed at. A destroyed
+            // `StyleSheet` a link still names is handled at read time instead
+            // -- `get_style_link` already checks the target exists -- because
+            // scrubbing every link that might point at `current` here would be
+            // a scan over every link for every destroy, for a case reading
+            // already answers correctly on its own.
+            self.style_links.remove(&current);
             stack.extend(node.children);
         }
         self.dirty = true;
@@ -952,8 +1045,12 @@ fn coerce_enum(
     )))
 }
 
-/// Coerce a Lua value into a `Variant` for an attribute.
-pub(crate) fn coerce_attribute_value(value: &LuaValue) -> LuaResult<Option<Variant>> {
+/// Coerce a Lua value into a `Variant`, for anything that stores a guest
+/// value under an arbitrary name rather than a reflected property --
+/// `SetAttribute` and `StyleRule.SetProperty` alike. `caller` names itself in
+/// the error, since a `StyleRule.SetProperty` call reporting a failure as
+/// `SetAttribute`'s would send whoever reads it to the wrong method.
+pub(crate) fn coerce_variant_value(caller: &str, value: &LuaValue) -> LuaResult<Option<Variant>> {
     match value {
         LuaValue::Nil => Ok(None),
         LuaValue::Boolean(b) => Ok(Some(Variant::Bool(*b))),
@@ -980,12 +1077,12 @@ pub(crate) fn coerce_attribute_value(value: &LuaValue) -> LuaResult<Option<Varia
                 return Ok(Some(Variant::Font(v)));
             }
             Err(LuaError::runtime(format!(
-                "SetAttribute: unsupported UserData type {}",
+                "{caller}: unsupported UserData type {}",
                 value.type_name()
             )))
         }
         _ => Err(LuaError::runtime(format!(
-            "SetAttribute: unsupported attribute type {}",
+            "{caller}: unsupported value type {}",
             value.type_name()
         ))),
     }
@@ -1103,6 +1200,18 @@ impl UserData for InstanceRef {
                     drop(dom);
                     return match parent {
                         Some(parent) => handle(lua, &this.dom, parent)?.into_lua(lua),
+                        None => Ok(LuaValue::Nil),
+                    };
+                }
+                // `StyleLink.StyleSheet`: AN INSTANCE REFERENCE, read the same
+                // way `Parent` is -- see `Dom::style_links`'s own doc comment
+                // for why it cannot live in `node.props` like an ordinary
+                // property.
+                "StyleSheet" if node.class == "StyleLink" => {
+                    let target = dom.get_style_link(this.id);
+                    drop(dom);
+                    return match target {
+                        Some(target) => handle(lua, &this.dom, target)?.into_lua(lua),
                         None => Ok(LuaValue::Nil),
                     };
                 }
@@ -1285,6 +1394,76 @@ impl UserData for InstanceRef {
                         drop(dom);
                         signal::arrived(lua, &this.dom, this.id)?;
                         return signal::property_changed(lua, &this.dom, this.id, "Parent");
+                    }
+                    // `SelectorError` IS DERIVED, NOT SET BY THE GUEST -- the
+                    // engine computes it from `Selector` the same way, and a
+                    // script that could write it directly could make it lie.
+                    // Guarded on `StyleRule` so a class that does not declare
+                    // `Selector` at all still falls through to `describe`'s
+                    // own "not a valid member" refusal below, unwidened by
+                    // this arm.
+                    "Selector" if class == "StyleRule" => {
+                        let selector = value
+                            .as_string()
+                            .ok_or_else(|| {
+                                LuaError::runtime(format!(
+                                    "Selector expects a string, got {}",
+                                    value.type_name()
+                                ))
+                            })?
+                            .to_string_lossy();
+                        if dom.property(this.id, "Selector")
+                            == Some(Variant::String(selector.clone()))
+                        {
+                            return Ok(());
+                        }
+                        let error = style::parse(&selector).err().unwrap_or_default();
+                        let node = dom.node_mut(this.id).expect("checked");
+                        node.props
+                            .insert("Selector".to_string(), Variant::String(selector));
+                        node.props
+                            .insert("SelectorError".to_string(), Variant::String(error));
+                        dom.touch();
+                        drop(dom);
+                        signal::property_changed(lua, &this.dom, this.id, "Selector")?;
+                        return signal::property_changed(lua, &this.dom, this.id, "SelectorError");
+                    }
+                    // `StyleLink.StyleSheet`, WRITTEN THE SAME WAY `Parent` IS:
+                    // an `Instance` handle or nil, stored as an id in
+                    // `Dom::style_links` rather than in `node.props`. Guarded
+                    // on `StyleLink` so `StyleDerive.StyleSheet` (declared,
+                    // never implemented) still falls through to the generic
+                    // path's honest "cannot accept yet" refusal below.
+                    "StyleSheet" if class == "StyleLink" => {
+                        let target = match &value {
+                            LuaValue::Nil => None,
+                            LuaValue::UserData(ud) => Some(ud.borrow::<InstanceRef>()?.id),
+                            other => {
+                                return Err(LuaError::runtime(format!(
+                                    "StyleSheet expects an Instance or nil, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        if let Some(target_id) = target {
+                            if dom.node(target_id).is_none() {
+                                return Err(LuaError::runtime(
+                                    "the new StyleSheet has been destroyed",
+                                ));
+                            }
+                            if dom.class_of(target_id).as_deref() != Some("StyleSheet") {
+                                return Err(LuaError::runtime(
+                                    "StyleLink.StyleSheet expects a StyleSheet instance",
+                                ));
+                            }
+                        }
+                        if dom.get_style_link(this.id) == target {
+                            return Ok(());
+                        }
+                        dom.set_style_link(this.id, target);
+                        dom.touch();
+                        drop(dom);
+                        return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
                     }
                     _ => {}
                 }
