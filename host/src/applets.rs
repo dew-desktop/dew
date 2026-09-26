@@ -473,6 +473,20 @@ pub mod tests {
     #[cfg(windows)]
     static SESSION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+    /// Held for the duration of every test that reads `library::generation()`
+    /// or does anything that bumps it (`launch`/`uninstall`/`set_enabled`,
+    /// or a direct ping to the `DewLibraryChanged` pipe). It is ONE counter
+    /// for the whole process, by design (see its own doc comment in
+    /// `library.rs`) -- exactly right for a real coordinator with one
+    /// dashboard, and exactly the thing that lets an unrelated test's own
+    /// bump land on a completely different test's "this must still read as
+    /// unchanged" assertion when `cargo test` runs them in parallel.
+    /// `dew_library_on_change_fires_on_its_own_actions` failed on CI this
+    /// way -- passed every local run, then hit a wider core count and lost
+    /// the race the very first time.
+    #[cfg(windows)]
+    static GENERATION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     /// A mod on disk, in a directory of its own, removed when the test ends.
     ///
     /// The loader reads `dew.toml` and an entry module from a real directory,
@@ -812,6 +826,7 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_library_lists_launches_toggles_and_uninstalls_a_real_applet() {
+        let _generation_guard = GENERATION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // DRAINED FIRST, in case an earlier test on this worker thread queued
         // a load or unload that nothing has since consumed -- asserting a
         // queue's CONTENTS only makes sense starting from empty.
@@ -959,6 +974,7 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_library_on_change_fires_on_its_own_actions() {
+        let _generation_guard = GENERATION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let _ = crate::library::take_load_requests();
         let _ = crate::library::take_unload_requests();
 
@@ -1040,6 +1056,7 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_library_changed_pipe_bumps_the_generation_from_any_process() {
+        let _generation_guard = GENERATION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         crate::coordinator::spawn_library_changed_server();
         // GIVEN A MOMENT TO START LISTENING before the first ping --
         // `CreateNamedPipeW` runs on the spawned thread, not before this
