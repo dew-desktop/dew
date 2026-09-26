@@ -34,6 +34,7 @@
 //! than reporting a rejection, because "this host has not built that yet" and
 //! "your program is wrong" must never arrive as the same message.
 
+mod collection_service;
 mod content;
 pub mod enums;
 pub mod extensions;
@@ -49,7 +50,7 @@ use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 use rbx_reflection::{DataType, PropertyDescriptor, Scriptability};
 use rbx_types::{Variant, VariantType};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 use vocabulary::{
     LuaColor3, LuaColorSequence, LuaNumberSequence, LuaRect, LuaUDim, LuaUDim2, LuaVector2,
@@ -117,6 +118,25 @@ pub struct Dom {
     /// destroyed since the last handle was asked for, and the whole VM goes when
     /// the mod does.
     released: Vec<usize>,
+    /// `CollectionService`'s tag multimap: tag name to the instances holding it.
+    ///
+    /// PER DOM, the same as `assets` above -- a mod's tags are its own, and this
+    /// is what makes them die with the mod rather than leaking into the next one
+    /// loaded into the same process.
+    tags: BTreeMap<String, BTreeSet<usize>>,
+    /// The reverse index of `tags`, for `GetTags` and for `destroy` to find what
+    /// to clean up without a scan over every tag.
+    instance_tags: BTreeMap<usize, BTreeSet<String>>,
+    /// The id of `CollectionService`'s own pseudo-instance, minted the first time
+    /// a tag signal is asked for.
+    ///
+    /// A REAL ARENA SLOT, so `GetInstanceAddedSignal`/`GetInstanceRemovedSignal`
+    /// reuse `Dom::connect`/`listeners`/`disconnect` and `signal::fire` exactly as
+    /// `Changed` does, rather than a second handler list and a second discipline
+    /// for collecting, releasing and calling. It holds no children, is never
+    /// reachable from a guest as an `Instance`, and is never destroyed -- there is
+    /// nothing that would call `Dom::destroy` on it.
+    collection_service_id: Option<usize>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -131,6 +151,9 @@ impl Default for Dom {
             dirty: true,
             assets: crate::assets::Assets::default(),
             released: Vec::new(),
+            tags: BTreeMap::new(),
+            instance_tags: BTreeMap::new(),
+            collection_service_id: None,
         }
     }
 }
@@ -233,6 +256,103 @@ impl Dom {
         self.node(id)
             .map(|n| n.attributes.clone())
             .unwrap_or_default()
+    }
+
+    // ── Tags (`CollectionService`) ───────────────────────────────────────────
+
+    /// The id of `CollectionService`'s own pseudo-instance, minting it on first
+    /// use. See the field's own doc comment for why it exists at all.
+    fn collection_service_id(&mut self) -> usize {
+        if let Some(id) = self.collection_service_id {
+            return id;
+        }
+        let id = self.insert(
+            "CollectionService".to_string(),
+            "CollectionService".to_string(),
+        );
+        self.collection_service_id = Some(id);
+        id
+    }
+
+    /// Add `tag` to `id`. Answers whether it was newly added, which is what a
+    /// caller needs to decide whether `InstanceAdded` should fire -- adding a tag
+    /// an instance already holds is a no-op on the engine, not an error.
+    fn add_tag(&mut self, id: usize, tag: &str) -> bool {
+        if self.node(id).is_none() {
+            return false;
+        }
+        let added = self.tags.entry(tag.to_string()).or_default().insert(id);
+        if added {
+            self.instance_tags
+                .entry(id)
+                .or_default()
+                .insert(tag.to_string());
+        }
+        added
+    }
+
+    /// Remove `tag` from `id`. Answers whether it was actually removed -- a tag
+    /// the instance never held is a no-op on the engine, not an error.
+    fn remove_tag(&mut self, id: usize, tag: &str) -> bool {
+        let removed = self
+            .tags
+            .get_mut(tag)
+            .is_some_and(|holders| holders.remove(&id));
+        if removed {
+            if self.tags.get(tag).is_some_and(|holders| holders.is_empty()) {
+                self.tags.remove(tag);
+            }
+            if let Some(held) = self.instance_tags.get_mut(&id) {
+                held.remove(tag);
+                if held.is_empty() {
+                    self.instance_tags.remove(&id);
+                }
+            }
+        }
+        removed
+    }
+
+    fn has_tag(&self, id: usize, tag: &str) -> bool {
+        self.tags
+            .get(tag)
+            .is_some_and(|holders| holders.contains(&id))
+    }
+
+    /// Every instance holding `tag`, or empty when nothing does -- never nil and
+    /// never an error, matching the engine's own answer for an unused tag.
+    fn get_tagged(&self, tag: &str) -> Vec<usize> {
+        self.tags
+            .get(tag)
+            .map(|holders| holders.iter().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every tag `id` holds, or empty once it holds none.
+    fn get_tags(&self, id: usize) -> Vec<String> {
+        self.instance_tags
+            .get(&id)
+            .map(|held| held.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Detach `id` from every tag it holds, for `Destroy`. Answers the tags it
+    /// held, so the caller can fire `InstanceRemoved` for each -- the engine
+    /// fires that signal for a destroyed instance exactly as it does for an
+    /// explicit `RemoveTag`, and this is called from inside the destroy walk
+    /// while the node is still alive, before `Dom::destroy` frees its slot.
+    fn untag_all(&mut self, id: usize) -> Vec<String> {
+        let Some(held) = self.instance_tags.remove(&id) else {
+            return Vec::new();
+        };
+        for tag in &held {
+            if let Some(holders) = self.tags.get_mut(tag) {
+                holders.remove(&id);
+                if holders.is_empty() {
+                    self.tags.remove(tag);
+                }
+            }
+        }
+        held.into_iter().collect()
     }
 
     // ── Connections ──────────────────────────────────────────────────────────
@@ -1385,6 +1505,18 @@ pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
         })?,
     )?;
     lua.globals().set("Instance", instance)?;
+
+    // A GLOBAL, THE SAME AS `Instance`, AND FOR THE SAME REASON: nothing in
+    // this host reaches a DataModel service through `game:GetService` yet, so
+    // there is nowhere else for a first one to be reachable from. When that
+    // registry exists, `CollectionService` moves behind it like any other
+    // service; until then this is where "the other DataModel services" this
+    // sprint was asked to match actually live.
+    let collection_service = lua.create_userdata(
+        collection_service::CollectionServiceHandle::new(dom.clone()),
+    )?;
+    lua.globals().set("CollectionService", collection_service)?;
+
     Ok(())
 }
 

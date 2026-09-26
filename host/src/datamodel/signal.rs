@@ -84,6 +84,17 @@ pub enum Kind {
     // ── Focus, milestone 4 sprint 3 ──────────────────────────────────────────
     Focused,
     FocusLost,
+    // ── `CollectionService`, milestone 27 sprint 1 ───────────────────────────
+    //
+    // ONE PER TAG NAME, the same shape as `PropertyChanged` above: two
+    // different tags are two different signals on one source, so the name has
+    // to travel with the kind rather than being a second dimension to index
+    // by. The source these fire on is `CollectionService`'s own pseudo-instance
+    // (`Dom::collection_service_id`), not the tagged instance itself -- the
+    // engine's own `GetInstanceAddedSignal` and `GetInstanceRemovedSignal` are
+    // members of the service, not of whatever gets tagged.
+    TagAdded(String),
+    TagRemoved(String),
 }
 
 impl Kind {
@@ -115,6 +126,8 @@ impl Kind {
             Kind::InputEnded => "InputEnded".into(),
             Kind::Focused => "Focused".into(),
             Kind::FocusLost => "FocusLost".into(),
+            Kind::TagAdded(tag) => format!("GetInstanceAddedSignal({tag})"),
+            Kind::TagRemoved(tag) => format!("GetInstanceRemovedSignal({tag})"),
         }
     }
 }
@@ -393,6 +406,7 @@ pub fn destroy(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
         if alive(dom, node) {
             fire(dom, node, &Kind::Destroying, &[]);
             super::input::on_destroy(lua, node);
+            super::collection_service::on_destroy(lua, dom, node);
         }
     }
     if !alive(dom, id) {
