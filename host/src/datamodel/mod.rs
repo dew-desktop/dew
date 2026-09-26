@@ -41,6 +41,7 @@ pub mod extensions;
 pub mod input;
 pub mod members;
 pub mod render;
+mod service_provider;
 pub mod signal;
 mod vocabulary;
 
@@ -1506,16 +1507,18 @@ pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
     )?;
     lua.globals().set("Instance", instance)?;
 
-    // A GLOBAL, THE SAME AS `Instance`, AND FOR THE SAME REASON: nothing in
-    // this host reaches a DataModel service through `game:GetService` yet, so
-    // there is nowhere else for a first one to be reachable from. When that
-    // registry exists, `CollectionService` moves behind it like any other
-    // service; until then this is where "the other DataModel services" this
-    // sprint was asked to match actually live.
+    // `services`, NOT `game`. See `service_provider`'s own module comment for
+    // why: it is the real `ServiceProvider` the engine's `game:GetService`
+    // already inherits from, exposed without the `DataModel` tree root
+    // wrapped around it. A script portable to the real engine reaches the
+    // same service through `(game or services):GetService(name)`.
     let collection_service = lua.create_userdata(
         collection_service::CollectionServiceHandle::new(dom.clone()),
     )?;
-    lua.globals().set("CollectionService", collection_service)?;
+    let services = lua.create_userdata(service_provider::ServiceProviderHandle::new(
+        collection_service,
+    ))?;
+    lua.globals().set("services", services)?;
 
     Ok(())
 }

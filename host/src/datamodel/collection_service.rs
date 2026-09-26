@@ -193,9 +193,29 @@ mod tests {
     }
 
     #[test]
+    fn get_service_answers_the_same_object_every_time() {
+        let got: bool = eval(
+            r#"
+            return services:GetService("CollectionService") == services:GetService("CollectionService")
+        "#,
+        )
+        .expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn get_service_refuses_a_name_this_host_does_not_provide() {
+        let err = eval::<LuaValue>(r#"return services:GetService("Lighting")"#)
+            .expect_err("expected this to fail")
+            .to_string();
+        assert!(err.contains("Lighting"), "{err}");
+    }
+
+    #[test]
     fn a_tag_round_trips_through_get_tagged_and_get_tags_then_clears() {
         let got: (usize, bool, usize, String, usize, usize) = eval(
             r#"
+            local CollectionService = services:GetService("CollectionService")
             local f = Instance.new("Frame")
             CollectionService:AddTag(f, "Enemy")
 
@@ -218,6 +238,7 @@ mod tests {
     fn an_unused_tag_reads_as_an_empty_table_not_nil() {
         let got: bool = eval(
             r#"
+            local CollectionService = services:GetService("CollectionService")
             local tagged = CollectionService:GetTagged("NothingHoldsThis")
             return type(tagged) == "table" and #tagged == 0
         "#,
@@ -230,6 +251,7 @@ mod tests {
     fn tagging_twice_and_untagging_an_absent_tag_are_both_no_ops() {
         let got: (usize, bool) = eval(
             r#"
+            local CollectionService = services:GetService("CollectionService")
             local f = Instance.new("Frame")
             local adds = 0
             CollectionService:GetInstanceAddedSignal("Enemy"):Connect(function() adds += 1 end)
@@ -254,6 +276,7 @@ mod tests {
         // one `HasTag` already granted.
         let got: (String, String, bool, bool) = eval(
             r#"
+            local CollectionService = services:GetService("CollectionService")
             local f = Instance.new("Frame")
             local order = {}
             local hadTagWhenAdded, hadTagWhenRemoved
@@ -284,6 +307,7 @@ mod tests {
     fn destroying_a_tagged_instance_fires_instance_removed_and_clears_the_tag() {
         let got: (String, usize) = eval(
             r#"
+            local CollectionService = services:GetService("CollectionService")
             local f = Instance.new("Frame")
             CollectionService:AddTag(f, "Enemy")
 
