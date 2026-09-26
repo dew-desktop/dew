@@ -13,7 +13,7 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, ReleaseCapture, SetCapture, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN,
-    VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_TAB, VK_UP,
+    VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -97,12 +97,20 @@ fn xy(lparam: LPARAM) -> (f32, f32) {
     (x as f32, y as f32)
 }
 
-/// A named key for the ones that produce no character.
+/// A named key.
 ///
-/// Only the keys a text field acts on. Anything else is left to `WM_CHAR`, which
+/// MOSTLY THE KEYS A TEXT FIELD ACTS ON, and left to `WM_CHAR` otherwise, which
 /// already handles layout, dead keys and modifiers correctly — re-deriving a
 /// character from a virtual-key code is how a host ends up typing the wrong thing
 /// on a non-US keyboard.
+///
+/// `Space` IS THE ONE EXCEPTION, named here on purpose even though it also
+/// produces a `WM_CHAR`. A text field wants the character; a button or a
+/// checkbox wants the discrete press `Enum.KeyCode.Space` is on the real
+/// engine, which a text field has no use for and would never receive from
+/// `WM_CHAR` alone -- that message reports what to type, not that a key went
+/// down. Both fire from one physical press, exactly as they do on the engine,
+/// and it is each listener's job to care about only the one it asked for.
 fn key_name(vk: u32) -> Option<&'static str> {
     Some(match VIRTUAL_KEY(vk as u16) {
         VK_BACK => "Backspace",
@@ -116,6 +124,7 @@ fn key_name(vk: u32) -> Option<&'static str> {
         VK_RETURN => "Return",
         VK_TAB => "Tab",
         VK_ESCAPE => "Escape",
+        VK_SPACE => "Space",
         _ => return None,
     })
 }
