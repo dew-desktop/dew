@@ -449,6 +449,31 @@ impl Renderer {
         }
     }
 
+    #[cfg(windows)]
+    fn char(&mut self, c: char) -> Result<(), String> {
+        match self {
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .char(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    c,
+                )
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     /// Force the next frame to repaint.
     ///
     /// A NO-OP UNTIL THIS SPRINT, and it was wrong in a way nothing could show:
@@ -1791,7 +1816,11 @@ fn run_applet(
                 // and drop.
                 Event::CloseRequested => return Ok(()),
                 Event::Key { name, .. } => renderer.borrow_mut().key(&name)?,
-                Event::Char(_) => {}
+                // WAS A NO-OP UNTIL FOUND LIVE, building the dashboard's own
+                // sign-in form: a `TextBox` could be focused, but typing did
+                // nothing at all. See `input::Renderer::char`'s own doc
+                // comment.
+                Event::Char(c) => renderer.borrow_mut().char(c)?,
             }
         }
         let t_dispatch = t_dispatch_start.elapsed();
