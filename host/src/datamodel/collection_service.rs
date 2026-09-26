@@ -168,7 +168,12 @@ pub fn on_destroy(lua: &Lua, dom: &SharedDom, id: usize) {
     };
     let arg = LuaValue::UserData(instance);
     for tag in removed {
-        signal::fire(dom, source, &signal::Kind::TagRemoved(tag), &[arg.clone()]);
+        signal::fire(
+            dom,
+            source,
+            &signal::Kind::TagRemoved(tag),
+            std::slice::from_ref(&arg),
+        );
     }
 }
 
