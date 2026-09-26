@@ -563,7 +563,8 @@ pub extern "C" fn ar_surface_new_backend(width: u32, height: u32, backend: u32) 
     if which == Which::VelloCpu && (width > u16::MAX as u32 || height > u16::MAX as u32) {
         return std::ptr::null_mut();
     }
-    let vello = (which == Which::VelloCpu).then(|| vello_state_new(width, height, Resources::new()));
+    let vello =
+        (which == Which::VelloCpu).then(|| vello_state_new(width, height, Resources::new()));
     Box::into_raw(Box::new(Surface {
         which,
         vello,

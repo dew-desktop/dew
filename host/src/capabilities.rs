@@ -401,7 +401,12 @@ pub fn build(
                 marketplace.set(
                     "Install",
                     lua.create_function(
-                        move |_, (owner_user_id, applet_id, callback): (String, String, LuaFunction)| {
+                        move |_,
+                              (owner_user_id, applet_id, callback): (
+                            String,
+                            String,
+                            LuaFunction,
+                        )| {
                             *trigger_pending.lock().expect("install callback") = Some(callback);
                             if !trigger_flight.swap(true, Ordering::SeqCst) {
                                 *trigger_result.lock().expect("install result") = None;
@@ -606,8 +611,7 @@ pub fn build(
                 let checker_result = Arc::clone(&result);
                 let checker_pending = Arc::clone(&pending);
                 let checker = lua.create_function(move |lua, _dt: f64| {
-                    let Some(outcome) = checker_result.lock().expect("signin result").take()
-                    else {
+                    let Some(outcome) = checker_result.lock().expect("signin result").take() else {
                         return Ok(());
                     };
                     let Some(callback) = checker_pending.lock().expect("signin callback").take()

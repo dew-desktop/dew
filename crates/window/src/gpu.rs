@@ -139,7 +139,12 @@ impl Presenter {
     /// (see this module's own doc for why one would be a bug there, not a
     /// safety net) and configures the swap chain for premultiplied alpha
     /// instead of opaque.
-    pub fn new(hwnd: HWND, width: u32, height: u32, transparent: bool) -> Result<Presenter, String> {
+    pub fn new(
+        hwnd: HWND,
+        width: u32,
+        height: u32,
+        transparent: bool,
+    ) -> Result<Presenter, String> {
         let (dcomp_device, dcomp_target, root_visual, content_visual, backdrop_visual) = unsafe {
             // `None`: DirectComposition is allowed to own its own rendering
             // device rather than share `wgpu`'s. The two devices never touch
@@ -309,7 +314,8 @@ impl Presenter {
                 backdrop_surface.configure(
                     &device,
                     &wgpu::SurfaceConfiguration {
-                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_DST,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                            | wgpu::TextureUsages::COPY_DST,
                         format,
                         width: 1,
                         height: 1,

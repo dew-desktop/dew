@@ -795,7 +795,10 @@ pub mod tests {
             services::tick(&loaded.clock, 0.0);
         }
         let calls: i64 = lua.globals().get("__discover_calls").expect("calls");
-        assert_eq!(calls, 1, "the callback must not fire more than once per trigger");
+        assert_eq!(
+            calls, 1,
+            "the callback must not fire more than once per trigger"
+        );
 
         lua.load(
             r#"
@@ -826,7 +829,9 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_library_lists_launches_toggles_and_uninstalls_a_real_applet() {
-        let _generation_guard = GENERATION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _generation_guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // DRAINED FIRST, in case an earlier test on this worker thread queued
         // a load or unload that nothing has since consumed -- asserting a
         // queue's CONTENTS only makes sense starting from empty.
@@ -974,11 +979,14 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_library_on_change_fires_on_its_own_actions() {
-        let _generation_guard = GENERATION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _generation_guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let _ = crate::library::take_load_requests();
         let _ = crate::library::take_unload_requests();
 
-        let target = InstalledFixture::new("onchange-target", "id = \"lib-onchange-target\"\n", PLAIN);
+        let target =
+            InstalledFixture::new("onchange-target", "id = \"lib-onchange-target\"\n", PLAIN);
 
         let manager = BundledFixture::new(
             "library-onchange",
@@ -1034,7 +1042,10 @@ pub mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        assert!(fired, "OnChange never fired after SetEnabled changed the library");
+        assert!(
+            fired,
+            "OnChange never fired after SetEnabled changed the library"
+        );
 
         let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
         assert_eq!(
@@ -1056,7 +1067,9 @@ pub mod tests {
     #[cfg(windows)]
     #[test]
     fn dew_library_changed_pipe_bumps_the_generation_from_any_process() {
-        let _generation_guard = GENERATION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _generation_guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         crate::coordinator::spawn_library_changed_server();
         // GIVEN A MOMENT TO START LISTENING before the first ping --
         // `CreateNamedPipeW` runs on the spawned thread, not before this

@@ -530,6 +530,9 @@ mod tests {
         assert_eq!((painter.canvas.width(), painter.canvas.height()), (100, 60));
 
         assert!(painter.resize(320, 240));
-        assert_eq!((painter.canvas.width(), painter.canvas.height()), (320, 240));
+        assert_eq!(
+            (painter.canvas.width(), painter.canvas.height()),
+            (320, 240)
+        );
     }
 }

@@ -727,7 +727,6 @@ impl Window {
             ReleaseDC(None, screen);
         }
     }
-
 }
 
 impl Drop for Window {
