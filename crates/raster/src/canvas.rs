@@ -22,8 +22,8 @@ use crate::{
     ar_begin, ar_begin_alpha, ar_begin_rect_alpha, ar_bgra, ar_clip_pop, ar_clip_push,
     ar_clip_push_rounded, ar_draw_image, ar_fill_gradient, ar_fill_radial_gradient, ar_fill_rect,
     ar_fill_text, ar_font_load, ar_image_free, ar_image_size, ar_image_upload, ar_png,
-    ar_stroke_rect, ar_surface_free, ar_surface_new_backend, ar_text_ascent, ar_text_line_height,
-    ar_text_width, Surface,
+    ar_stroke_rect, ar_surface_free, ar_surface_new_backend, ar_surface_resize, ar_text_ascent,
+    ar_text_line_height, ar_text_width, Surface,
 };
 
 /// Which rasteriser paints.
@@ -143,6 +143,21 @@ impl Canvas {
     pub fn new(width: u32, height: u32, backend: Backend) -> Option<Canvas> {
         let ptr = ar_surface_new_backend(width, height, backend.code());
         (!ptr.is_null()).then_some(Canvas { ptr, width, height })
+    }
+
+    /// Resize this canvas IN PLACE, at whichever backend it was created
+    /// with -- unlike [`Canvas::new`], this keeps the vello backend's own
+    /// glyph cache alive across the resize rather than rebuilding it from
+    /// empty. See `ar_surface_resize`'s own doc for why that distinction is
+    /// the whole point of this method existing.
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        if ar_surface_resize(self.ptr, width, height) {
+            self.width = width;
+            self.height = height;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn width(&self) -> u32 {

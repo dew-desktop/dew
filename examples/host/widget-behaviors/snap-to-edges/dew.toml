@@ -1,0 +1,12 @@
+# Snap To Edges
+#
+# A draggable widget that snaps to the nearest screen edge once you drag it
+# close enough.
+
+id = "snap-to-edges"
+name = "Snap To Edges"
+description = "Drag me near an edge and I'll snap to it"
+
+# WHAT THIS APPLET MAY REACH. `widget` is what puts `desktop.Widget` on the
+# table.
+permissions = ["widget"]

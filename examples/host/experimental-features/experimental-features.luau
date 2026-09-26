@@ -23,7 +23,7 @@
 	whole vocabulary.
 ]]
 
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
 local root = widget({
 	width = 480,

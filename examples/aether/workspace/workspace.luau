@@ -171,7 +171,7 @@ end
 ---
 --- `width`/`height` are ignored for an overlay -- the screen supplies them --
 --- and are kept only as the size this was designed against.
-local overlay = assert(dew.Overlay, "dew.toml must grant `overlay`")
+local overlay = assert(desktop.Overlay, "dew.toml must grant `overlay`")
 local root = overlay({ width = 720, height = 440 })
 
 local function build(): any

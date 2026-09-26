@@ -388,6 +388,13 @@ fn vector2(dom: &super::Dom, id: usize, key: &str) -> Vector2 {
     }
 }
 
+fn text_of(dom: &super::Dom, id: usize) -> String {
+    match dom.property(id, "Text") {
+        Some(Variant::String(s)) => s,
+        _ => String::new(),
+    }
+}
+
 fn sinks(dom: &super::Dom, id: usize) -> bool {
     flag(dom, id, "Active")
         || matches!(
@@ -703,15 +710,78 @@ impl Pointer {
     }
 
     /// A named key event arrived.
+    ///
+    /// BACKSPACE REMOVES THE LAST CHARACTER, NOT THE ONE BEFORE A CURSOR --
+    /// this host has no cursor-position tracking yet (`TextBox.CursorPosition`
+    /// is declared in the vocabulary but nothing reads or writes it), so
+    /// editing is append/remove-at-the-end only. `char` below makes the same
+    /// simplification for typing. A real caret is real work this fix does
+    /// not attempt; see the doc comment there.
     pub fn key(&mut self, surface: &Surface, name: &str) -> LuaResult<()> {
         let focus = focus_of(surface.lua)?;
         self.focus = focus.clone();
+        let Some(id) = focus.get() else {
+            return Ok(());
+        };
         if name == "Return" {
-            if let Some(id) = focus.get() {
-                release_focus(surface.lua, surface.dom, id, true)?;
+            release_focus(surface.lua, surface.dom, id, true)?;
+            return Ok(());
+        }
+        if name == "Backspace" {
+            let changed = {
+                let mut guard = surface.dom.lock().expect("dom");
+                if guard.class_of(id).as_deref() != Some("TextBox") {
+                    return Ok(());
+                }
+                let mut text = text_of(&guard, id);
+                let removed = text.pop().is_some();
+                if removed {
+                    if let Some(node) = guard.node_mut(id) {
+                        node.props.insert("Text".to_string(), Variant::String(text));
+                    }
+                    guard.touch();
+                }
+                removed
+            };
+            if changed {
+                signal::property_changed(surface.lua, surface.dom, id, "Text")?;
             }
         }
         Ok(())
+    }
+
+    /// A printable character arrived from the keyboard (`WM_CHAR` on
+    /// Windows), appended to the focused `TextBox`'s own `Text` -- or a
+    /// no-op if nothing is focused, or what is focused is not a `TextBox`.
+    ///
+    /// THIS DID NOT EXIST BEFORE, AND `Event::Char` WAS SILENTLY DROPPED
+    /// (`main.rs` matched it to `{}`) -- a `TextBox` could be clicked into
+    /// focus, and typing into it did nothing at all. Found live, building
+    /// the dashboard's own sign-in form, the first real text-entry UI
+    /// this host had ever run.
+    ///
+    /// APPENDED AT THE END, NOT AT A CURSOR -- see `key`'s own doc comment
+    /// on `Backspace` for why: there is no cursor position to insert at
+    /// yet.
+    pub fn char(&mut self, surface: &Surface, c: char) -> LuaResult<()> {
+        let focus = focus_of(surface.lua)?;
+        self.focus = focus.clone();
+        let Some(id) = focus.get() else {
+            return Ok(());
+        };
+        {
+            let mut guard = surface.dom.lock().expect("dom");
+            if guard.class_of(id).as_deref() != Some("TextBox") {
+                return Ok(());
+            }
+            let mut text = text_of(&guard, id);
+            text.push(c);
+            if let Some(node) = guard.node_mut(id) {
+                node.props.insert("Text".to_string(), Variant::String(text));
+            }
+            guard.touch();
+        }
+        signal::property_changed(surface.lua, surface.dom, id, "Text")
     }
 
     /// A button came up.
@@ -1039,6 +1109,10 @@ mod tests {
 
         fn key(&mut self, name: &str) {
             self.drive(|p, s| p.key(s, name));
+        }
+
+        fn char(&mut self, c: char) {
+            self.drive(|p, s| p.char(s, c));
         }
 
         fn right_down(&mut self, x: f32, y: f32) {
@@ -1907,6 +1981,67 @@ mod tests {
             h.log(),
             "focused:true,lost:true:false,focused:true,lost:false:false"
         );
+    }
+
+    /// FOUND LIVE, BUILDING THE DASHBOARD'S OWN SIGN-IN FORM:
+    /// `main.rs` matched `Event::Char` to `{}` -- a `TextBox` could be
+    /// clicked into focus (proven by the test above), and typing into it
+    /// did nothing at all. `Pointer::char`/`Pointer::key`'s own `Backspace`
+    /// arm are the fix; this is the hermetic half of proving it, driving
+    /// the same entry points `main.rs` now calls from `Event::Char`/
+    /// `Event::Key` rather than a real keyboard.
+    #[test]
+    fn typing_into_a_focused_textbox_appends_and_backspace_removes() {
+        let mut h = Harness::new(
+            r#"
+            tb = Instance.new("TextBox")
+            tb.Size = UDim2.new(0, 100, 0, 50)
+            tb.Text = ""
+            tb.Parent = root
+        "#,
+        );
+        h.click(50.0, 25.0);
+        assert_eq!(h.eval::<String>("return tb.Text"), "");
+
+        h.char('h');
+        h.char('i');
+        assert_eq!(h.eval::<String>("return tb.Text"), "hi");
+
+        h.key("Backspace");
+        assert_eq!(h.eval::<String>("return tb.Text"), "h");
+
+        // A character with nothing focused is a no-op, not an error -- the
+        // same tolerance a click on empty space already has.
+        h.key("Return");
+        h.char('z');
+        assert_eq!(h.eval::<String>("return tb.Text"), "h");
+    }
+
+    /// A CHARACTER MUST NEVER LAND ON WHATEVER ELSE IS FOCUSED. Two boxes,
+    /// only one clicked into -- typing must reach that one alone.
+    #[test]
+    fn typing_only_reaches_the_focused_textbox() {
+        let mut h = Harness::new(
+            r#"
+            a = Instance.new("TextBox")
+            a.Name = "A"
+            a.Size = UDim2.new(0, 100, 0, 50)
+            a.Position = UDim2.new(0, 0, 0, 0)
+            a.Text = ""
+            a.Parent = root
+
+            b = Instance.new("TextBox")
+            b.Name = "B"
+            b.Size = UDim2.new(0, 100, 0, 50)
+            b.Position = UDim2.new(0, 100, 0, 0)
+            b.Text = ""
+            b.Parent = root
+        "#,
+        );
+        h.click(50.0, 25.0);
+        h.char('a');
+        assert_eq!(h.eval::<String>("return a.Text"), "a");
+        assert_eq!(h.eval::<String>("return b.Text"), "");
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! Where a dragged widget was left, across relaunches.
 //!
-//! HOST-INTERNAL, AND NOTHING TO DO WITH `dew.Storage`. Storage is ephemeral,
+//! HOST-INTERNAL, AND NOTHING TO DO WITH `desktop.Storage`. Storage is ephemeral,
 //! process-lifetime only, and an applet's own code never reaches this file --
 //! matching how `draggable` itself is host-driven rather than scriptable. A
 //! flat `{ "applet-id": [x, y] }` map is enough; there is only ever one

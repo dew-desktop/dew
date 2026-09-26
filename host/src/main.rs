@@ -24,9 +24,11 @@ mod applets;
 #[cfg(windows)]
 mod coordinator;
 #[cfg(windows)]
+mod dashboard;
+#[cfg(windows)]
 mod installed;
 #[cfg(windows)]
-mod manage;
+mod library;
 #[cfg(windows)]
 mod package;
 #[cfg(windows)]
@@ -43,9 +45,11 @@ use dew_runtime::{RasterPainter, Rgb};
 #[cfg(windows)]
 use dew_window::{Button, Event, Pump, Surface, Window};
 use mlua::Lua;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 #[cfg(windows)]
@@ -445,6 +449,31 @@ impl Renderer {
         }
     }
 
+    #[cfg(windows)]
+    fn char(&mut self, c: char) -> Result<(), String> {
+        match self {
+            Renderer::DataModel {
+                dom,
+                root,
+                width,
+                height,
+                lua,
+                pointer,
+                ..
+            } => pointer
+                .char(
+                    &input::Surface {
+                        lua,
+                        dom,
+                        root: *root,
+                        size: (*width, *height),
+                    },
+                    c,
+                )
+                .map_err(|e| e.to_string()),
+        }
+    }
+
     /// Force the next frame to repaint.
     ///
     /// A NO-OP UNTIL THIS SPRINT, and it was wrong in a way nothing could show:
@@ -464,6 +493,35 @@ impl Renderer {
             Renderer::DataModel { painter, .. } => painter,
         }
     }
+
+    /// Take a size the window was just told it now has.
+    ///
+    /// WITHOUT THIS, A RESIZE STRETCHES RATHER THAN REDRAWS. `width`/`height`
+    /// here are what `frame_of` lays the DataModel out against every frame;
+    /// left at whatever they were when this renderer was created, the next
+    /// frame keeps rendering the OLD layout into a canvas also still the old
+    /// size, and `Window::present`'s `StretchDIBits` then stretches that
+    /// stale-sized buffer to fill the window's new, already-resized client
+    /// rect -- which is indistinguishable, on screen, from the content
+    /// itself being stretched, because it is being stretched, just not by
+    /// anything that knows what it is stretching.
+    #[cfg(windows)]
+    fn resize(&mut self, width: u32, height: u32) {
+        match self {
+            Renderer::DataModel {
+                dom,
+                painter,
+                width: w,
+                height: h,
+                ..
+            } => {
+                *w = width as f32;
+                *h = height as f32;
+                painter.resize(width, height);
+                dom.lock().expect("dom").touch();
+            }
+        }
+    }
 }
 
 /// `--script <path> --snapshot <png>`: run a Luau file against Dew's OWN
@@ -479,7 +537,7 @@ impl Renderer {
 /// `DewRoot` RATHER THAN `game`, AND THAT IS ABOUT THIS PATH RATHER THAN ABOUT
 /// the plan. A standalone script parents into a root; `DewRoot` names the root it
 /// was handed. What a guest reaches through `game` on the engine is the SERVICES
-/// behind it, and those are `dew.Text` and `dew.Clock`, installed above: the two
+/// behind it, and those are `desktop.Text` and `desktop.Clock`, installed above: the two
 /// things a guest framework genuinely could not compute for itself, and required
 /// of a conforming host by `docs/host_services.md` since 2026-09-04.
 ///
@@ -524,7 +582,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
     dom.lock().expect("dom").assets.set_root(dir.clone());
     datamodel::install(vm.lua(), &dom).map_err(|e| e.to_string())?;
     datamodel::install_vocabulary(vm.lua()).map_err(|e| e.to_string())?;
-    // `dew.Text`/`dew.Clock` HERE TOO, so a standalone script measures text the same way a mod
+    // `desktop.Text`/`desktop.Clock` HERE TOO, so a standalone script measures text the same way a mod
     // does. NOTHING DRIVES THE CLOCK ON THIS PATH and that is honest rather than
     // missing: `--script` draws one frame and exits, so there are no frames to be
     // called on. A script may still subscribe -- it simply never gets a tick,
@@ -1278,7 +1336,7 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
             let active = load_applet(&dir)?;
             // `pointer` IS NOT NEEDED HERE. A snapshot renders one frame and
             // exits without ever calling `Renderer::moved`/`down`/`up`/`wheel`,
-            // so there is no cursor for `dew.Pointer`/`dew.Input` to report.
+            // so there is no cursor for `desktop.Pointer`/`desktop.Input` to report.
             let applets::Applet {
                 manifest,
                 width,
@@ -1496,7 +1554,16 @@ fn run_applet(
     // an `Arc` clone -- the same dom, not a second one.
     let dom = dom.clone();
 
-    let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
+    // SHARED, NOT OWNED OUTRIGHT, from here on -- the live-resize hook
+    // registered below needs its own handle on both this and `window`,
+    // callable from inside `WM_NCCALCSIZE` while this function's own loop is
+    // doing nothing at all (blocked inside `pump.poll()`, itself blocked
+    // inside Windows' own modal drag loop). A `RefCell` is enough rather
+    // than a `Mutex`: the hook and this loop's own code never run at once,
+    // only ever nested one inside the other, on this one thread.
+    let renderer = Rc::new(RefCell::new(create_renderer(
+        mounted, &vm, &clock, &surface, width, height,
+    )?));
 
     // WHICH DRAGGABLE BEHAVIOURS THIS SURFACE ASKED FOR, if it is a widget
     // at all. `None` for everything else, which turns the whole drag state
@@ -1526,7 +1593,77 @@ fn run_applet(
         }
     }
 
-    let mut window = Window::new(&resolved, width, height)?;
+    let window = Rc::new(RefCell::new(Window::new(&resolved, width, height)?));
+
+    // REPAINT LIVE, DURING A BORDER-DRAG RESIZE, NOT ONLY ONCE IT ENDS.
+    // `WM_NCCALCSIZE` calls this synchronously from inside Windows' own
+    // modal drag loop -- see `dew_window::set_live_resize_hook`'s own doc
+    // comment for why nothing else reaches this window at all while that
+    // loop is running, and `crate::win32`'s `WM_NCCALCSIZE` match arm for
+    // why this fires there rather than from `WM_SIZE`: `WM_NCCALCSIZE` is
+    // sent BEFORE the border visually moves to its new position, so
+    // rendering here keeps content in step with the border instead of one
+    // message behind it. `resized` before `present`, in that order: the
+    // presenter's destination is the window's OWN tracked size, and a
+    // present with a source that does not match it is exactly the stretch
+    // this whole hook exists to stop happening again.
+    {
+        let renderer = Rc::clone(&renderer);
+        let window = Rc::clone(&window);
+        // PACED TO THE COMPOSITOR, THE SAME WAY AN UNCAPPED WIDGET ALREADY
+        // IS -- see `tray::CAPS`'s own comment on why `DwmFlush` is the
+        // right wait, not a fixed interval guessed at here a second time.
+        // `renderer.resize` rebuilds the native drawing surface from
+        // scratch (`Canvas` has no in-place resize of its own), and a fast
+        // border drag fires `WM_NCCALCSIZE` far more often than any display
+        // can show a new frame -- blocking here until the next vertical blank
+        // is what stops that from reallocating and repainting faster than
+        // anything could ever be shown, at whatever the real refresh rate
+        // of whichever monitor this window is actually on happens to be,
+        // rather than a number picked in this file.
+        dew_window::set_live_resize_hook(move |w, h| {
+            let t0 = Instant::now();
+            window.borrow_mut().resized(w, h);
+            let t_resized = t0.elapsed();
+
+            let t1 = Instant::now();
+            let mut renderer = renderer.borrow_mut();
+            renderer.resize(w, h);
+            let t_resize = t1.elapsed();
+
+            let t2 = Instant::now();
+            let painted = renderer.frame(0.0).unwrap_or(false);
+            let t_frame = t2.elapsed();
+
+            let t3 = Instant::now();
+            if painted {
+                if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
+                    window.borrow_mut().present(bgra, w, h);
+                }
+            }
+            let t_present = t3.elapsed();
+            drop(renderer);
+
+            let _ = unsafe { DwmFlush() };
+
+            // GATED ON `--stats`, NOT PRINTED UNCONDITIONALLY: this fires on
+            // every message during a live drag, which is far too often for
+            // a print nobody asked to see. `present` HERE IS NOT JUST GPU
+            // PRESENTATION -- `canvas.bgra()` calls into `dew_raster`'s
+            // `ar_bgra`, which renders the scene lazily on first read after
+            // a resize. `renderer.resize` REBUILDS the canvas from scratch,
+            // so Vello's own "already rendered" cache never survives a
+            // resize step, and this number is dominated by that full
+            // CPU rasterization, not by anything in `crates/window`. A
+            // steady-state `--bench` reading never resizes, so it never
+            // pays this cost and cannot show it.
+            if stats {
+                println!(
+                    "[dew] resize {w}x{h} | resized {t_resized:?} | resize {t_resize:?} | frame {t_frame:?} | present {t_present:?}"
+                );
+            }
+        });
+    }
 
     // THE WINDOW'S CURRENT ON-SCREEN POSITION, TRACKED HERE because nothing
     // else does: `Window` itself only knows its size (`resized` exists for
@@ -1554,9 +1691,12 @@ fn run_applet(
     // silently applied to the wrong tree is not a failure that announces
     // itself.
     let mut pump = Pump::new();
+    let mut iter_end = Instant::now();
     while let Some(events) = pump.poll() {
+        let t_poll = iter_end.elapsed();
+        let t_dispatch_start = Instant::now();
         for (from, event) in events {
-            if from != window.id() {
+            if from != window.borrow().id() {
                 continue;
             }
             match event {
@@ -1598,19 +1738,19 @@ fn run_applet(
                                 snap_to_edges,
                                 keep_on_screen,
                             );
-                            window.set_position(placed.0, placed.1);
+                            window.borrow().set_position(placed.0, placed.1);
                             position = placed;
                         }
                     }
                     if forward {
-                        renderer.moved(x, y, &service_pointer)?;
+                        renderer.borrow_mut().moved(x, y, &service_pointer)?;
                     }
                 }
                 Event::PointerDown { x, y, button } => {
                     // DISPATCHED UNCHANGED, EVERY TIME. A press-and-hold
                     // button must still work even on a draggable widget, so
                     // arming a drag never replaces this.
-                    renderer.down(button, x, y, &service_pointer)?;
+                    renderer.borrow_mut().down(button, x, y, &service_pointer)?;
                     if button == Button::Left {
                         if let Some((draggable, _, _, _)) = drag_options {
                             if draggable {
@@ -1641,49 +1781,67 @@ fn run_applet(
                         }
                     }
                     if !suppress {
-                        renderer.up(button, x, y, &service_pointer)?;
+                        renderer.borrow_mut().up(button, x, y, &service_pointer)?;
                     }
                 }
                 Event::Wheel { x, y, delta } => {
-                    renderer.wheel(x, y, delta, &service_pointer)?;
+                    renderer.borrow_mut().wheel(x, y, delta, &service_pointer)?;
                 }
                 Event::Resized {
                     width: w,
                     height: h,
                 } => {
-                    // THE SHELL APPLIES THE SIZE NOW. The window used to
-                    // catch its own resize while draining its own queue.
-                    window.resized(w, h);
-                    renderer.invalidate();
+                    // THIS IS THE DEFERRED CATCH-UP, NOT THE LIVE REPAINT --
+                    // that already happened, synchronously, in the
+                    // `set_live_resize_hook` closure above, for every size
+                    // Windows reported during the drag. This handler exists
+                    // for a resize that was never a live drag at all
+                    // (maximizing, snapping to a screen edge, `Win`+arrow)
+                    // and, for a real drag, catches up this function's own
+                    // `window`/`renderer` handles to whatever the hook's
+                    // OWN clones already settled on -- redundant with the
+                    // hook's last call in that case, not wrong, since both
+                    // `resized` and `resize` are idempotent at a size they
+                    // are already at.
+                    window.borrow_mut().resized(w, h);
+                    renderer.borrow_mut().resize(w, h);
+                    width = w;
+                    height = h;
                 }
-                Event::Exposed => renderer.invalidate(),
+                Event::Exposed => renderer.borrow_mut().invalidate(),
                 // UNLOADS THIS APPLET, AND NOTHING ELSE. The process used to
                 // exit the moment its one window closed; the coordinator
                 // outlives every applet now, so this thread simply ends and
                 // leaves the registry entry for the coordinator to notice
                 // and drop.
                 Event::CloseRequested => return Ok(()),
-                Event::Key { name, .. } => renderer.key(&name)?,
-                Event::Char(_) => {}
+                Event::Key { name, .. } => renderer.borrow_mut().key(&name)?,
+                // WAS A NO-OP UNTIL FOUND LIVE, building the dashboard's own
+                // sign-in form: a `TextBox` could be focused, but typing did
+                // nothing at all. See `input::Renderer::char`'s own doc
+                // comment.
+                Event::Char(c) => renderer.borrow_mut().char(c)?,
             }
         }
+        let t_dispatch = t_dispatch_start.elapsed();
 
         let dt = last.elapsed().as_secs_f32();
         last = Instant::now();
 
         if bench {
-            renderer.invalidate();
+            renderer.borrow_mut().invalidate();
         }
 
         let t0 = Instant::now();
         let painted = renderer
+            .borrow_mut()
             .frame(dt)
             .map_err(|e| format!("while rendering: {e}"))?;
         let t_frame = t0.elapsed();
 
         let t1 = Instant::now();
-        if let Some(bgra) = renderer.painter_mut().canvas_mut().bgra() {
-            window.present(bgra, width, height);
+        if let Some(bgra) = renderer.borrow_mut().painter_mut().canvas_mut().bgra() {
+            window.borrow_mut().present(bgra, width, height);
         }
         let t_raster = t1.elapsed();
 
@@ -1697,7 +1855,7 @@ fn run_applet(
             if last_report.elapsed() >= Duration::from_secs(1) {
                 let n = painted_frames.max(1);
                 println!(
-                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+blit {:?}",
+                    "[dew] {frames} fps | painted {painted_frames} | solve {:?} | raster+present {:?}",
                     sum_frame / n,
                     sum_present / n
                 );
@@ -1718,6 +1876,7 @@ fn run_applet(
             return Ok(());
         }
 
+        let t_pace_start = Instant::now();
         match tray::frame_budget() {
             Some(target) => {
                 let elapsed = last.elapsed();
@@ -1738,6 +1897,26 @@ fn run_applet(
                 let _ = unsafe { DwmFlush() };
             }
         }
+        let t_pace = t_pace_start.elapsed();
+
+        // A CANARY, KEPT RATHER THAN THROWN AWAY AFTER DIAGNOSIS. This is
+        // what actually found the message-pump stall `solve`/`raster+present`
+        // alone could not explain (both stayed under 30ms even on the frame
+        // that was visibly slow) -- `crates/window`'s composition swap
+        // chains going quiet for a while and stalling `pump.poll()` itself,
+        // fixed by presenting the backdrop every frame instead of once. It
+        // costs a handful of comparisons per iteration and stays silent
+        // unless something takes this long again, so it stays on rather
+        // than being removed the moment this particular cause was found.
+        if stats {
+            let total = t_poll + t_dispatch + t_frame + t_raster + t_pace;
+            if total > Duration::from_millis(50) {
+                println!(
+                    "[dew] SLOW ITERATION {total:?} | poll {t_poll:?} | dispatch {t_dispatch:?} | frame {t_frame:?} | present {t_raster:?} | pace {t_pace:?}"
+                );
+            }
+        }
+        iter_end = Instant::now();
     }
 
     Ok(())
@@ -1894,9 +2073,11 @@ fn execute_package(dir: PathBuf, output: Option<PathBuf>) -> Result<(), String> 
     }
 }
 
-/// Remove an installed applet from the store. Refuses if that id is
-/// currently running in an active coordinator, so `dew uninstall` never
-/// leaves a running applet with no installed copy behind it.
+/// Remove an installed applet from the store. If it is currently running in
+/// an active coordinator, that coordinator is asked to unload it live
+/// first -- the same request the dashboard's own Library tab makes -- so
+/// `dew uninstall` never leaves a running applet with no installed copy
+/// behind it, and never needs a person to close it by hand first either.
 fn execute_uninstall(id: String) -> Result<(), String> {
     #[cfg(not(windows))]
     {
@@ -1906,16 +2087,14 @@ fn execute_uninstall(id: String) -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        if coordinator::query_running(&id)? {
-            return Err(format!(
-                "'{id}' is currently running; exit it (or exit Dew) before uninstalling"
-            ));
-        }
-        installed::uninstall(&id)?;
+        // THE SAME FUNCTION THE DASHBOARD'S UNINSTALL BUTTON CALLS, not a
+        // second copy of "ask for a live unload, wait, then delete" here --
+        // see `library::uninstall`'s own doc comment for why that function
+        // has to reach `UNLOAD_QUEUE` through a pipe now, unconditionally,
+        // rather than special-casing this CLI call as the one caller
+        // outside the coordinator's own process.
+        library::uninstall(&id)?;
         println!("[dew] uninstalled '{id}'");
-        println!(
-            "[dew] a Dew service already running keeps what it started with until it is restarted"
-        );
         Ok(())
     }
 }
@@ -2528,12 +2707,12 @@ return process
             continue;
         }
 
-        // Test runner provides a steppable clock via dew.Clock.Step(dt)
+        // Test runner provides a steppable clock via desktop.Clock.Step(dt)
         // so transition tests can step simulated time. This is strictly isolated
         // to `dew test` and absent in guest mods run via `dew run` / `dew snapshot`.
         let step_clock = Arc::clone(&clock);
-        if let Ok(dew) = vm.lua().globals().get::<mlua::Table>("dew") {
-            if let Ok(dew_clock) = dew.get::<mlua::Table>("Clock") {
+        if let Ok(desktop) = vm.lua().globals().get::<mlua::Table>("desktop") {
+            if let Ok(dew_clock) = desktop.get::<mlua::Table>("Clock") {
                 let _ = dew_clock.set(
                     "Step",
                     match vm.lua().create_function(move |_, dt: Option<f32>| {
@@ -2981,7 +3160,47 @@ fn install_panic_hook() {
     }));
 }
 
+/// Declares this process per-monitor-v2 DPI aware, before anything creates a
+/// window.
+///
+/// WHAT THIS FIXES: every window Dew creates is sized and positioned in raw
+/// pixels a widget author chose -- `width = 260, height = 120` means exactly
+/// that, on any monitor, the same way a Rainmeter skin is pixel-precise
+/// rather than scaled. A process that never declares a DPI awareness level
+/// defaults to one Windows itself compensates for: it renders once, at
+/// whichever monitor's DPI the process started on, and Windows silently
+/// bitmap-stretches the presented window whenever it ends up on a monitor
+/// with a different scale factor. That reads as "the content stretches when
+/// I drag the window," because that is exactly what is happening to it.
+///
+/// NOTHING ELSE CHANGES. This crate has never scaled anything by DPI and
+/// still does not -- once declared aware, Windows stops compensating on
+/// this process's behalf, and every window simply keeps the exact physical
+/// pixel size it already had. `WM_DPICHANGED` is deliberately left
+/// unhandled everywhere: the default behavior for an unhandled one is to do
+/// nothing, which is the pixel-precise behavior this process wants, not an
+/// oversight to fill in later.
+///
+/// BEST-EFFORT: `SetProcessDpiAwarenessContext` was added in the Creators
+/// Update (1703). A failure here means an older Windows, where the process
+/// falls back to whatever default it already had -- worth being silent
+/// about rather than refusing to start over a display setting nobody but a
+/// multi-monitor, mixed-DPI setup would ever notice.
+#[cfg(windows)]
+fn declare_dpi_awareness() {
+    use windows::Win32::UI::HiDpi::{
+        SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
+    unsafe {
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
+}
+
+#[cfg(not(windows))]
+fn declare_dpi_awareness() {}
+
 fn main() -> ExitCode {
+    declare_dpi_awareness();
     install_panic_hook();
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -3030,8 +3249,8 @@ fn install_test_surface(
         root: Some(mlua::IntoLua::into_lua(handle.clone(), lua)?),
         title: "test".to_string(),
     };
-    let dew = crate::capabilities::build(lua, &granted, state, &grant)?;
-    lua.globals().set("dew", dew)?;
+    let desktop = crate::capabilities::build(lua, &granted, state, &grant)?;
+    lua.globals().set("desktop", desktop)?;
 
     let harness = lua.create_table()?;
     harness.set("Root", handle)?;

@@ -96,7 +96,7 @@ return {
 	--- WHAT `dew` CALLS. The tree is already built, so this only parents it into
 	--- the root the host made. An applet that mounts its own framework needs
 	--- nothing else from the host.
-	mount = function(_dew: any, root: any)
+	mount = function(_desktop: any, root: any)
 		(tree :: any).Parent = root
 		return tree
 	end,

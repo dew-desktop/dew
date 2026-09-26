@@ -1,38 +1,27 @@
 --!strict
 --[[
-	Widget Behaviors -- the desktop-native behaviors a Rainmeter-shaped widget
-	gets on top of `dew.Widget`'s original width/height/anchor/offset/clickThrough.
+	Draggable -- the base behavior every other example in this folder builds
+	on: click and hold the widget's body to move it.
 
-	    cargo run -- examples/host/widget-behaviors
+	    cargo run -- examples/host/widget-behaviors/draggable
 
-	Still no framework here, matching `examples/host/basic-widget`'s
-	convention for the TREE: `Instance.new`, property assignment and `Parent`
-	are the whole vocabulary for building it. `vide`'s `source`/`effect` are
-	the one exception, for reacting to the host's own `Dragging` attribute --
-	a plain reactive primitive, not Aether, and not a reason this stops being
-	a framework-free applet.
-
-	Drag this card by its body -- there is no title bar, the way a Rainmeter
-	skin works. Drag it near a screen edge and it snaps; try to drag it fully
-	off screen and it will not go. Close it and run this again: it reopens
-	where you left it rather than back at its declared anchor.
+	No title bar, the way a Rainmeter skin works -- the whole card is the drag
+	handle. Nothing clamps it to the screen and nothing remembers where you
+	left it; `keep-on-screen` and `save-position`, right beside this one, are
+	those.
 ]]
 
 local vide = require("./roblox_packages/vide")
 
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
 local root = widget({
 	width = 260,
-	height = 140,
+	height = 120,
 	anchor = "topRight",
 	offset = { x = 24, y = 24 },
 	zOrder = "topmost",
-	clickThrough = false,
 	draggable = true,
-	keepOnScreen = true,
-	snapToEdges = true,
-	savePosition = true,
 })
 
 local card = Instance.new("Frame")
@@ -58,10 +47,10 @@ title.Parent = card
 
 local note = Instance.new("TextLabel")
 note.Name = "Note"
-note.Size = UDim2.new(1, -32, 0, 80)
+note.Size = UDim2.new(1, -32, 0, 60)
 note.Position = UDim2.new(0, 16, 0, 52)
 note.BackgroundTransparency = 1
-note.Text = "Drag this card by its body (there is no title bar)."
+note.Text = "This card can go anywhere, including off screen -- see keep-on-screen for the version that will not let you."
 note.TextColor3 = Color3.fromRGB(180, 162, 200)
 note.TextSize = 12
 note.TextXAlignment = Enum.TextXAlignment.Left
@@ -82,9 +71,9 @@ end)
 
 -- STILL A POLL, AND STILL HAS TO BE: `Dragging` is an attribute (see
 -- surface.rs), and an attribute has no changed signal to push through here
--- yet -- only `dew.Clock.OnFrame` learns about it each frame. What moved to
+-- yet -- only `desktop.Clock.OnFrame` learns about it each frame. What moved to
 -- vide is everything AFTER that: deciding whether it changed, and what to do
 -- if it did.
-dew.Clock.OnFrame(function()
+desktop.Clock.OnFrame(function()
 	dragging(root:GetAttribute("Dragging") == true)
 end)

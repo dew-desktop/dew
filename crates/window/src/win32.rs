@@ -1,13 +1,14 @@
 //! The Win32 implementation.
 
+use crate::gpu::Presenter;
 use crate::{Button, Event, Surface, ZOrder};
 use std::cell::RefCell;
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, GetDC,
-    ReleaseDC, ScreenToClient, SelectObject, StretchDIBits, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, HDC, PAINTSTRUCT, SRCCOPY,
+    ReleaseDC, ScreenToClient, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
+    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -46,6 +47,44 @@ thread_local! {
 
 fn push(hwnd: HWND, event: Event) {
     EVENTS.with(|e| e.borrow_mut().push((SurfaceId(hwnd.0 as isize), event)));
+}
+
+type LiveResizeHook = Box<dyn FnMut(u32, u32)>;
+
+thread_local! {
+    /// A repaint to run synchronously from inside `WM_NCCALCSIZE`, during a
+    /// live border-drag resize.
+    ///
+    /// WHY THIS EXISTS, AND WHY `EVENTS` ABOVE IS NOT ENOUGH: grabbing a
+    /// window's border and dragging it enters a modal loop inside
+    /// `DefWindowProcW`'s own handling of the resize hit-test, and that
+    /// loop does not return to whoever called `DispatchMessageW` until the
+    /// drag ends -- which means `Pump::poll`'s own loop, and therefore
+    /// draining `EVENTS`, is blocked for the whole drag. Windows keeps
+    /// sending real resize messages to this window procedure throughout
+    /// that time regardless, synchronously, nested inside the call that
+    /// never returned; a repaint that only happens when `Event::Resized`
+    /// is drained later is a repaint that happens once, when the mouse
+    /// comes up, not while the drag is happening.
+    ///
+    /// `WM_NCCALCSIZE`, NOT `WM_SIZE` -- see the `wndproc` match arm's own
+    /// comment for why triggering from `WM_SIZE` left the content one
+    /// frame behind the border on a fast drag.
+    ///
+    /// ONE HOOK PER THREAD, matching `EVENTS`: one applet runs one window
+    /// on one thread, so there is exactly one hook to call.
+    static LIVE_RESIZE: RefCell<Option<LiveResizeHook>> = const { RefCell::new(None) };
+}
+
+/// Install the repaint `WM_NCCALCSIZE` calls synchronously during a live resize.
+///
+/// SEPARATE FROM THE EVENT QUEUE ON PURPOSE. This still fires beside a
+/// queued `Event::Resized`, not instead of it -- the queued one is what
+/// keeps the caller's own tracked size and layout correct once the pump
+/// resumes, and this one is only for what appears on screen while it does
+/// not.
+pub fn set_live_resize_hook(hook: impl FnMut(u32, u32) + 'static) {
+    LIVE_RESIZE.with(|cell| *cell.borrow_mut() = Some(Box::new(hook)));
 }
 
 fn xy(lparam: LPARAM) -> (f32, f32) {
@@ -164,6 +203,41 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             }
             LRESULT(0)
         }
+        WM_NCCALCSIZE => {
+            // THE LIVE REPAINT FIRES HERE, NOT FROM `WM_SIZE` BELOW. Both
+            // messages arrive synchronously inside the same live-drag modal
+            // loop, but `WM_NCCALCSIZE` is sent FIRST, to compute the new
+            // client rect BEFORE Windows visually moves the border to match
+            // it -- `WM_SIZE` arrives one step later, after the border has
+            // already moved. A repaint triggered from `WM_SIZE` is therefore
+            // always a frame behind the border during a fast drag: the
+            // content the user sees was rendered for a size the border has
+            // already left behind, which reads as content sliding relative
+            // to the frame rather than tracking it. Repainting from
+            // `WM_NCCALCSIZE` instead closes that gap by rendering for the
+            // size the border is ABOUT to have, not the one it just had.
+            let result = DefWindowProcW(hwnd, msg, wp, lp);
+            if wp.0 != 0 {
+                // `wp` NONZERO means `lp` is an `NCCALCSIZE_PARAMS*`, whose
+                // `rgrc[0]` the call above already rewrote in place from
+                // "proposed new window rect" to "resulting new client
+                // rect" -- exactly the size a repaint needs, computed
+                // without hand-rolling the border/caption math `AdjustWindowRect`
+                // already owns elsewhere.
+                let params = &*(lp.0 as *const NCCALCSIZE_PARAMS);
+                let rect = params.rgrc[0];
+                let width = (rect.right - rect.left).max(0) as u32;
+                let height = (rect.bottom - rect.top).max(0) as u32;
+                if width > 0 && height > 0 {
+                    LIVE_RESIZE.with(|cell| {
+                        if let Some(hook) = cell.borrow_mut().as_mut() {
+                            hook(width, height);
+                        }
+                    });
+                }
+            }
+            result
+        }
         WM_SIZE => {
             let raw = lp.0 as u32;
             let width = (raw & 0xFFFF) as u32;
@@ -280,7 +354,27 @@ pub struct Window {
     hwnd: HWND,
     width: u32,
     height: u32,
+    /// `true` for a surface that presents through `present_layered`'s
+    /// `UpdateLayeredWindow` path instead of `presenter`'s `DirectComposition`
+    /// one.
+    ///
+    /// NOT "every `Widget`/`Overlay`", the way milestone 24 sprint 2 first
+    /// drew this line. `DirectComposition` genuinely has no equivalent of
+    /// `UpdateLayeredWindow`'s native, per-pixel alpha-based hit-testing --
+    /// measured with `WindowFromPoint` and then with real clicks, not
+    /// assumed: `WS_EX_TRANSPARENT` plus `WM_NCHITTEST` returning
+    /// `HTTRANSPARENT` does not forward a click on a
+    /// `WS_EX_NOREDIRECTIONBITMAP` window, only *reports* that it should via
+    /// `WindowFromPoint`, which is a documented, separate gap. So this is
+    /// `true` for `Overlay` always (its whole identity is clicks falling
+    /// through wherever it did not paint, which only `UpdateLayeredWindow`'s
+    /// own hit-testing provides) and for a `Widget` that asked for
+    /// `click_through` specifically -- a `Widget` that did not ask for it
+    /// stays on `presenter`, since plain visual transparency (soft edges,
+    /// rounded corners) is confirmed working there and is not the part that
+    /// broke.
     layered: bool,
+    presenter: Option<Presenter>,
 }
 
 impl Window {
@@ -292,7 +386,13 @@ impl Window {
             // Registering twice returns an error that is not one — a second window
             // of the same class is fine and the class is already there. The
             // result is deliberately discarded rather than checked.
-            let layered = matches!(surface, Surface::Widget { .. } | Surface::Overlay { .. });
+            //
+            // GEOMETRY ONLY -- a popup's outer rectangle IS its client area
+            // regardless of which presentation mechanism it ends up on, so
+            // this stays a plain surface-kind check. Which mechanism it
+            // actually gets is `layered`, computed after the match below,
+            // once each surface kind's own `click_through` is in scope.
+            let is_popup = matches!(surface, Surface::Widget { .. } | Surface::Overlay { .. });
 
             let wc = WNDCLASSW {
                 lpfnWndProc: Some(wndproc),
@@ -325,17 +425,31 @@ impl Window {
 
             // A WIDGET IS BORDERLESS, TOPMOST, AND OUT OF THE TASKBAR.
             //
-            // `WS_EX_TOOLWINDOW` is the one that keeps it out of Alt-Tab and the
-            // taskbar; without it a desktop clock is a window you can tab to,
-            // which is not what a widget is. `WS_EX_LAYERED` is what makes
-            // `UpdateLayeredWindow` available, and therefore per-pixel alpha.
-            let (style, ex_style, x, y, z_order) = match surface {
+            // `WS_EX_TOOLWINDOW` is the one that keeps it out of Alt-Tab and
+            // the taskbar; without it a desktop clock is a window you can tab
+            // to, which is not what a widget is.
+            //
+            // `WS_EX_LAYERED` OR `WS_EX_NOREDIRECTIONBITMAP`, NOT ALWAYS THE
+            // SAME ONE -- see `Window::layered`'s own doc for why an
+            // `Overlay` always needs the former and a `Widget` only needs it
+            // when it asked for `click_through`. Getting this wrong the other
+            // way (`WS_EX_NOREDIRECTIONBITMAP` on a surface that needed real
+            // click-through) is the bug this match now exists to not repeat.
+            let (style, ex_style, x, y, z_order, layered) = match surface {
+                // `WS_EX_NOREDIRECTIONBITMAP`: an ordinary window presents
+                // through `DirectComposition` (`crate::gpu`), not a blit
+                // into the window's own device context. Without this style
+                // Windows still allocates the normal GDI redirection
+                // surface behind the composition visual, which is the
+                // exact per-HWND surface a flip-model swap chain bound to
+                // it would fight over during a live resize.
                 Surface::Window { .. } => (
                     WS_OVERLAPPEDWINDOW,
-                    WINDOW_EX_STYLE::default(),
+                    WS_EX_NOREDIRECTIONBITMAP,
                     CW_USEDEFAULT,
                     CW_USEDEFAULT,
                     None,
+                    false,
                 ),
                 Surface::Widget {
                     x,
@@ -343,7 +457,12 @@ impl Window {
                     click_through,
                     z_order,
                 } => {
-                    let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
+                    let mut ex = WS_EX_TOOLWINDOW;
+                    ex |= if *click_through {
+                        WS_EX_LAYERED
+                    } else {
+                        WS_EX_NOREDIRECTIONBITMAP
+                    };
                     // `WS_EX_TOPMOST` AT CREATION MATCHES THE COMMON CASE, and
                     // `SetWindowPos` below is what actually enforces all three
                     // tiers — this extended style alone has no way to express
@@ -355,15 +474,22 @@ impl Window {
                         // TRANSPARENT means hit-testing falls through to whatever
                         // is behind. It is a property of the window, not of the
                         // painting, so a widget can be fully opaque and still be
-                        // clicked through.
+                        // clicked through -- but only paired with `WS_EX_LAYERED`
+                        // above, which is what makes the hit-test actually skip
+                        // it rather than merely reporting that it would.
                         ex |= WS_EX_TRANSPARENT;
                     }
-                    (WS_POPUP, ex, *x, *y, Some(*z_order))
+                    (WS_POPUP, ex, *x, *y, Some(*z_order), *click_through)
                 }
                 Surface::Overlay {
                     z_order,
                     click_through,
                 } => {
+                    // ALWAYS `WS_EX_LAYERED`, REGARDLESS OF `click_through` --
+                    // an overlay's own default (clicks fall through wherever
+                    // it did not paint) IS `UpdateLayeredWindow`'s native
+                    // alpha hit-testing, not something its `click_through`
+                    // flag turns on. See `Window::layered`'s own doc.
                     let mut ex = WS_EX_LAYERED | WS_EX_TOOLWINDOW;
                     if *z_order == ZOrder::Topmost {
                         ex |= WS_EX_TOPMOST;
@@ -372,14 +498,14 @@ impl Window {
                         ex |= WS_EX_TRANSPARENT;
                     }
                     // The caller sized this to the screen; it starts at its origin.
-                    (WS_POPUP, ex, 0, 0, Some(*z_order))
+                    (WS_POPUP, ex, 0, 0, Some(*z_order), true)
                 }
             };
 
             // Only an ordinary window has chrome to account for. A popup's
             // outer rectangle IS its client area, and adjusting one would make
             // the widget larger than the surface it presents.
-            if !layered {
+            if !is_popup {
                 let _ = AdjustWindowRect(&mut rect, style, false);
             }
 
@@ -399,13 +525,12 @@ impl Window {
             )
             .map_err(|e| e.to_string())?;
 
-            let _ = ShowWindow(hwnd, SW_SHOW);
-
             // THE EXTENDED STYLE ALONE CANNOT PLACE A WINDOW AT THE BOTTOM of
             // the z-order — `WS_EX_TOPMOST` only ever says "above everything
             // else". `SetWindowPos`'s `hwndInsertAfter` is the one mechanism
             // that reaches all three tiers, so it runs for every widget and
-            // overlay rather than only the topmost ones.
+            // overlay rather than only the topmost ones. `SetWindowPos` works
+            // on a hidden window, so this does not need `ShowWindow` first.
             if let Some(z_order) = z_order {
                 let insert_after = match z_order {
                     ZOrder::Bottom => HWND_BOTTOM,
@@ -423,11 +548,37 @@ impl Window {
                 );
             }
 
+            // `None` FOR A `layered` SURFACE, which never touches `Presenter`
+            // at all -- `present_layered` composites through
+            // `UpdateLayeredWindow` against the screen's own DC instead. A
+            // non-click-through `Widget` still passes `transparent: true`
+            // here: it needs `Presenter`'s premultiplied alpha for its own
+            // soft edges and rounded corners, just not a backdrop, which is
+            // exactly what `transparent` already skips.
+            let presenter = if layered {
+                None
+            } else {
+                Some(Presenter::new(hwnd, width, height, is_popup)?)
+            };
+
+            // SHOWN ONLY NOW, AFTER THE PRESENTER (WHEN THERE IS ONE) EXISTS
+            // AND HAS COMMITTED ITS FIRST FRAME. `Presenter::new` creates a
+            // `wgpu` adapter and device and sets up `DirectComposition`'s own
+            // device, target and visual tree -- real, measured, one-time
+            // setup cost. A window shown before any of that finishes has no
+            // composition content at all yet, `WS_EX_NOREDIRECTIONBITMAP`
+            // having opted it out of the ordinary redirection surface that
+            // would otherwise paper over the gap -- which is what showed up
+            // as a window that appears see-through for however long setup
+            // took, every time, on every open.
+            let _ = ShowWindow(hwnd, SW_SHOW);
+
             Ok(Window {
                 hwnd,
                 width,
                 height,
                 layered,
+                presenter,
             })
         }
     }
@@ -471,19 +622,23 @@ impl Window {
     pub fn resized(&mut self, width: u32, height: u32) {
         self.width = width;
         self.height = height;
+        if let Some(presenter) = self.presenter.as_mut() {
+            presenter.configure(width, height);
+        }
     }
 
     /// Put a BGRA buffer on screen, whichever kind of surface this is.
     ///
-    /// A widget takes the layered path, where the buffer's ALPHA becomes the
-    /// window's shape; an ordinary window takes the blit, where it is ignored.
-    /// The caller does not choose — it painted a frame, and how that reaches the
-    /// screen is a property of the window it asked for.
-    pub fn present(&self, bgra: &[u8], width: u32, height: u32) {
+    /// A `layered` surface takes `present_layered`, where the buffer's ALPHA
+    /// becomes the window's shape AND its hit-test -- the only mechanism
+    /// Windows actually provides for that combination, see `Window::layered`'s
+    /// own doc for why `DirectComposition` does not. Everything else
+    /// presents through `Presenter`.
+    pub fn present(&mut self, bgra: &[u8], width: u32, height: u32) {
         if self.layered {
             self.present_layered(bgra, width, height);
-        } else {
-            self.blit(bgra, width, height);
+        } else if let Some(presenter) = self.presenter.as_mut() {
+            presenter.present(bgra, width, height);
         }
     }
 
@@ -570,54 +725,6 @@ impl Window {
             let _ = DeleteObject(bitmap.into());
             let _ = DeleteDC(mem);
             ReleaseDC(None, screen);
-        }
-    }
-
-    /// Put a BGRA buffer on screen. `bgra` must be `width * height * 4` bytes.
-    fn blit(&self, bgra: &[u8], width: u32, height: u32) {
-        if bgra.len() < (width * height * 4) as usize {
-            return;
-        }
-        unsafe {
-            let hdc: HDC = GetDC(Some(self.hwnd));
-            if hdc.is_invalid() {
-                return;
-            }
-
-            let info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width as i32,
-                    // NEGATIVE, for a TOP-DOWN bitmap. A DIB is bottom-up by
-                    // default, so a positive height presents every frame flipped
-                    // vertically — which reads as a renderer bug and is a header
-                    // field.
-                    biHeight: -(height as i32),
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-
-            StretchDIBits(
-                hdc,
-                0,
-                0,
-                self.width as i32,
-                self.height as i32,
-                0,
-                0,
-                width as i32,
-                height as i32,
-                Some(bgra.as_ptr() as *const _),
-                &info,
-                DIB_RGB_COLORS,
-                SRCCOPY,
-            );
-
-            ReleaseDC(Some(self.hwnd), hdc);
         }
     }
 }

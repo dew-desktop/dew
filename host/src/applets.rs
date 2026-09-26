@@ -4,23 +4,23 @@
 //! run is known before the mod's logic executes:
 //!
 //!   1. `dew.toml` is read from disk. It names the mod and its permissions.
-//!   2. A VM is created — deny-by-default, with no ffi, io, os or ambient `dew`.
-//!   3. The `dew` table is built from the GRANTED permissions and nothing else.
+//!   2. A VM is created — deny-by-default, with no ffi, io, os or ambient `desktop`.
+//!   3. The `desktop` table is built from the GRANTED permissions and nothing else.
 //!   4. The mod's module is loaded. It returns a declaration and does nothing.
 //!   5. `mount` is called once, and builds a tree.
 //!
 //! A registration-style API collapses 4 and 5 into "loading the mod runs the
 //! mod", which puts every one of the earlier steps after the fact.
 //!
-//! ONE LOADER, NO FRAMEWORK NAMED. The host gives a mod a root and the `dew`
+//! ONE LOADER, NO FRAMEWORK NAMED. The host gives a mod a root and the `desktop`
 //! table and knows nothing else about what the mod is built from: discovery,
 //! the manifest, the sandbox, the capability table, the size and the surface
-//! are decided the same way for every mod, and `mount(dew, root)` is the one
+//! are decided the same way for every mod, and `mount(desktop, root)` is the one
 //! signature there is.
 
 use crate::capabilities::{self, Shared};
 use crate::datamodel;
-use crate::manifest::Manifest;
+use crate::manifest::{Capability, Manifest};
 use crate::services::{self, Clock, PointerState, SharedClock, SharedPointer};
 use crate::surface::{Declared, Requested};
 use dew_runtime::{modules, Vm};
@@ -56,7 +56,7 @@ pub struct Applet {
     /// clock is not a property of what `Mounted` holds -- so putting it in the
     /// enum would have made "can this mod animate" depend on that.
     pub clock: SharedClock,
-    /// Where this mod's `dew.Pointer`/`dew.Input` believe the cursor is.
+    /// Where this mod's `desktop.Pointer`/`desktop.Input` believe the cursor is.
     ///
     /// ONE PER APPLET, LIKE THE CLOCK ABOVE, and for the same reason a shared
     /// one would be wrong: a process running more than one applet at once has
@@ -104,6 +104,31 @@ fn size_from(declaration: &LuaTable) -> (u32, u32) {
 // 2026-09-04, came back the same day for this one consumer, and is now gone for
 // the reason it should always have been gone: nothing reads it.
 
+/// Did this applet load from the coordinator's own bundled directory
+/// (ADR-017), rather than `installed::list()`'s user-writable one or an
+/// arbitrary `dew run <dir>` path? Canonicalized on both sides so a
+/// relative `dir` or a symlink cannot read as bundled by accident.
+///
+/// `installed.rs`, and the bundled directory it defines, exist only on
+/// Windows; off it there is no bundling mechanism at all, so nothing ever
+/// reads as bundled and a `Capability::Host` permission can never be
+/// granted.
+#[cfg(windows)]
+fn is_bundled(dir: &Path) -> bool {
+    let Some(bundled) = crate::installed::bundled_applets_dir() else {
+        return false;
+    };
+    let (Ok(dir), Ok(bundled)) = (dir.canonicalize(), bundled.canonicalize()) else {
+        return false;
+    };
+    dir.starts_with(&bundled)
+}
+
+#[cfg(not(windows))]
+fn is_bundled(_dir: &Path) -> bool {
+    false
+}
+
 pub fn load(
     dir: &Path,
     aliases: &std::collections::HashMap<String, PathBuf>,
@@ -111,6 +136,33 @@ pub fn load(
 ) -> Result<Applet, String> {
     // 1 ── the manifest, before anything of the mod's runs.
     let manifest = Manifest::load(dir)?;
+
+    //      A HOST-ONLY PERMISSION IS A LOAD-TIME REFUSAL FROM ANYWHERE BUT
+    //      THE BUNDLE (ADR-017), not a permission the mod simply does not
+    //      get. `Permission::Widget` asked for and not granted is merely
+    //      absent from `desktop` below; `Permission::Install` asked for by a
+    //      mod that can never receive it is the same "refused rather than
+    //      ignored" treatment `manifest.rs` already gives an unknown
+    //      permission, for the same reason -- a mod author believing
+    //      something was granted when it silently was not is the worse
+    //      failure.
+    let host_only: Vec<_> = manifest
+        .permissions
+        .iter()
+        .copied()
+        .filter(|p| p.capability() == Capability::Host)
+        .collect();
+    if !host_only.is_empty() && !is_bundled(dir) {
+        let names = host_only
+            .iter()
+            .map(|p| p.name())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "{}: {names} -- host-only, and this applet did not load from Dew's own bundled directory",
+            manifest.id
+        ));
+    }
 
     //      SAID OUT LOUD, BEFORE THE MOD RUNS. What the manifest asked for and
     //      the host will not do is reported here rather than discovered by an
@@ -156,7 +208,7 @@ pub fn load(
     //      THE DATAMODEL IS PER MOD, like the VM. Two mods sharing one instance
     //      tree could reach each other's widgets by walking Parent, which is the
     //      same isolation the require roots above enforce for files. It is
-    //      installed as a GLOBAL rather than passed like `dew`, because it is not
+    //      installed as a GLOBAL rather than passed like `desktop`, because it is not
     //      a capability: it is the language of the platform, present for every
     //      guest on the engine and on Dew alike, and an application that had to be
     //      handed it would not be the application that runs on both.
@@ -182,21 +234,21 @@ pub fn load(
         }));
     datamodel::install(vm.lua(), &dom).map_err(|e| format!("{}: {e}", manifest.id))?;
 
-    //      AND `dew.Text`/`dew.Clock`, ON THE SAME TERMS AND FOR THE SAME REASON.
+    //      AND `desktop.Text`/`desktop.Clock`, ON THE SAME TERMS AND FOR THE SAME REASON.
     //      Text metrics and a frame clock are what the host computes and no guest
     //      can: they are the language of the platform rather than a capability, so
-    //      they are installed as ungated members of the `dew` global here rather
+    //      they are installed as ungated members of the `desktop` global here rather
     //      than granted in the table built at step 4. `services.rs` carries the
     //      full argument, and the short version is that a mod refused text metrics
     //      cannot lay out -- a permission with only one sound answer is not a
     //      permission.
     //
-    //      FOR BOTH RUNTIMES. A DataModel mod calls `dew.Text.Measure`
+    //      FOR BOTH RUNTIMES. A DataModel mod calls `desktop.Text.Measure`
     //      directly; an Aether mod reaches the same functions through the
     //      `Host.Text` and `Host.Clock` seams its interface already declares.
     let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
     //      ITS OWN POINTER, NOT THE PROCESS-WIDE ONE. `services::install` wires
-    //      `dew.Pointer`/`dew.Input` to the one cell every guest used to share,
+    //      `desktop.Pointer`/`desktop.Input` to the one cell every guest used to share,
     //      which was correct for a process running exactly one applet and is
     //      not any more -- see `SharedPointer`'s doc comment above.
     let pointer: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
@@ -243,7 +295,7 @@ pub fn load(
     //      HANDED TO `mount`, NOT INSTALLED AS A GLOBAL. `examples/host/standalone`
     //      reaches for a `DewRoot` global because a bare script has no
     //      function to receive one; a mod has `mount`, and a parameter is the
-    //      same argument that keeps `dew` off the globals table — what a mod
+    //      same argument that keeps `desktop` off the globals table — what a mod
     //      is GIVEN is visible at its own call site.
     let root = dom
         .lock()
@@ -265,28 +317,28 @@ pub fn load(
         ),
         title: manifest.display_name().to_string(),
     };
-    let dew = capabilities::build(vm.lua(), &manifest.permissions, state, &grant)
+    let desktop = capabilities::build(vm.lua(), &manifest.permissions, state, &grant)
         .map_err(|e| format!("{}: {e}", manifest.id))?;
 
     // 5 ── the applet's own module. It asks for a surface, or it returns a
     //      declaration describing one. Both arrive from running it.
-    //  `dew` IS A GLOBAL, the way `game` is one in the engine this host is shaped
-    //  after. It was handed to `mount` as an argument, which is why the old
-    //  contract had to return a table: there was no other way to be given a
+    //  `desktop` IS A GLOBAL, the way `game` is one in the engine this host is
+    //  shaped after. It was handed to `mount` as an argument, which is why the
+    //  old contract had to return a table: there was no other way to be given a
     //  capability table.
     //
     //  NOT THE CHUNK'S VARARG. A chunk's `...` reaches the entry module and stops
-    //  there, so an applet split across two files could not see `dew` from the
-    //  second one without threading it through every call that needed it. It is
-    //  also not an idiom an applet author has met: a ModuleScript's chunk
-    //  receives nothing, so `local dew = ...` means nothing in the engine.
+    //  there, so an applet split across two files could not see `desktop` from
+    //  the second one without threading it through every call that needed it.
+    //  It is also not an idiom an applet author has met: a ModuleScript's chunk
+    //  receives nothing, so `local desktop = ...` means nothing in the engine.
     //
     //  AN UNGRANTED CAPABILITY IS STILL ABSENT RATHER THAN GUARDED. That comes
     //  from which keys this table has, which `capabilities::build` decides from
     //  the manifest, and not from how the table is delivered.
     vm.lua()
         .globals()
-        .set("dew", dew.clone())
+        .set("desktop", desktop.clone())
         .map_err(|e| format!("{}: {e}", manifest.id))?;
 
     let returned: LuaValue = modules::load_entry(&vm, &entry)
@@ -337,9 +389,9 @@ pub fn load(
     }
 
     // THE ONE SIGNATURE THERE IS, named for the message when it is missing.
-    let signature = "mount = function(dew, root) … end";
+    let signature = "mount = function(desktop, root) … end";
     //  AN APPLET THAT ASKED FOR ITS SURFACE HAS ALREADY BUILT ITS TREE. It was
-    //  handed the root by `dew.Widget{}` while it ran, so there is nothing left
+    //  handed the root by `desktop.Widget{}` while it ran, so there is nothing left
     //  for the host to call and no declaration to read. That is the shape this
     //  is moving to; the returned table is what it is moving from.
     let mount: Option<LuaFunction> = match declaration.get::<LuaFunction>("mount") {
@@ -347,7 +399,7 @@ pub fn load(
         Err(_) if asked.is_some() => None,
         Err(_) => {
             return Err(format!(
-                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `dew.Widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
+                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `desktop.Widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
                 manifest.id
             ))
         }
@@ -363,14 +415,14 @@ pub fn load(
     //      same question.
     //
     //      NOTHING TO CALL WHEN THE APPLET ALREADY BUILT ITS TREE.
-    //      `dew.Widget{}` handed it this same root while it ran, so the
+    //      `desktop.Widget{}` handed it this same root while it ran, so the
     //      instances are under there already and calling a second entry point
     //      would ask it to build them twice.
     if let Some(mount) = mount {
         let handle =
             datamodel::handle(vm.lua(), &dom, root).map_err(|e| format!("{}: {e}", manifest.id))?;
         mount
-            .call::<()>((dew, handle))
+            .call::<()>((desktop, handle))
             .map_err(|e| format!("{}: while mounting: {e}", manifest.id))?;
     }
     let mounted = Mounted::DataModel {
@@ -399,7 +451,7 @@ pub fn load(
     })
 }
 
-/// WHAT THIS COVERS is the loader itself: that a mod reaches `mount(dew, root)`
+/// WHAT THIS COVERS is the loader itself: that a mod reaches `mount(desktop, root)`
 /// with the vocabulary present and a root to parent into, and that what it
 /// parented is what the renderer finds. It goes through the real `load` —
 /// manifest, sandbox, capability table and all — rather than calling the
@@ -409,6 +461,31 @@ pub fn load(
 pub mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};
+
+    /// Held for the duration of every test that reads or writes the real
+    /// `session.json` -- `dew_marketplace_triggers_with_a_callback_and_never_blocks`
+    /// and `dew_account_reports_session_state_and_signs_out` both call
+    /// `platform::clear_session()`/`save_session()` against the one file on
+    /// disk, and Rust runs tests in parallel by default. Without this, one
+    /// test's fixture session can be visible to the other mid-run -- not a
+    /// hermetic failure of either test's own logic, just two tests racing on
+    /// a real, unpartitioned shared resource.
+    #[cfg(windows)]
+    static SESSION_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Held for the duration of every test that reads `library::generation()`
+    /// or does anything that bumps it (`launch`/`uninstall`/`set_enabled`,
+    /// or a direct ping to the `DewLibraryChanged` pipe). It is ONE counter
+    /// for the whole process, by design (see its own doc comment in
+    /// `library.rs`) -- exactly right for a real coordinator with one
+    /// dashboard, and exactly the thing that lets an unrelated test's own
+    /// bump land on a completely different test's "this must still read as
+    /// unchanged" assertion when `cargo test` runs them in parallel.
+    /// `dew_library_on_change_fires_on_its_own_actions` failed on CI this
+    /// way -- passed every local run, then hit a wider core count and lost
+    /// the race the very first time.
+    #[cfg(windows)]
+    static GENERATION_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// A mod on disk, in a directory of its own, removed when the test ends.
     ///
@@ -505,6 +582,616 @@ pub mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    /// A mod inside the coordinator's OWN bundled directory, the one place
+    /// a `Capability::Host` permission can be granted from (ADR-017).
+    /// Writes into the real `bundled_applets_dir()` `applets::load` itself
+    /// checks against -- faking that path would test a different check
+    /// than the real one, the same reasoning `Fixture` above already gives
+    /// for using a real directory rather than a fake filesystem.
+    #[cfg(windows)]
+    pub struct BundledFixture(PathBuf);
+
+    #[cfg(windows)]
+    impl BundledFixture {
+        pub fn new(name: &str, manifest: &str, entry: &str) -> BundledFixture {
+            let dir = crate::installed::bundled_applets_dir()
+                .expect("bundled applets dir")
+                .join(format!("dew-mods-test-{name}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("bundled dir");
+            std::fs::write(dir.join("dew.toml"), manifest).expect("dew.toml");
+            std::fs::write(dir.join("main.luau"), entry).expect("entry");
+            BundledFixture(dir)
+        }
+
+        pub fn load(&self) -> Result<Applet, String> {
+            let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+            load(&self.0, &Default::default(), &state)
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for BundledFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// An applet actually run through `installed::install`, into the real
+    /// per-user store `installed::list()`/`dew.Library` themselves read --
+    /// faking that store would test a different `List`/`Launch`/`Uninstall`
+    /// than the ones a mod actually calls. Removed on drop with
+    /// `installed::uninstall`, best-effort: a test that already uninstalled
+    /// it (that is what it was testing) leaves nothing for this to do.
+    #[cfg(windows)]
+    pub struct InstalledFixture {
+        pub id: String,
+        source: PathBuf,
+    }
+
+    #[cfg(windows)]
+    impl InstalledFixture {
+        pub fn new(name: &str, manifest: &str, entry: &str) -> InstalledFixture {
+            let source = std::env::temp_dir().join(format!("dew-library-test-{name}"));
+            let _ = std::fs::remove_dir_all(&source);
+            std::fs::create_dir_all(&source).expect("temp source dir");
+            std::fs::write(source.join("dew.toml"), manifest).expect("dew.toml");
+            std::fs::write(source.join("main.luau"), entry).expect("entry");
+            let id = crate::installed::install(&source, true).expect("install fixture applet");
+            InstalledFixture { id, source }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for InstalledFixture {
+        fn drop(&mut self) {
+            let _ = crate::installed::uninstall(&self.id);
+            let _ = std::fs::remove_dir_all(&self.source);
+        }
+    }
+
+    /// A HOST-ONLY PERMISSION IS A LOAD REFUSAL, NOT A QUIET ABSENCE
+    /// (ADR-017). `install` is a real, known permission -- unlike the
+    /// unknown-word case `manifest.rs` already refuses -- and the applet
+    /// asking for it here is not bundled, so it must be refused the same
+    /// way, naming both the permission and why.
+    #[test]
+    fn a_host_only_permission_refuses_to_load_outside_the_bundle() {
+        let fixture = Fixture::new(
+            "install-unbundled",
+            "id = \"plain\"\npermissions = [\"widget\", \"install\"]\n",
+            PLAIN,
+        );
+
+        let err = match fixture.load() {
+            Err(e) => e,
+            Ok(_) => panic!("a host-only permission from outside the bundle must not load"),
+        };
+
+        assert!(
+            err.contains("install") && err.contains("bundle"),
+            "the refusal should name the permission and why, got: {err}"
+        );
+    }
+
+    /// THE OTHER HALF OF THE SAME CHECK: the identical manifest, loaded
+    /// from the one place that is allowed to hold it, loads clean.
+    #[cfg(windows)]
+    #[test]
+    fn a_host_only_permission_loads_from_the_bundle() {
+        let fixture = BundledFixture::new(
+            "install-bundled",
+            "id = \"plain\"\npermissions = [\"widget\", \"install\"]\n",
+            PLAIN,
+        );
+
+        assert!(
+            fixture.load().is_ok(),
+            "a host-only permission declared by a bundled applet must be granted"
+        );
+    }
+
+    /// `dew` NEVER APPEARS FOR AN ORDINARY APPLET, even one that only ever
+    /// asked for `widget`. `dew.Marketplace` is not a thing every applet
+    /// gets and merely finds gated members on -- unlike `desktop`, `dew`
+    /// itself does not exist unless something granted put a member on it.
+    #[test]
+    fn an_ordinary_applet_has_no_dew_global_at_all() {
+        let fixture = Fixture::new(
+            "no-dew",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
+            r#"
+                return {
+                    id = "plain",
+                    size = { width = 10, height = 10 },
+                    mount = function(desktop, root)
+                        assert(dew == nil, "an ordinary applet must not see a dew global")
+                    end,
+                }
+            "#,
+        );
+        assert!(fixture.load().is_ok());
+    }
+
+    /// THE CALLBACK SHAPE, END TO END (milestone 26 sprint 1; was
+    /// trigger-and-poll through milestone 23 sprint 3 -- `Discover()` plus a
+    /// separately-polled `Discovered()`). `Discover`/`Install` still return
+    /// immediately, proven here by never blocking this test on the network;
+    /// the difference is that nothing here ever calls a reader function --
+    /// the callback handed to `Discover`/`Install` is what receives the
+    /// answer, exactly once, the instant it lands.
+    ///
+    /// `services::tick` IS CALLED DIRECTLY, on `loaded.clock`, standing in
+    /// for `main.rs`'s own frame loop -- see `register_frame_checker`'s doc
+    /// comment in `capabilities.rs` for why a `desktop.Clock.OnFrame`
+    /// listener, driven by `tick`, is how the callback's answer ever reaches
+    /// Luau at all.
+    ///
+    /// HERMETIC ON PURPOSE: `platform::clear_session()` guarantees no
+    /// session file exists before either call, so `platform::discover` and
+    /// `package::install_from_marketplace` both fail on `require_session`
+    /// before either would ever reach the network -- the same "not signed
+    /// in" error `dew discover`/`dew install @owner/id` give from a
+    /// terminal in the same state. What is under test is the wiring
+    /// (trigger, background thread, callback, shape of the answer), not
+    /// `dew-platform`'s own behaviour, which owes this test nothing.
+    #[cfg(windows)]
+    #[test]
+    fn dew_marketplace_triggers_with_a_callback_and_never_blocks() {
+        let _session_guard = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_session();
+
+        let fixture = BundledFixture::new(
+            "marketplace-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"discover\", \"install\"]\n",
+            PLAIN,
+        );
+        let loaded = fixture.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        // AWAITED BY POLLING A LUA GLOBAL THE CALLBACK ITSELF WRITES, not by
+        // calling a reader function -- there is no reader function any more.
+        // `services::tick` is what actually runs the callback (through the
+        // `desktop.Clock.OnFrame` listener `capabilities.rs` registers), so
+        // this loop's job is only to keep calling it until that has happened.
+        let await_global = |lua: &mlua::Lua, clock: &SharedClock, name: &str| -> mlua::Table {
+            for _ in 0..200 {
+                services::tick(clock, 0.0);
+                if let mlua::Value::Table(t) = lua.globals().get(name).expect("global") {
+                    return t;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            panic!("{name} never landed a result within 2 seconds");
+        };
+
+        lua.load(
+            r#"
+                __discover_result = nil
+                __discover_calls = 0
+                dew.Marketplace.Discover(function(result)
+                    __discover_result = result
+                    __discover_calls += 1
+                end)
+            "#,
+        )
+        .exec()
+        .expect("triggering must return immediately, never blocking on the network");
+
+        let discovered = await_global(lua, &loaded.clock, "__discover_result");
+        assert!(
+            !discovered.get::<bool>("ok").expect("ok field"),
+            "no session exists in this test, so discover must fail rather than succeed"
+        );
+        let error: String = discovered.get("error").expect("error field");
+        assert!(error.contains("not signed in"), "got: {error}");
+
+        // FIRES EXACTLY ONCE, not once per frame it happens to still be
+        // registered for -- the whole point of moving the "did it land, do
+        // not call it twice" bookkeeping into the host.
+        for _ in 0..20 {
+            services::tick(&loaded.clock, 0.0);
+        }
+        let calls: i64 = lua.globals().get("__discover_calls").expect("calls");
+        assert_eq!(
+            calls, 1,
+            "the callback must not fire more than once per trigger"
+        );
+
+        lua.load(
+            r#"
+                __install_result = nil
+                dew.Marketplace.Install("owner", "applet", function(result)
+                    __install_result = result
+                end)
+            "#,
+        )
+        .exec()
+        .expect("triggering must return immediately, never blocking on the network");
+
+        let installed = await_global(lua, &loaded.clock, "__install_result");
+        assert!(
+            !installed.get::<bool>("ok").expect("ok field"),
+            "no session exists in this test, so install must fail rather than succeed"
+        );
+        let error: String = installed.get("error").expect("error field");
+        assert!(error.contains("not signed in"), "got: {error}");
+    }
+
+    /// `dew.Library`'S FOUR CALLS, AGAINST A REAL FIXTURE-INSTALLED APPLET --
+    /// matching the shape of `dew_marketplace_triggers_with_a_callback_and_never_blocks`
+    /// above, but synchronous throughout rather than trigger-and-poll: every
+    /// one of `List`/`Launch`/`Uninstall`/`SetEnabled` is a local file
+    /// operation or a named-pipe round trip, never a network call, so there
+    /// is nothing here to poll for.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_lists_launches_toggles_and_uninstalls_a_real_applet() {
+        let _generation_guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // DRAINED FIRST, in case an earlier test on this worker thread queued
+        // a load or unload that nothing has since consumed -- asserting a
+        // queue's CONTENTS only makes sense starting from empty.
+        let _ = crate::library::take_load_requests();
+        let _ = crate::library::take_unload_requests();
+
+        let target = InstalledFixture::new("target", "id = \"lib-target\"\n", PLAIN);
+
+        let manager = BundledFixture::new(
+            "library-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let library: mlua::Table = dew.get("Library").expect("Library installed");
+
+        let list_by_id = |library: &mlua::Table, id: &str| -> Option<mlua::Table> {
+            let list: mlua::Function = library.get("List").expect("List installed");
+            let rows: mlua::Table = list.call(()).expect("List call");
+            for pair in rows.sequence_values::<mlua::Table>() {
+                let row = pair.expect("row");
+                if row.get::<String>("id").expect("id field") == id {
+                    return Some(row);
+                }
+            }
+            None
+        };
+
+        let row = list_by_id(&library, &target.id).expect("List must include the fixture applet");
+        assert_eq!(row.get::<String>("name").expect("name"), target.id);
+        assert!(
+            row.get::<bool>("enabled").expect("enabled"),
+            "a freshly installed applet defaults to enabled"
+        );
+        assert!(
+            !row.get::<bool>("running").expect("running"),
+            "nothing was ever actually spawned in this test, so it must read as not running"
+        );
+
+        // Launch: not running (no coordinator is listening in this test, so
+        // `query_running` reads as false, the same "nothing to orphan"
+        // answer `dew uninstall` itself relies on), so it queues the
+        // fixture's own directory for the coordinator to pick up.
+        let launch: mlua::Function = library.get("Launch").expect("Launch installed");
+        let result: mlua::Table = launch.call(target.id.clone()).expect("Launch call");
+        assert!(
+            result.get::<bool>("ok").expect("ok field"),
+            "launching an installed, non-running applet must succeed"
+        );
+        let queued = crate::library::take_load_requests();
+        assert_eq!(
+            queued.len(),
+            1,
+            "Launch must queue exactly the one directory the coordinator should load"
+        );
+        assert!(queued[0].ends_with(&target.id));
+
+        // Launching an id nothing installed is refused, naming the id.
+        let result: mlua::Table = launch
+            .call("no-such-applet".to_string())
+            .expect("Launch call");
+        assert!(!result.get::<bool>("ok").expect("ok field"));
+        let error: String = result.get("error").expect("error field");
+        assert!(error.contains("no-such-applet"), "got: {error}");
+
+        // SetEnabled(false), then List reflects it. Not running in this
+        // test (no coordinator is listening, so `query_running` reads as
+        // false), so this is a disk write only -- nothing to live-unload,
+        // and the unload queue stays empty.
+        let set_enabled: mlua::Function = library.get("SetEnabled").expect("SetEnabled installed");
+        let result: mlua::Table = set_enabled
+            .call((target.id.clone(), false))
+            .expect("SetEnabled call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+        let row = list_by_id(&library, &target.id).expect("still installed, only disabled");
+        assert!(!row.get::<bool>("enabled").expect("enabled"));
+        assert!(
+            crate::library::take_unload_requests().is_empty(),
+            "disabling an applet that was never running must not queue an unload"
+        );
+
+        // SetEnabled(true), on an applet that is not running, queues a live
+        // load -- the other half of the same toggle -- and then waits for
+        // the coordinator to confirm it actually started. NO REAL
+        // COORDINATOR IS LISTENING IN
+        // THIS TEST (see `dew_marketplace_triggers_with_a_callback_and_never_blocks`'s
+        // own doc comment on what `query_running` reads as here), so
+        // nothing ever drains the queue this pushes to and the wait times
+        // out -- the one part of this call this hermetic test cannot
+        // exercise end to end; the live checks in the milestone this
+        // shipped under covered that instead. The disk write and the queue
+        // push both still happen before the wait, so both are still
+        // checked here.
+        let result: mlua::Table = set_enabled
+            .call((target.id.clone(), true))
+            .expect("SetEnabled call");
+        assert!(
+            !result.get::<bool>("ok").expect("ok field"),
+            "nothing drains the load queue in this test, so the wait for it to land must time out"
+        );
+        let row = list_by_id(&library, &target.id).expect("still installed, now re-enabled");
+        assert!(
+            row.get::<bool>("enabled").expect("enabled"),
+            "the disk write happens before the wait, so it lands even though the wait times out"
+        );
+        let queued = crate::library::take_load_requests();
+        assert_eq!(
+            queued.len(),
+            1,
+            "re-enabling a non-running applet must queue exactly one load, timeout or not"
+        );
+        assert!(queued[0].ends_with(&target.id));
+
+        // Uninstall removes it from both the Luau-visible list and disk.
+        let uninstall: mlua::Function = library.get("Uninstall").expect("Uninstall installed");
+        let result: mlua::Table = uninstall.call(target.id.clone()).expect("Uninstall call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+        assert!(
+            list_by_id(&library, &target.id).is_none(),
+            "an uninstalled applet must not appear in List any more"
+        );
+        assert!(
+            !crate::installed::list().iter().any(|e| e.id == target.id),
+            "Uninstall must remove the directory from disk, not just hide the row"
+        );
+
+        // Uninstalling it again is refused: it is no longer installed.
+        let result: mlua::Table = uninstall.call(target.id.clone()).expect("Uninstall call");
+        assert!(!result.get::<bool>("ok").expect("ok field"));
+    }
+
+    /// `dew.Library.OnChange` FIRES ON THE MODULE'S OWN ACTIONS (milestone 26
+    /// sprint 2). `library::launch`/`uninstall`/`set_enabled` bump the
+    /// generation `OnChange` watches directly, in-process, so this needs no
+    /// live coordinator loop or pipe server to prove -- the cross-process
+    /// half (a separate `dew install`/`dew uninstall`) is proved separately
+    /// below, against the real `DewLibraryChanged` pipe.
+    ///
+    /// DRIVEN BY `services::tick`, THE SAME WAY THE CALLBACK SHAPE ABOVE IS
+    /// -- `OnChange`'s own dispatch is one more `desktop.Clock.OnFrame`
+    /// listener under the hood, registered the same way.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_on_change_fires_on_its_own_actions() {
+        let _generation_guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = crate::library::take_load_requests();
+        let _ = crate::library::take_unload_requests();
+
+        let target =
+            InstalledFixture::new("onchange-target", "id = \"lib-onchange-target\"\n", PLAIN);
+
+        let manager = BundledFixture::new(
+            "library-onchange",
+            "id = \"plain\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let library: mlua::Table = dew.get("Library").expect("Library installed");
+        let on_change: mlua::Function = library.get("OnChange").expect("OnChange installed");
+        let set_enabled: mlua::Function = library.get("SetEnabled").expect("SetEnabled installed");
+
+        lua.globals()
+            .set("__onchange_calls", 0i64)
+            .expect("set global");
+        let callback = lua
+            .create_function(|lua, ()| {
+                let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+                lua.globals().set("__onchange_calls", calls + 1)
+            })
+            .expect("create callback");
+        on_change.call::<()>(callback).expect("OnChange call");
+
+        // THE BASELINE IS READ AT GRANT TIME. Ticking now, before anything
+        // changes, must not fire it -- otherwise every applet holding
+        // `library` would see a spurious first call for whatever changed
+        // before it ever mounted.
+        for _ in 0..5 {
+            services::tick(&loaded.clock, 0.0);
+        }
+        let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+        assert_eq!(
+            calls, 0,
+            "OnChange must not fire for a change that predates its own registration"
+        );
+
+        // Not running in this test, so this is a disk write only --
+        // `set_enabled` bumps the generation directly regardless.
+        let result: mlua::Table = set_enabled
+            .call((target.id.clone(), false))
+            .expect("SetEnabled call");
+        assert!(result.get::<bool>("ok").expect("ok field"));
+
+        let mut fired = false;
+        for _ in 0..50 {
+            services::tick(&loaded.clock, 0.0);
+            let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+            if calls > 0 {
+                fired = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            fired,
+            "OnChange never fired after SetEnabled changed the library"
+        );
+
+        let calls: i64 = lua.globals().get("__onchange_calls").expect("calls");
+        assert_eq!(
+            calls, 1,
+            "OnChange must fire exactly once per change, not once per frame the generation stays different"
+        );
+    }
+
+    /// THE CROSS-PROCESS HALF: a bare ping to `DewLibraryChanged`, with
+    /// nothing going through `dew.Library` at all, still bumps the
+    /// generation -- this is what lets a separate `dew install`/`dew
+    /// uninstall` process reach an already-running coordinator's dashboard.
+    /// See `coordinator::notify_library_changed`'s own doc comment.
+    ///
+    /// `spawn_library_changed_server` IS STARTED DIRECTLY, not through
+    /// `coordinator::run` -- `run` acquires the single-instance mutex and
+    /// would collide with a real `dew` process on this machine; the pipe
+    /// server itself does not, and is the one thing this test needs.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_changed_pipe_bumps_the_generation_from_any_process() {
+        let _generation_guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::coordinator::spawn_library_changed_server();
+        // GIVEN A MOMENT TO START LISTENING before the first ping --
+        // `CreateNamedPipeW` runs on the spawned thread, not before this
+        // call returns.
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let before = crate::library::generation();
+        crate::coordinator::notify_library_changed();
+
+        let mut bumped = false;
+        for _ in 0..100 {
+            if crate::library::generation() != before {
+                bumped = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            bumped,
+            "a ping to DewLibraryChanged must bump the generation within one second"
+        );
+    }
+
+    /// `dew.Account`'S TWO CALLS, against a real (fixture) session file --
+    /// `platform::save_session` writes through the same DPAPI encryption a
+    /// real `dew login` would, so this proves `Whoami` against the actual
+    /// on-disk format rather than a stand-in for it. Synchronous throughout,
+    /// like `dew.Library` above: `platform::load_session()`/`clear_session()`
+    /// are local file operations, never a network call.
+    #[cfg(windows)]
+    #[test]
+    fn dew_account_reports_session_state_and_signs_out() {
+        let _session_guard = SESSION_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::platform::clear_session();
+
+        let manager = BundledFixture::new(
+            "account-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"auth\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let account: mlua::Table = dew.get("Account").expect("Account installed");
+        let whoami: mlua::Function = account.get("Whoami").expect("Whoami installed");
+        let sign_out: mlua::Function = account.get("SignOut").expect("SignOut installed");
+
+        let nobody: mlua::Value = whoami.call(()).expect("Whoami call");
+        assert!(
+            matches!(nobody, mlua::Value::Nil),
+            "no session exists yet, so Whoami must answer nil, not a table"
+        );
+
+        crate::platform::save_session(&crate::platform::Session {
+            access_token: "at".to_string(),
+            refresh_token: "rt".to_string(),
+            user_id: "u-1".to_string(),
+            email: "person@example.com".to_string(),
+        })
+        .expect("write fixture session");
+
+        let signed_in: mlua::Table = whoami.call(()).expect("Whoami call");
+        assert_eq!(
+            signed_in.get::<String>("email").expect("email field"),
+            "person@example.com"
+        );
+        assert_eq!(
+            signed_in.get::<String>("userId").expect("userId field"),
+            "u-1"
+        );
+
+        sign_out.call::<()>(()).expect("SignOut call");
+        let nobody_again: mlua::Value = whoami.call(()).expect("Whoami call");
+        assert!(
+            matches!(nobody_again, mlua::Value::Nil),
+            "SignOut must remove the session Whoami reads"
+        );
+    }
+
+    /// `dew.Account.SignIn` NEVER BLOCKS THE CALLING THREAD (milestone 26
+    /// sprint 3), proven the same way `Discover`/`Install`'s own test proves
+    /// it for themselves. UNLIKE THOSE TWO, THIS CANNOT ALSO ASSERT ON THE
+    /// EVENTUAL ANSWER without a real network dependency: `platform::login`
+    /// has no `require_session` shortcut to fail on before ever reaching the
+    /// network -- signing in is the thing that establishes a session, so
+    /// there is no "not signed in" refusal to hermetically rely on here the
+    /// way `Discover`'s own test does. What this proves instead: the
+    /// trigger call itself returns immediately regardless of what the
+    /// network eventually says, and it is a real callback that is stored,
+    /// not called inline.
+    #[cfg(windows)]
+    #[test]
+    fn dew_account_sign_in_never_blocks_the_caller() {
+        let fixture = BundledFixture::new(
+            "account-signin-wiring",
+            "id = \"plain\"\npermissions = [\"widget\", \"auth\"]\n",
+            PLAIN,
+        );
+        let loaded = fixture.load().expect("loads");
+        let lua = loaded.vm.lua();
+
+        let dew: mlua::Table = lua.globals().get("dew").expect("dew installed");
+        let account: mlua::Table = dew.get("Account").expect("Account installed");
+        let sign_in: mlua::Function = account.get("SignIn").expect("SignIn installed");
+
+        let callback = lua
+            .create_function(|_, _result: mlua::Table| Ok(()))
+            .expect("create callback");
+
+        let started = std::time::Instant::now();
+        sign_in
+            .call::<()>((
+                "nobody@example.com".to_string(),
+                "wrong-password".to_string(),
+                callback,
+            ))
+            .expect("triggering must return immediately, never blocking on the network");
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(200),
+            "SignIn must return before its background thread's network call could possibly complete"
+        );
     }
 
     /// AN UNKNOWN ENTRY REFUSES TO LOAD, naming the entry rather than doing
@@ -612,7 +1299,7 @@ pub mod tests {
         return {
             id = "plain",
             size = { width = 100, height = 60 },
-            mount = function(dew, root)
+            mount = function(desktop, root)
                 local frame = Instance.new("Frame")
                 frame.Name = "Body"
                 frame.Size = UDim2.new(1, 0, 1, 0)
@@ -653,7 +1340,7 @@ pub mod tests {
                 return {
                     id = "plain",
                     size = { width = 100, height = 60 },
-                    mount = function(dew, root)
+                    mount = function(desktop, root)
                         local b = Instance.new("TextButton")
                         b.Name = "Go"
                         b.Size = UDim2.new(1, 0, 1, 0)
@@ -699,21 +1386,21 @@ pub mod tests {
     #[test]
     fn a_mod_can_measure_a_string_and_subscribe_to_frames() {
         // THE SPRINT'S TWO SERVICES, THROUGH THE ORDINARY LOADER. The unit tests
-        // in `datamodel::services` prove them on a bare VM; this proves `dew.Text`
-        // and `dew.Clock` survive the manifest, the sandbox and the capability
-        // table -- ungated members of the same `dew` a mod is handed, on the same
-        // terms as `dew.Time`.
+        // in `datamodel::services` prove them on a bare VM; this proves `desktop.Text`
+        // and `desktop.Clock` survive the manifest, the sandbox and the capability
+        // table -- ungated members of the same `desktop` a mod is handed, on the same
+        // terms as `desktop.Time`.
         let fixture = Fixture::new(
             "services",
             "id = \"plain\"\npermissions = [\"widget\"]\n",
             r#"
                 return {
                     id = "plain",
-                    mount = function(dew, root)
-                        assert(dew.Text ~= nil, "dew.Text is present")
-                        local w, h = dew.Text.Measure("hello", 14)
+                    mount = function(desktop, root)
+                        assert(desktop.Text ~= nil, "desktop.Text is present")
+                        local w, h = desktop.Text.Measure("hello", 14)
                         assert(type(w) == "number" and type(h) == "number", "two numbers")
-                        local stop = dew.Clock.OnFrame(function(dt) end)
+                        local stop = desktop.Clock.OnFrame(function(dt) end)
                         assert(type(stop) == "function", "OnFrame returns an unsubscribe")
                         stop()
                     end,
@@ -738,11 +1425,11 @@ pub mod tests {
                 ticks = 0
                 return {
                     id = "plain",
-                    mount = function(dew, root)
+                    mount = function(desktop, root)
                         local frame = Instance.new("Frame")
                         frame.Name = "Body"
                         frame.Parent = root
-                        dew.Clock.OnFrame(function(dt) ticks += 1 end)
+                        desktop.Clock.OnFrame(function(dt) ticks += 1 end)
                     end,
                 }
             "#,
@@ -780,11 +1467,11 @@ pub mod tests {
             r#"
                 return {
                     id = "plain",
-                    mount = function(dew, root)
+                    mount = function(desktop, root)
                         local frame = Instance.new("Frame")
                         frame.Name = "Body"
                         frame.Parent = root
-                        dew.Clock.OnFrame(function(dt)
+                        desktop.Clock.OnFrame(function(dt)
                             frame.BackgroundTransparency = 0.5
                         end)
                     end,
@@ -806,7 +1493,7 @@ pub mod tests {
     fn an_aether_mod_gets_the_same_services() {
         // NOT A DIFFERENT PLATFORM PER RUNTIME. `install_vocabulary` genuinely is
         // conditional -- Aether carries its own and a partial host one blocks it --
-        // and the risk was that `dew.Text`/`dew.Clock` picked up the same
+        // and the risk was that `desktop.Text`/`desktop.Clock` picked up the same
         // conditionality by habit. They must not: sprint 8 has Aether's DataModel
         // host filling `Host.Text` and `Host.Clock` from exactly these, so an
         // Aether mod that could not see them would be sprint 8 failing a sprint
@@ -819,7 +1506,7 @@ pub mod tests {
         let clock: SharedClock = std::sync::Arc::new(std::sync::Mutex::new(Clock::default()));
         services::install(&lua, &clock).expect("install");
         let got: bool = lua
-            .load("return dew.Text.Measure ~= nil and dew.Clock.OnFrame ~= nil")
+            .load("return desktop.Text.Measure ~= nil and desktop.Clock.OnFrame ~= nil")
             .eval()
             .expect("eval");
         assert!(got);
@@ -867,9 +1554,9 @@ pub mod tests {
             r#"
                 return {
                     id = "plain",
-                    mount = function(dew, root)
-                        assert(dew.Storage ~= nil, "storage was granted")
-                        assert(dew.Clipboard == nil, "clipboard was not asked for")
+                    mount = function(desktop, root)
+                        assert(desktop.Storage ~= nil, "storage was granted")
+                        assert(desktop.Clipboard == nil, "clipboard was not asked for")
                         assert(root.Name == "DewRoot", "the root is named DewRoot")
                     end,
                 }
@@ -889,7 +1576,7 @@ pub mod tests {
             panic!("a module with no `mount` must not load");
         };
         assert!(
-            message.contains("mount = function(dew, root)"),
+            message.contains("mount = function(desktop, root)"),
             "an author of a DataModel mod must not be shown an Aether signature: {message}"
         );
     }
@@ -912,7 +1599,7 @@ pub mod tests {
                 return {
                     id = "plain",
                     size = { width = 100, height = 60 },
-                    mount = function(dew, root)
+                    mount = function(desktop, root)
                         local img = Instance.new("ImageLabel")
                         img.Name = "RbxIcon"
                         img.Size = UDim2.new(1, 0, 1, 0)
@@ -958,7 +1645,7 @@ pub mod tests {
                 return {
                     id = "plain",
                     size = { width = 100, height = 60 },
-                    mount = function(dew, root)
+                    mount = function(desktop, root)
                         local img = Instance.new("ImageLabel")
                         img.Name = "RbxIcon"
                         img.Size = UDim2.new(1, 0, 1, 0)
@@ -993,7 +1680,7 @@ mod asking_for_a_surface {
     use super::tests::Fixture;
 
     const ASKS: &str = r#"
-local root = dew.Widget({ width = 120, height = 60 })
+local root = desktop.Widget({ width = 120, height = 60 })
 local frame = Instance.new("Frame")
 frame.Name = "Asked"
 frame.Size = UDim2.new(1, 0, 1, 0)
@@ -1004,7 +1691,7 @@ frame.Parent = root
     /// The shape this is all moving to: nothing returned at all.
     ///
     /// AN APPLET USED TO HAVE TO RETURN A TABLE to be given anything, because
-    /// `dew` only ever reached it through `mount`. It arrives as the chunk's
+    /// `desktop` only ever reached it through `mount`. It arrives as the chunk's
     /// vararg now, so asking is possible before there is anything to return.
     #[test]
     fn an_applet_that_asks_returns_nothing() {
@@ -1023,9 +1710,9 @@ frame.Parent = root
         let fixture = Fixture::new(
             "asks-ungranted",
             "id = \"ungranted\"\npermissions = [\"widget\"]\n",
-            "assert(dew.Widget ~= nil, \"widget was granted\")\n\
-             assert(dew.Overlay == nil, \"overlay was not granted and must be absent\")\n\
-             local root = dew.Widget({ width = 10, height = 10 })\n",
+            "assert(desktop.Widget ~= nil, \"widget was granted\")\n\
+             assert(desktop.Overlay == nil, \"overlay was not granted and must be absent\")\n\
+             local root = desktop.Widget({ width = 10, height = 10 })\n",
         );
         fixture
             .load()
@@ -1045,19 +1732,19 @@ frame.Parent = root
             Ok(_) => panic!("an applet with no surface and no mount should not load"),
         };
         assert!(
-            error.contains("dew.Widget") && error.contains("mount"),
+            error.contains("desktop.Widget") && error.contains("mount"),
             "the message should name both ways out, got: {error}"
         );
     }
 
-    /// A second file in the applet can reach `dew` without being handed it.
+    /// A second file in the applet can reach `desktop` without being handed it.
     ///
     /// THE REASON IT IS A GLOBAL RATHER THAN THE CHUNK'S VARARG. `...` reaches
     /// the entry module and stops there, so an applet split across two files
-    /// would see nothing from the second one, and `dew` would have to be
+    /// would see nothing from the second one, and `desktop` would have to be
     /// threaded through every call that wanted it.
     #[test]
-    fn a_required_module_can_reach_dew() {
+    fn a_required_module_can_reach_desktop() {
         let fixture = Fixture::new(
             "asks-submodule",
             "id = \"sub\"
@@ -1070,8 +1757,8 @@ helper()
         fixture.write(
             "helper.luau",
             "return function()
-  assert(dew ~= nil, \"a required module should see dew\")
-             local root = dew.Widget({ width = 12, height = 12 })
+  assert(desktop ~= nil, \"a required module should see desktop\")
+             local root = desktop.Widget({ width = 12, height = 12 })
              assert(root ~= nil, \"and should be answered by it\")
 end
 ",
@@ -1087,7 +1774,7 @@ end
         let fixture = Fixture::new(
             "asks-both",
             "id = \"both\"\npermissions = [\"widget\"]\n",
-            "local root = dew.Widget({ width = 33, height = 44 })\n\
+            "local root = desktop.Widget({ width = 33, height = 44 })\n\
              return { size = { width = 999, height = 999 }, mount = function() end }\n",
         );
         let applet = fixture.load().expect("loads");
@@ -1114,6 +1801,10 @@ mod a_pressable_responds {
     /// THE APPLET IS THE REAL ONE, not a fixture, because what is under test is
     /// whether a framework's own hit testing survives this path at all.
     #[test]
+    #[ignore = "blocked on Aether's own repo detecting `desktop` instead of \
+                `dew` (ADR-018); see \
+                .artifacts/project/upstream/aether-host-detection-needs-desktop.md. \
+                Dew's own rename does not wait on that catching up."]
     fn timetracker_toggles_when_its_button_is_pressed() {
         let dir = PathBuf::from("../examples/aether/timetracker");
         let dir = if dir.is_dir() {
@@ -1173,7 +1864,7 @@ mod a_pressable_responds {
         //  button is down; dispatching without recording delivers the event to
         //  an instance and leaves the poller reading a pointer that never moved.
         //  ON THE APPLET'S OWN CELL, not the process-global one: `load` wires
-        //  `dew.Pointer`/`dew.Input` to `loaded.pointer` now, so recording on
+        //  `desktop.Pointer`/`desktop.Input` to `loaded.pointer` now, so recording on
         //  the shared cell here would leave the applet's own poll reading a
         //  pointer that never moved.
         services::pointer_moved_on(&loaded.pointer, x, y);

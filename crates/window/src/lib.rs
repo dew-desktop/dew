@@ -22,9 +22,10 @@
 
 #![cfg(windows)]
 
+mod gpu;
 mod win32;
 
-pub use win32::{screen_size, Pump, SurfaceId, Window};
+pub use win32::{screen_size, set_live_resize_hook, Pump, SurfaceId, Window};
 
 /// A window's tier in the desktop's z-order.
 ///
@@ -62,8 +63,10 @@ pub enum Surface {
     /// The Rainmeter shape. The window's visible silhouette is whatever the tree
     /// painted — rounded corners and soft edges included — because the surface is
     /// composited from a premultiplied buffer rather than blitted into a
-    /// rectangle. `WS_EX_LAYERED` with `UpdateLayeredWindow` does this on an
-    /// ordinary DIB, so it needs no swapchain and no DirectComposition.
+    /// rectangle. A `wgpu` swap chain composed as a `DirectComposition`
+    /// visual's content does this, configured for premultiplied alpha
+    /// instead of the opaque mode an ordinary `Window` uses --
+    /// `crate::gpu`'s own doc has the reasoning.
     Widget {
         /// Screen position of the top-left corner.
         x: i32,

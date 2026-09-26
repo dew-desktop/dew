@@ -34,6 +34,18 @@ fn applets_dir() -> Option<PathBuf> {
     Some(dir)
 }
 
+/// Where the coordinator's OWN applets live, sibling to `Applets/` but never
+/// read or written by `dew install`, `dew package`, or anything else in this
+/// file. `applets::load` checks a loading applet's directory against this
+/// one before granting any `Capability::Host` permission it declared
+/// (ADR-017) -- a mod under `Applets/` cannot get one no matter what its own
+/// `dew.toml` claims. Nothing ships into it until milestone 23's dashboard.
+pub(crate) fn bundled_applets_dir() -> Option<PathBuf> {
+    let dir = dew_dir()?.join("Bundled");
+    std::fs::create_dir_all(&dir).ok()?;
+    Some(dir)
+}
+
 fn state_path() -> Option<PathBuf> {
     Some(dew_dir()?.join("installed.json"))
 }
@@ -71,7 +83,7 @@ fn valid_id(id: &str) -> bool {
         && !id.contains(':')
 }
 
-fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
+pub(crate) fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
     for entry in std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
         let entry = entry.map_err(|e| format!("{}: {e}", src.display()))?;
@@ -84,7 +96,7 @@ fn copy_dir(src: &Path, dst: &Path) -> Result<(), String> {
             // `roblox_packages/`, `luau_packages/` and `.pesde/` are NOT
             // skipped here, even though the root `.gitignore` excludes them
             // from git: an applet that `require`s a real dependency (see
-            // examples/host/widget-behaviors) has it resolved into exactly
+            // examples/host/widget-behaviors/draggable) has it resolved into exactly
             // these directories by pesde, and nothing downstream of this
             // copy re-resolves them. Skipping them at install time was
             // stripping the one thing that made such an applet runnable.
@@ -150,6 +162,12 @@ pub fn enabled() -> Vec<(String, PathBuf)> {
 /// Copy `source` into the store under its own manifest id, and mark it
 /// enabled. Refuses if that id is already installed unless `force` is set,
 /// in which case the existing copy is replaced.
+///
+/// PINGS A RUNNING COORDINATOR AFTER THE WRITE (milestone 26), if there is
+/// one -- see `coordinator::notify_library_changed`'s own doc comment. This
+/// is what lets `dew install` run from a plain terminal, against a service
+/// already running elsewhere, show up in that service's own `dew.Library`
+/// listeners without either side polling for it.
 pub fn install(source: &Path, force: bool) -> Result<String, String> {
     let manifest = Manifest::load(source)?;
     let id = manifest.id;
@@ -179,6 +197,7 @@ pub fn install(source: &Path, force: bool) -> Result<String, String> {
     let mut state = read_state();
     state.insert(id.clone(), true);
     write_state(&state);
+    crate::coordinator::notify_library_changed();
 
     Ok(id)
 }
@@ -187,7 +206,20 @@ pub fn install(source: &Path, force: bool) -> Result<String, String> {
 /// this function's question, the same way `uninstall` leaves it to the
 /// caller -- the management window decides separately whether the change
 /// means live-loading or live-unloading it.
+///
+/// `valid_id` IS CHECKED HERE TOO, NOT ONLY IN `install`. `applets_dir()?
+/// .join(id)` with an absolute path (`C:\...`, or one starting `\`) does not
+/// error and does not stay under `applets_dir()` -- `PathBuf::join` REPLACES
+/// the base entirely for an absolute argument, so an unchecked `id` here
+/// pointed `dest` at an arbitrary real directory elsewhere on disk, and
+/// `uninstall`'s own `remove_dir_all(&dest)` deleted it for real. Confirmed
+/// the hard way: `dew uninstall C:\...\examples\host\basic-widget` deleted
+/// that actual source directory, since `applets_dir()` happens to be on the
+/// same drive and the join discarded it entirely.
 pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err(format!("{id:?} is not a valid installed applet id"));
+    }
     let dest = applets_dir()
         .ok_or("could not find a per-user data directory")?
         .join(id);
@@ -198,13 +230,21 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     let mut state = read_state();
     state.insert(id.to_string(), enabled);
     write_state(&state);
+    crate::coordinator::notify_library_changed();
     Ok(())
 }
 
 /// Remove `id` from the store and forget its enabled bit. Whether `id` is
 /// currently running in an active coordinator is not this function's
 /// question -- callers that care check `coordinator::query_running` first.
+///
+/// `valid_id` IS CHECKED HERE, THE SAME AS `set_enabled` ABOVE -- see that
+/// function's own doc comment for the incident this closes. This is the
+/// function whose unchecked `join` actually deleted a real directory.
 pub fn uninstall(id: &str) -> Result<(), String> {
+    if !valid_id(id) {
+        return Err(format!("{id:?} is not a valid installed applet id"));
+    }
     let dest = applets_dir()
         .ok_or("could not find a per-user data directory to uninstall from")?
         .join(id);
@@ -218,6 +258,7 @@ pub fn uninstall(id: &str) -> Result<(), String> {
     let mut state = read_state();
     state.remove(id);
     write_state(&state);
+    crate::coordinator::notify_library_changed();
 
     Ok(())
 }
@@ -234,5 +275,43 @@ mod tests {
         assert!(!valid_id("."));
         assert!(!valid_id(""));
         assert!(valid_id("basic-widget"));
+    }
+
+    /// REPRODUCES A REAL INCIDENT: `dew uninstall C:\...\examples\host\basic-widget`
+    /// deleted that actual source directory. `applets_dir()?.join(id)` with
+    /// an absolute path does not error and does not stay under
+    /// `applets_dir()` -- `PathBuf::join` REPLACES the base entirely for an
+    /// absolute argument (this is documented `std` behavior, not a bug in
+    /// `join` itself), so an unvalidated `id` here can point `dest` at any
+    /// real directory the process can reach. `uninstall`/`set_enabled` must
+    /// refuse before ever building that path, not merely happen to survive
+    /// this particular victim.
+    #[test]
+    fn uninstall_refuses_a_path_shaped_id_without_touching_disk() {
+        let victim = std::env::temp_dir().join("dew-installed-test-victim");
+        std::fs::create_dir_all(&victim).expect("victim dir");
+        std::fs::write(victim.join("marker.txt"), "still here").expect("marker");
+
+        let path_id = victim.to_string_lossy().into_owned();
+        let err = uninstall(&path_id).expect_err("a path-shaped id must be refused, not accepted");
+        assert!(
+            err.contains("not a valid installed applet id"),
+            "got: {err}"
+        );
+        assert!(
+            victim.join("marker.txt").is_file(),
+            "the victim directory must survive completely untouched"
+        );
+
+        std::fs::remove_dir_all(&victim).expect("cleanup");
+    }
+
+    #[test]
+    fn set_enabled_refuses_a_path_shaped_id() {
+        let err = set_enabled(r"C:\Windows", false).expect_err("a path-shaped id must be refused");
+        assert!(
+            err.contains("not a valid installed applet id"),
+            "got: {err}"
+        );
     }
 }

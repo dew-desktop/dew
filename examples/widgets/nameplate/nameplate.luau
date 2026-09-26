@@ -20,8 +20,8 @@
 	snapshot before and after differ.
 ]]
 
---- `dew` is a global carrying exactly the capabilities `dew.toml` granted.
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+--- `desktop` is a global carrying exactly the capabilities `dew.toml` granted.
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
 local root = widget({
 	width = 340,
@@ -32,17 +32,17 @@ local root = widget({
 
 --- Reading a capability, and reading the ABSENCE of one.
 ---
---- `dew.Storage` is present because `dew.toml` asked for `storage`.
---- `dew.Clipboard` is nil because it did not: not guarded, not refused at the
+--- `desktop.Storage` is present because `dew.toml` asked for `storage`.
+--- `desktop.Clipboard` is nil because it did not: not guarded, not refused at the
 --- call, absent. That is the capability model in one comparison, and it is worth
 --- a line on screen because it is the half of the contract a render cannot show.
 local function capabilityReport(): string
-	if dew.Storage == nil then
+	if desktop.Storage == nil then
 		return "storage: not granted"
 	end
-	dew.Storage.set("nameplate.mounted", tostring(dew.Time.now()))
-	local seen = dew.Storage.get("nameplate.mounted") ~= nil
-	local clipboard = if dew.Clipboard == nil then "clipboard absent" else "clipboard granted"
+	desktop.Storage.set("nameplate.mounted", tostring(desktop.Time.now()))
+	local seen = desktop.Storage.get("nameplate.mounted") ~= nil
+	local clipboard = if desktop.Clipboard == nil then "clipboard absent" else "clipboard granted"
 	return `storage: {if seen then "readable" else "wrote nothing"} - {clipboard}`
 end
 

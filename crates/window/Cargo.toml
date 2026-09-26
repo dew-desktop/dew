@@ -9,21 +9,28 @@ license-file = "../../LICENSE"
 # a buffer of bytes. It does not know what produced them, which is what lets the
 # CLI's preview and Dew's widgets share it without sharing anything else.
 #
-# OPAQUE, DELIBERATELY, AND THAT IS THE POINT OF SHIPPING IT NOW. Per-pixel
-# window transparency on Win32 needs DirectComposition and a swapchain with
-# premultiplied alpha, which is the one genuinely unresolved question in this
-# stack. An ordinary window with a GDI blit needs neither, is what a developer
-# previewing a component wants anyway, and is the path the zune host already
-# proved. A transparent window becomes another `Surface` impl beside this one
-# rather than a rewrite of it.
+# EVERY WINDOWS SURFACE PRESENTS THROUGH `wgpu` COMPOSED OVER `DirectComposition`
+# (milestone 24), an ordinary `Window` included -- not only a layered
+# `Widget`/`Overlay`. A flip-model swap chain bound directly to an `HWND` is a
+# documented source of a "wrong direction" stretch during a live resize
+# (Windows composites the back buffer against the window's CURRENT rect
+# independent of when the app presents), and `DirectComposition` is the fix
+# the industry actually uses even for an opaque window, not a transparency
+# feature here. See `src/gpu.rs` and milestone 24's vision overview for the
+# full reasoning, including why this is Windows-specific rather than
+# something `wgpu`'s own cross-platform abstraction absorbs.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.59", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_Graphics_Gdi",
+    "Win32_Graphics_DirectComposition",
     "Win32_System_LibraryLoader",
+    "Foundation_Numerics",
 ] }
+wgpu = "29"
+pollster = "1.0.1"
 
 # CLIPPY DEBT THAT ARRIVED WITH THE CODE, NAMED AND COUNTED. The reasoning is in
 # `crates/raster/Cargo.toml`; these are the four this crate contributes, both

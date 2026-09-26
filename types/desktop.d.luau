@@ -3,9 +3,9 @@
 	What a Dew applet is handed, as the language server sees it.
 
 	A DEFINITIONS FILE, not a module. It is loaded with `--definitions=` rather
-	than required, which is what lets it declare a GLOBAL: `dew` is one, the way
-	`game` is one in the engine this host is shaped after, and without this file
-	an editor reports "Unknown global 'dew'" on every applet.
+	than required, which is what lets it declare a GLOBAL: `desktop` is one, the
+	way `game` is one in the engine this host is shaped after, and without this
+	file an editor reports "Unknown global 'desktop'" on every applet.
 
 	Kept beside the host that produces it: `host/src/capabilities.rs` and
 	`host/src/services.rs` both add members to the table this describes, and
@@ -15,8 +15,8 @@
 	A surface returns `any` and should return `Instance`. Definition files are
 	parsed one at a time and share no types with each other, so naming `Instance`
 	here makes the whole file fail to load wherever the DataModel types are not in
-	it, and an applet then gets no `dew` at all. This tightens when Dew ships type
-	definitions for its own DataModel.
+	it, and an applet then gets no `desktop` at all. This tightens when Dew ships
+	type definitions for its own DataModel.
 ]]
 
 type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center"
@@ -119,7 +119,7 @@ type Clock = {
 	Now: () -> number,
 }
 
---- The capability table an applet is given.
+--- The open, portable desktop-shell vocabulary an applet is given (ADR-018).
 ---
 --- `Time`, `Pointer`, `Input`, `Clock` and `Text` ARE NOT CAPABILITIES. Nothing
 --- here is granted or withheld by a manifest: a clock, a pointer and text
@@ -131,9 +131,9 @@ type Clock = {
 ---
 --- A SURFACE IS A FUNCTION HERE, not a block an applet returns. Calling it is
 --- how the applet asks, and what comes back is the root to parent into. An
---- ungranted surface is nil, so `dew.Overlay{}` without the word in the manifest
---- is a nil call at the line that wanted it.
-declare dew: {
+--- ungranted surface is nil, so `desktop.Overlay{}` without the word in the
+--- manifest is a nil call at the line that wanted it.
+declare desktop: {
 	--- Ungated. Reading a clock discloses nothing an applet could not get by
 	--- counting frames, and gating it would put a permission in every manifest
 	--- that exists to say "this applet is allowed to know what time it is".

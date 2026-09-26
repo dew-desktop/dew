@@ -152,6 +152,10 @@ windows = { version = "0.59", features = [
     # own Credential Manager uses.
     "Win32_Security_Cryptography",
     "Win32_System_Memory",
+    # `SetProcessDpiAwarenessContext`, declared once at process start so
+    # Windows stops bitmap-stretching every window Dew creates when it is
+    # dragged to a monitor with a different DPI -- see `declare_dpi_awareness`.
+    "Win32_UI_HiDpi",
 ] }
 
 # `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.

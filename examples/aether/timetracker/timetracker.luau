@@ -37,7 +37,7 @@ local WIDTH, HEIGHT = 380, 56
 --- rather than a shape drawn on a dark rectangle.
 ---
 --- `clickThrough` stays false because the START button is a control.
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 local root = widget({
 	width = WIDTH,
 	height = HEIGHT,
@@ -71,11 +71,11 @@ local function build()
 		local function toggle()
 			local running = not isRunning()
 			isRunning(running)
-			if dew.Audio then
-				dew.Audio.chime(if running then "tick" else "subtle")
+			if desktop.Audio then
+				desktop.Audio.chime(if running then "tick" else "subtle")
 			end
-			if dew.Notifications then
-				dew.Notifications.show(
+			if desktop.Notifications then
+				desktop.Notifications.show(
 					if running then `Started: {task()}` else `Paused: {task()} ({display()})`
 				)
 			end
@@ -92,9 +92,9 @@ local function build()
 		--- `Live.Session` already steps it once per frame — so this is the engine's
 		--- own frame signal on both hosts rather than a Dew convention.
 		local clock = Aether.Host.detect().Clock
-		local lastTick = dew.Time.now()
+		local lastTick = desktop.Time.now()
 		clock.OnFrame(function()
-			local now = dew.Time.now()
+			local now = desktop.Time.now()
 			if isRunning() then
 				elapsed(elapsed() + (now - lastTick))
 			end

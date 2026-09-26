@@ -29,7 +29,7 @@ local derive = Aether.derive
 
 --- ANCHORED LOWER, so both reference widgets can be on screen at once and
 --- neither has to be moved to see the other.
-local widget = assert(dew.Widget, "dew.toml must grant `widget`")
+local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 local root = widget({
 	width = 260,
 	height = 56,

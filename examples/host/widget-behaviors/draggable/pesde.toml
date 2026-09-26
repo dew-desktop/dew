@@ -1,4 +1,4 @@
-name = "dew_examples/widget_behaviors"
+name = "dew_examples/widget_behaviors_draggable"
 version = "0.0.1"
 
 # STILL NO FRAMEWORK. `Instance.new`, property assignment and `Parent` remain
@@ -8,7 +8,7 @@ version = "0.0.1"
 # reactive primitive without adopting Aether on top of it.
 [target]
 environment = "roblox"
-lib = "widget-behaviors.luau"
+lib = "draggable.luau"
 
 [dependencies]
 vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }

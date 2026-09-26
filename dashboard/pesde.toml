@@ -1,0 +1,19 @@
+name = "dew/dashboard"
+version = "0.0.1"
+
+# STILL NO FRAMEWORK, matching `examples/host/widget-behaviors/draggable`'s own
+# convention. `Instance.new`, property assignment and `Parent` build the
+# tree; vide's `source`/`effect` are the one exception, for reacting to
+# `dew.Marketplace`'s poll without hand-rolled diffing.
+[target]
+environment = "roblox"
+lib = "dashboard.luau"
+
+[dependencies]
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"

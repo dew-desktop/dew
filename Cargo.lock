@@ -416,6 +416,8 @@ dependencies = [
 name = "dew_window"
 version = "0.0.1"
 dependencies = [
+ "pollster",
+ "wgpu",
  "windows 0.59.0",
 ]
 

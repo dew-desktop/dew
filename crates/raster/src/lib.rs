@@ -59,7 +59,7 @@ use vello_cpu::peniko::{
 };
 use vello_cpu::{
     CompositeMode, Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap,
-    RasterizerSettings, RenderContext, RenderMode, Resources,
+    RasterizerSettings, RenderContext, RenderMode, RenderSettings, Resources,
 };
 // `Tint` and `TintMode` ONLY. See `Cargo.toml`: vello_cpu takes them in
 // `set_tint`'s signature and does not re-export them, so they come from its own
@@ -499,6 +499,41 @@ impl Surface {
     }
 }
 
+/// Build the vello backend's per-size state.
+///
+/// SINGLE-THREADED, DELIBERATELY. `RenderContext::new`'s default spins up a
+/// fresh `rayon` thread pool sized to the machine's core count, which
+/// [`ar_surface_resize`] cannot afford to pay on every step of a live
+/// drag. Measured against real applet content, a warm context renders in
+/// 1-1.5ms single-threaded anyway -- the thread pool is not what made this
+/// fast, so this crate stops paying to build one.
+///
+/// `resources` IS THE CALLER'S TO REUSE. It holds vello's glyph cache
+/// (`Resources`'s own doc: "will be initialized lazily on first use"), and
+/// nothing in it is sized to the canvas's pixel dimensions -- a font atlas
+/// does not care how wide the window is. [`ar_surface_resize`] passes the
+/// OLD surface's `resources` back in for exactly that reason: measured at
+/// 25-40ms to rebuild from empty on a window with real text, against
+/// microseconds for [`RenderContext::new_with`] and [`VPixmap::new`] once
+/// the thread pool was already out of the picture. [`ar_surface_new_backend`]
+/// has no old surface to reuse from, so it passes a fresh one.
+fn vello_state_new(width: u32, height: u32, resources: Resources) -> VelloState {
+    VelloState {
+        ctx: RenderContext::new_with(
+            width as u16,
+            height as u16,
+            RenderSettings {
+                num_threads: 0,
+                ..RenderSettings::default()
+            },
+        ),
+        pixmap: VPixmap::new(width as u16, height as u16),
+        resources,
+        rendered: false,
+        depth: 0,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn ar_surface_new(width: u32, height: u32) -> *mut Surface {
     ar_surface_new_backend(width, height, 0)
@@ -528,17 +563,8 @@ pub extern "C" fn ar_surface_new_backend(width: u32, height: u32, backend: u32) 
     if which == Which::VelloCpu && (width > u16::MAX as u32 || height > u16::MAX as u32) {
         return std::ptr::null_mut();
     }
-    let vello = if which == Which::VelloCpu {
-        Some(VelloState {
-            ctx: RenderContext::new(width as u16, height as u16),
-            pixmap: VPixmap::new(width as u16, height as u16),
-            resources: Resources::new(),
-            rendered: false,
-            depth: 0,
-        })
-    } else {
-        None
-    };
+    let vello =
+        (which == Which::VelloCpu).then(|| vello_state_new(width, height, Resources::new()));
     Box::into_raw(Box::new(Surface {
         which,
         vello,
@@ -550,6 +576,38 @@ pub extern "C" fn ar_surface_new_backend(width: u32, height: u32, backend: u32) 
         damage: None,
         bgra: vec![0u8; (width as usize) * (height as usize) * 4],
     }))
+}
+
+/// Resize a surface IN PLACE, at the same backend it was created with.
+///
+/// KEEPS THE VELLO BACKEND'S `Resources` ALIVE ACROSS THE RESIZE -- see
+/// [`vello_state_new`]'s own doc for why that, not thread-pool creation
+/// (already fixed once and measured insufficient on its own), was the real
+/// cost `RasterPainter::resize` used to pay by rebuilding a whole new
+/// `Canvas` from scratch on every live-resize message.
+#[no_mangle]
+pub extern "C" fn ar_surface_resize(ptr: *mut Surface, width: u32, height: u32) -> bool {
+    let s = match unsafe { ptr.as_mut() } {
+        Some(s) => s,
+        None => return false,
+    };
+    let Some(pixmap) = Pixmap::new(width, height) else {
+        return false;
+    };
+    if s.which == Which::VelloCpu && (width > u16::MAX as u32 || height > u16::MAX as u32) {
+        return false;
+    }
+    if let Some(old) = s.vello.take() {
+        s.vello = Some(vello_state_new(width, height, old.resources));
+    }
+    s.pixmap = pixmap;
+    s.width = width;
+    s.height = height;
+    s.clips.clear();
+    s.masks.clear();
+    s.damage = None;
+    s.bgra = vec![0u8; (width as usize) * (height as usize) * 4];
+    true
 }
 
 /// Which backend a surface is using, so a caller can report it rather than

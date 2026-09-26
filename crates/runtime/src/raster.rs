@@ -53,6 +53,21 @@ impl RasterPainter {
         })
     }
 
+    /// Resize the drawing surface, e.g. when the window it is presented
+    /// into was resized.
+    ///
+    /// AN IN-PLACE RESIZE, NOT A FRESH `Canvas` -- `Canvas::new` used to run
+    /// here, which for the vello backend rebuilt its glyph cache from empty
+    /// on every single message of a live drag. Measured at 25-40ms on a
+    /// window with real text, against microseconds once `Canvas::resize`
+    /// carries that cache across instead. `uploaded` is untouched either
+    /// way: an image id is a handle into the rasteriser's own store, not
+    /// into this specific `Canvas`, so nothing here needs re-uploading just
+    /// because the surface it eventually draws onto changed size.
+    pub fn resize(&mut self, width: u32, height: u32) -> bool {
+        self.canvas.resize(width, height)
+    }
+
     /// Use this font for text.
     ///
     /// TEXT ALSO NEEDS THE RIGHT BACKEND. tiny-skia is a shape backend with no
@@ -493,5 +508,31 @@ impl Painter for RasterPainter {
         // A CPU surface holds its pixels; presenting is the caller's business
         // (write a PNG, blit to a DC). Nothing to do, and nothing to pretend.
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// THE ACTUAL DEFECT BEHIND A RESIZED WINDOW STRETCHING ITS CONTENT
+    /// instead of redrawing it: `host/src/main.rs`'s `Event::Resized` used
+    /// to update the window's own tracked size and nothing else, leaving
+    /// the canvas -- and therefore every subsequent frame's DataModel
+    /// layout -- at whatever size the applet was mounted with. Windows'
+    /// `StretchDIBits` then stretched that stale-sized buffer to fill the
+    /// window's new, already-resized client rect. This is the fix's own
+    /// lowest-level proof: the canvas itself really does end up at the new
+    /// size, not just the caller believing it does.
+    #[test]
+    fn resize_rebuilds_the_canvas_at_the_new_size() {
+        let mut painter = RasterPainter::new(100, 60, Backend::TinySkia).expect("painter");
+        assert_eq!((painter.canvas.width(), painter.canvas.height()), (100, 60));
+
+        assert!(painter.resize(320, 240));
+        assert_eq!(
+            (painter.canvas.width(), painter.canvas.height()),
+            (320, 240)
+        );
     }
 }

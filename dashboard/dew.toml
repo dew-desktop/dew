@@ -1,0 +1,4 @@
+id = "dashboard"
+name = "Dew Dashboard"
+description = "Library, Store, and Account, all in one window."
+permissions = ["window", "discover", "install", "library", "auth"]
