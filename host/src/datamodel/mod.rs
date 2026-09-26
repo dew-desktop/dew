@@ -155,6 +155,16 @@ pub struct Dom {
     /// lower: a side table, read and written by the same special case in
     /// `Index`/`NewIndex` that already carries `Parent`.
     style_links: BTreeMap<usize, usize>,
+    /// The id of `GuiService`'s own pseudo-instance, minted the first time
+    /// anything reaches it -- the same construction as
+    /// `collection_service_id`, and for the same reason: `SelectionGained`
+    /// and `SelectionLost` reuse `Dom::connect`/`listeners`/`disconnect` and
+    /// `signal::fire` by firing on a real arena slot, rather than a second
+    /// handler list for one service.
+    gui_service_id: Option<usize>,
+    /// `GuiService.SelectedObject`. One value, not a side table keyed by id --
+    /// there is one selection, the same as there is one pointer position.
+    selected_object: Option<usize>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -174,6 +184,8 @@ impl Default for Dom {
             collection_service_id: None,
             style_properties: BTreeMap::new(),
             style_links: BTreeMap::new(),
+            gui_service_id: None,
+            selected_object: None,
         }
     }
 }
@@ -436,6 +448,34 @@ impl Dom {
                 self.style_links.remove(&id);
             }
         }
+    }
+
+    // ── `GuiService` ─────────────────────────────────────────────────────────
+
+    /// The id of `GuiService`'s own pseudo-instance, minting it on first use.
+    /// See the field's own doc comment for why it exists at all.
+    fn gui_service_id(&mut self) -> usize {
+        if let Some(id) = self.gui_service_id {
+            return id;
+        }
+        let id = self.insert("GuiService".to_string(), "GuiService".to_string());
+        self.gui_service_id = Some(id);
+        id
+    }
+
+    /// `GuiService.SelectedObject`, or `None` for no selection or one whose
+    /// target has since been destroyed.
+    fn get_selected_object(&self) -> Option<usize> {
+        let target = self.selected_object?;
+        self.node(target)?;
+        Some(target)
+    }
+
+    /// Set `GuiService.SelectedObject`, answering the PREVIOUS selection so
+    /// the caller can fire `SelectionLost` on it before `SelectionGained` on
+    /// the new one -- the same order the engine fires them in.
+    fn set_selected_object(&mut self, target: Option<usize>) -> Option<usize> {
+        std::mem::replace(&mut self.selected_object, target)
     }
 
     // ── Connections ──────────────────────────────────────────────────────────
@@ -1215,6 +1255,16 @@ impl UserData for InstanceRef {
                         None => Ok(LuaValue::Nil),
                     };
                 }
+                // `GuiService.SelectedObject`: AN INSTANCE REFERENCE, read the
+                // same way `Parent` and `StyleLink.StyleSheet` are.
+                "SelectedObject" if node.class == "GuiService" => {
+                    let target = dom.get_selected_object();
+                    drop(dom);
+                    return match target {
+                        Some(target) => handle(lua, &this.dom, target)?.into_lua(lua),
+                        None => Ok(LuaValue::Nil),
+                    };
+                }
                 _ => {}
             }
 
@@ -1465,6 +1515,50 @@ impl UserData for InstanceRef {
                         drop(dom);
                         return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
                     }
+                    // `GuiService.SelectedObject`, an instance reference the
+                    // same way. Fires `SelectionLost` on whatever was
+                    // selected before, then `SelectionGained` on the new one
+                    // -- the engine's own order, and why `set_selected_object`
+                    // hands back the previous value rather than just storing.
+                    "SelectedObject" if class == "GuiService" => {
+                        let target = match &value {
+                            LuaValue::Nil => None,
+                            LuaValue::UserData(ud) => Some(ud.borrow::<InstanceRef>()?.id),
+                            other => {
+                                return Err(LuaError::runtime(format!(
+                                    "SelectedObject expects an Instance or nil, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        if let Some(target_id) = target {
+                            if dom.node(target_id).is_none() {
+                                return Err(LuaError::runtime(
+                                    "the new SelectedObject has been destroyed",
+                                ));
+                            }
+                            if !dom
+                                .class_of(target_id)
+                                .is_some_and(|c| members::class_is_a(&c, "GuiObject"))
+                            {
+                                return Err(LuaError::runtime(
+                                    "GuiService.SelectedObject expects a GuiObject",
+                                ));
+                            }
+                        }
+                        if dom.get_selected_object() == target {
+                            return Ok(());
+                        }
+                        let previous = dom.set_selected_object(target);
+                        drop(dom);
+                        if let Some(previous) = previous {
+                            signal::fire(&this.dom, previous, &signal::Kind::SelectionLost, &[]);
+                        }
+                        if let Some(target_id) = target {
+                            signal::fire(&this.dom, target_id, &signal::Kind::SelectionGained, &[]);
+                        }
+                        return signal::property_changed(lua, &this.dom, this.id, "SelectedObject");
+                    }
                     _ => {}
                 }
 
@@ -1696,6 +1790,7 @@ pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {
     )?;
     let services = lua.create_userdata(service_provider::ServiceProviderHandle::new(
         collection_service,
+        dom.clone(),
     ))?;
     lua.globals().set("services", services)?;
 

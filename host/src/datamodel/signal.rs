@@ -84,6 +84,15 @@ pub enum Kind {
     // ── Focus, milestone 4 sprint 3 ──────────────────────────────────────────
     Focused,
     FocusLost,
+    // ── `GuiService.SelectedObject`, keyboard/gamepad selection ──────────────
+    //
+    // FIRE ON THE TARGET INSTANCE, NOT ON `GuiService` -- the real engine's
+    // own `GuiObject.SelectionGained`/`SelectionLost` are members of the
+    // object being selected, unlike `CollectionService`'s pair above, which
+    // are members of the service. Same signal machinery, different source,
+    // because that is what the real engine's own shape is here.
+    SelectionGained,
+    SelectionLost,
     // ── `CollectionService`, milestone 27 sprint 1 ───────────────────────────
     //
     // ONE PER TAG NAME, the same shape as `PropertyChanged` above: two
@@ -126,6 +135,8 @@ impl Kind {
             Kind::InputEnded => "InputEnded".into(),
             Kind::Focused => "Focused".into(),
             Kind::FocusLost => "FocusLost".into(),
+            Kind::SelectionGained => "SelectionGained".into(),
+            Kind::SelectionLost => "SelectionLost".into(),
             Kind::TagAdded(tag) => format!("GetInstanceAddedSignal({tag})"),
             Kind::TagRemoved(tag) => format!("GetInstanceRemovedSignal({tag})"),
         }

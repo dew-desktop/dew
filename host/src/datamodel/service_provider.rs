@@ -25,16 +25,24 @@
 //! object, and `==` on them agrees without a custom `Eq`, the same as two
 //! `game:GetService("X")` calls do on the engine.
 
+use super::SharedDom;
 use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 pub struct ServiceProviderHandle {
     collection_service: LuaAnyUserData,
+    /// Needed for `GuiService`, which is a real arena instance minted on
+    /// first use -- unlike `CollectionService`, there is no fixed userdata to
+    /// cache here; `super::handle` does that memoisation itself, keyed by id.
+    dom: SharedDom,
 }
 
 impl ServiceProviderHandle {
-    pub fn new(collection_service: LuaAnyUserData) -> Self {
-        Self { collection_service }
+    pub fn new(collection_service: LuaAnyUserData, dom: SharedDom) -> Self {
+        Self {
+            collection_service,
+            dom,
+        }
     }
 }
 
@@ -42,11 +50,17 @@ impl UserData for ServiceProviderHandle {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::ToString, |_, _, ()| Ok("services".to_string()));
 
-        methods.add_method("GetService", |_, this, name: String| match name.as_str() {
-            "CollectionService" => Ok(this.collection_service.clone()),
-            other => Err(LuaError::runtime(format!(
-                "{other} is not a service this host provides yet"
-            ))),
+        methods.add_method("GetService", |lua, this, name: String| {
+            match name.as_str() {
+                "CollectionService" => Ok(this.collection_service.clone()),
+                "GuiService" => {
+                    let id = this.dom.lock().expect("dom").gui_service_id();
+                    super::handle(lua, &this.dom, id)
+                }
+                other => Err(LuaError::runtime(format!(
+                    "{other} is not a service this host provides yet"
+                ))),
+            }
         });
     }
 }
