@@ -43,6 +43,7 @@ pub mod members;
 pub mod render;
 mod service_provider;
 pub mod signal;
+mod style;
 mod vocabulary;
 
 use content::{LuaContent, LuaFont};
@@ -138,6 +139,13 @@ pub struct Dom {
     /// reachable from a guest as an `Instance`, and is never destroyed -- there is
     /// nothing that would call `Dom::destroy` on it.
     collection_service_id: Option<usize>,
+    /// `StyleRule`'s own property table: instance id to the name/value pairs
+    /// `SetProperty` has stored on it. NOT `Node::props` -- those hold values
+    /// declared on the rule's own class (`Priority`, `Selector`), while these
+    /// are arbitrary names a `StyleRule` carries for whatever it ends up
+    /// applied to, exactly as `attributes` are arbitrary names an ordinary
+    /// instance carries rather than reflected properties of its own class.
+    style_properties: BTreeMap<usize, BTreeMap<String, Variant>>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -155,6 +163,7 @@ impl Default for Dom {
             tags: BTreeMap::new(),
             instance_tags: BTreeMap::new(),
             collection_service_id: None,
+            style_properties: BTreeMap::new(),
         }
     }
 }
@@ -356,6 +365,34 @@ impl Dom {
         held.into_iter().collect()
     }
 
+    // ── `StyleRule` properties ────────────────────────────────────────────────
+
+    /// `SetProperty`, with `None` clearing the name the same as `SetAttribute`
+    /// does -- a `StyleRule` un-setting a property it changed its mind about
+    /// is the ordinary case, not a special one.
+    fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) {
+        let table = self.style_properties.entry(id).or_default();
+        match value {
+            Some(v) => {
+                table.insert(name.to_string(), v);
+            }
+            None => {
+                table.remove(name);
+            }
+        }
+        if table.is_empty() {
+            self.style_properties.remove(&id);
+        }
+    }
+
+    fn get_style_property(&self, id: usize, name: &str) -> Option<Variant> {
+        self.style_properties.get(&id)?.get(name).cloned()
+    }
+
+    fn get_style_properties(&self, id: usize) -> BTreeMap<String, Variant> {
+        self.style_properties.get(&id).cloned().unwrap_or_default()
+    }
+
     // ── Connections ──────────────────────────────────────────────────────────
     //
     // THE HANDLER TABLE IS AN ARENA TOO, and ids are never reused for the same
@@ -474,6 +511,10 @@ impl Dom {
             // Ids are never recycled -- `insert` pushes -- so a cache entry that
             // outlives this by a moment cannot come to mean a different instance.
             self.released.push(current);
+            // A `StyleRule`'s own property table dies with it, the same as its
+            // connections do -- nothing else can reach it by id once the slot
+            // above is gone.
+            self.style_properties.remove(&current);
             stack.extend(node.children);
         }
         self.dirty = true;
@@ -952,8 +993,12 @@ fn coerce_enum(
     )))
 }
 
-/// Coerce a Lua value into a `Variant` for an attribute.
-pub(crate) fn coerce_attribute_value(value: &LuaValue) -> LuaResult<Option<Variant>> {
+/// Coerce a Lua value into a `Variant`, for anything that stores a guest
+/// value under an arbitrary name rather than a reflected property --
+/// `SetAttribute` and `StyleRule.SetProperty` alike. `caller` names itself in
+/// the error, since a `StyleRule.SetProperty` call reporting a failure as
+/// `SetAttribute`'s would send whoever reads it to the wrong method.
+pub(crate) fn coerce_variant_value(caller: &str, value: &LuaValue) -> LuaResult<Option<Variant>> {
     match value {
         LuaValue::Nil => Ok(None),
         LuaValue::Boolean(b) => Ok(Some(Variant::Bool(*b))),
@@ -980,12 +1025,12 @@ pub(crate) fn coerce_attribute_value(value: &LuaValue) -> LuaResult<Option<Varia
                 return Ok(Some(Variant::Font(v)));
             }
             Err(LuaError::runtime(format!(
-                "SetAttribute: unsupported UserData type {}",
+                "{caller}: unsupported UserData type {}",
                 value.type_name()
             )))
         }
         _ => Err(LuaError::runtime(format!(
-            "SetAttribute: unsupported attribute type {}",
+            "{caller}: unsupported value type {}",
             value.type_name()
         ))),
     }
@@ -1285,6 +1330,39 @@ impl UserData for InstanceRef {
                         drop(dom);
                         signal::arrived(lua, &this.dom, this.id)?;
                         return signal::property_changed(lua, &this.dom, this.id, "Parent");
+                    }
+                    // `SelectorError` IS DERIVED, NOT SET BY THE GUEST -- the
+                    // engine computes it from `Selector` the same way, and a
+                    // script that could write it directly could make it lie.
+                    // Guarded on `StyleRule` so a class that does not declare
+                    // `Selector` at all still falls through to `describe`'s
+                    // own "not a valid member" refusal below, unwidened by
+                    // this arm.
+                    "Selector" if class == "StyleRule" => {
+                        let selector = value
+                            .as_string()
+                            .ok_or_else(|| {
+                                LuaError::runtime(format!(
+                                    "Selector expects a string, got {}",
+                                    value.type_name()
+                                ))
+                            })?
+                            .to_string_lossy();
+                        if dom.property(this.id, "Selector")
+                            == Some(Variant::String(selector.clone()))
+                        {
+                            return Ok(());
+                        }
+                        let error = style::parse(&selector).err().unwrap_or_default();
+                        let node = dom.node_mut(this.id).expect("checked");
+                        node.props
+                            .insert("Selector".to_string(), Variant::String(selector));
+                        node.props
+                            .insert("SelectorError".to_string(), Variant::String(error));
+                        dom.touch();
+                        drop(dom);
+                        signal::property_changed(lua, &this.dom, this.id, "Selector")?;
+                        return signal::property_changed(lua, &this.dom, this.id, "SelectorError");
                     }
                     _ => {}
                 }
