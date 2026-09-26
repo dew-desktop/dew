@@ -3,30 +3,28 @@
 //! WHAT IS HERE, AND WHAT IS NOT. Parsing a selector string into a
 //! [`Selector`], and testing one instance against one. No cascade: nothing
 //! here resolves conflicting rules, follows a `StyleLink`, or reads
-//! `Priority`. No paint: nothing here reaches `render.rs`. Those are the next
-//! sprints' work, on top of this one's model.
+//! `Priority`. No paint: nothing here reaches `render.rs`. Those build on
+//! this file's model rather than living in it.
 //!
 //! THE THREE FORMS, AND ONLY THOSE THREE. Roblox's own selector grammar
 //! supports compound and combinator selectors (`Frame.Enemy`, descendant
 //! combinators, and the rest) -- confirmed against the real engine's own
-//! documentation, not assumed from the shape looking like CSS. This
-//! milestone's vision document scopes `StyleSheet` down to the three atomic
-//! forms below, and [`parse`] refuses anything else with a message rather
-//! than silently matching the wrong half of a compound selector it cannot
-//! actually parse. Widening this is a real capability gap against the
-//! engine, not a bug in this file, and it is the vision document's call to
-//! make, not this parser's.
+//! documentation, not assumed from the shape looking like CSS. [`parse`]
+//! covers only the three atomic forms below, and refuses anything else with
+//! a message rather than silently matching the wrong half of a compound
+//! selector it cannot actually parse. Widening this to the real grammar is a
+//! deliberate later decision, not a bug in this file.
 //!
 //! WHERE ROBLOX'S OWN NAMES DIVERGE FROM CSS'S. The bare-word form is a
 //! "class name selector" in Roblox's own styling documentation, matched
 //! through `IsA` (a `Frame` selector matches a `TextButton` too, since both
 //! descend from `GuiObject` -- exact-`ClassName` matching would report a
 //! screen of buttons as containing no `GuiObject` at all). The `.foo` form is
-//! Roblox's own "tag selector", reading `CollectionService`'s tags from
-//! milestone 27 sprint 1 directly -- so it is named [`Selector::Tag`] here,
-//! matching that sprint's own vocabulary, rather than `Selector::Class`,
-//! which would collide with a completely different Lua/OOP idea of "class"
-//! this codebase does not have.
+//! Roblox's own "tag selector", reading `CollectionService`'s own tags
+//! directly -- so it is named [`Selector::Tag`] here, matching that
+//! service's own vocabulary, rather than `Selector::Class`, which would
+//! collide with a completely different Lua/OOP idea of "class" this codebase
+//! does not have.
 
 use super::{class_exists, members, Dom};
 
@@ -88,12 +86,10 @@ pub fn parse(selector: &str) -> Result<Selector, String> {
 
 /// Does `id` match `selector`?
 ///
-/// NO CALLER OUTSIDE THIS FILE'S OWN TESTS YET, BY THE MILESTONE PLAN'S OWN
-/// STAGING, NOT AN OVERSIGHT. Milestone 27 sprint 3 is cascade resolution --
-/// "given an instance and the `StyleSheet`s that apply to it... resolve final
-/// property values" -- and this is the predicate it resolves with. Landing it
-/// a sprint early, proven against a hand-built tree, is what that sprint's own
-/// `Waits on: Sprint 2` column means.
+/// NO CALLER OUTSIDE THIS FILE'S OWN TESTS YET, AND THAT IS STAGING, NOT AN
+/// OVERSIGHT. Cascade resolution, resolving a `StyleSheet`'s rules against an
+/// instance with `Priority` as the tiebreak, is what calls this; proving the
+/// predicate against a hand-built tree first is what this file is for.
 #[allow(dead_code)]
 pub fn matches(dom: &Dom, id: usize, selector: &Selector) -> bool {
     match selector {
