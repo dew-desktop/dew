@@ -395,6 +395,33 @@ pub fn pointer_wheel_on(state: &SharedPointer, x: f32, y: f32, delta: f32) {
     deliver(listeners, "MouseWheel", x, y, delta);
 }
 
+/// Record a keyboard key going down, on the process-wide cell. See
+/// `pointer_moved`'s doc comment on why the process-wide cell is wrong the
+/// moment a second guest is live.
+///
+/// THE SAME `InputBegan` A PRESS FIRES, not a keyboard-only signal -- the
+/// engine's own `UserInputService.InputBegan` covers pointer and keyboard
+/// alike, distinguished by `UserInputType`, and a second signal here would be
+/// a shape a script written for the engine has never seen.
+///
+/// PRESS ONLY, NO RELEASE. Nothing yet needs a key going back up -- Space
+/// toggling a checkbox and an arrow key moving a selection are both discrete
+/// presses -- and `WM_KEYUP` is not captured for the same reason `InputEnded`
+/// has no keyboard side yet: building a signal nothing connects to is not
+/// this host's habit.
+pub fn key_down(name: &str) {
+    key_down_on(pointer(), name);
+}
+
+/// Record a keyboard key going down on `state`.
+pub fn key_down_on(state: &SharedPointer, name: &str) {
+    let listeners = {
+        let mut guard = state.lock().expect("pointer");
+        live(&mut guard.began)
+    };
+    deliver_input(listeners, "Keyboard", Some(name.to_string()), 0.0, 0.0, 0.0);
+}
+
 fn button_name(button: usize) -> Option<&'static str> {
     match button {
         0 => Some("MouseButton1"),
@@ -410,10 +437,31 @@ fn button_name(button: usize) -> Option<&'static str> {
 /// on the engine. It is reported rather than swallowed: a handler that throws
 /// every frame should be findable.
 fn deliver(listeners: Vec<(LuaFunction, Lua)>, kind: &'static str, x: f32, y: f32, z: f32) {
+    deliver_input(listeners, kind, None, x, y, z);
+}
+
+/// `deliver`, plus a `KeyCode` name for a keyboard event. Kept as one function
+/// rather than two so pointer and keyboard events go through one call site's
+/// worth of error handling instead of two that could drift apart.
+fn deliver_input(
+    listeners: Vec<(LuaFunction, Lua)>,
+    kind: &'static str,
+    key: Option<String>,
+    x: f32,
+    y: f32,
+    z: f32,
+) {
     //  THE STATE IS HELD FOR THE LENGTH OF THE CALL, which is the whole reason it
     //  travels alongside the function rather than being checked and dropped.
     for (listener, _state) in listeners {
-        if let Err(e) = listener.call::<()>((InputObject { kind, x, y, z },)) {
+        let object = InputObject {
+            kind,
+            key: key.clone(),
+            x,
+            y,
+            z,
+        };
+        if let Err(e) = listener.call::<()>((object,)) {
             eprintln!("[dew] an input listener errored: {e}");
         }
     }
@@ -421,11 +469,15 @@ fn deliver(listeners: Vec<(LuaFunction, Lua)>, kind: &'static str, x: f32, y: f3
 
 /// What a guest receives for one input event.
 ///
-/// THE TWO FIELDS THE FRAMEWORK READS, and no more. `UserInputType` decides which
-/// branch a router takes and `Position.Z` carries a wheel delta, which is the
-/// engine's own arrangement rather than this host's invention.
+/// THE FIELDS THE FRAMEWORK READS, and no more. `UserInputType` decides which
+/// branch a router takes, `Position.Z` carries a wheel delta (the engine's own
+/// arrangement rather than this host's invention), and `KeyCode` is the one
+/// keyboard events set and pointer events leave nil -- the same asymmetry the
+/// engine's own `InputObject` has, where a field only one input family uses
+/// answers nothing for the other rather than a value that never applies.
 struct InputObject {
     kind: &'static str,
+    key: Option<String>,
     x: f32,
     y: f32,
     z: f32,
@@ -441,6 +493,12 @@ impl LuaUserData for InputObject {
                 "UserInputType",
                 this.kind,
             ))
+        });
+        fields.add_field_method_get("KeyCode", |_, this| {
+            Ok(this
+                .key
+                .as_deref()
+                .and_then(|name| crate::datamodel::enums::item_by_name("KeyCode", name)))
         });
         fields.add_field_method_get("Position", |lua, this| {
             let position = lua.create_table()?;
@@ -1354,5 +1412,63 @@ mod input_is_delivered {
             .eval()
             .expect("flag");
         assert!(!connected, "and should say it is no longer connected");
+    }
+
+    /// A keyboard press reaches the same signal a pointer press does, named
+    /// the way `UserInputService.InputBegan` names a keyboard event on the
+    /// real engine: `UserInputType.Keyboard`, `KeyCode` naming the key.
+    #[test]
+    fn a_key_press_reaches_input_began_as_a_keyboard_event() {
+        let lua = Lua::new();
+        crate::datamodel::install_vocabulary(&lua).expect("vocabulary");
+        let state: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
+        install_pointer(&lua, &state).expect("install");
+
+        lua.load(
+            r#"
+            seen = nil
+            desktop.Input.InputBegan:Connect(function(input)
+                seen = {
+                    kind = tostring(input.UserInputType),
+                    key = tostring(input.KeyCode),
+                }
+            end)
+            "#,
+        )
+        .exec()
+        .expect("connect");
+
+        key_down_on(&state, "Space");
+
+        let kind: String = lua.load("return seen.kind").eval().expect("kind");
+        assert!(kind.contains("Keyboard"), "{kind}");
+        let key: String = lua.load("return seen.key").eval().expect("key");
+        assert!(key.contains("Space"), "{key}");
+    }
+
+    /// A pointer event's own `KeyCode` answers nil -- the field only one
+    /// input family sets, per this module's own `InputObject` doc comment.
+    #[test]
+    fn a_pointer_event_has_no_key_code() {
+        let lua = Lua::new();
+        let state: SharedPointer = Arc::new(Mutex::new(PointerState::default()));
+        install_pointer(&lua, &state).expect("install");
+
+        lua.load(
+            r#"
+            seenKeyCode = "not set"
+            desktop.Input.InputBegan:Connect(function(input)
+                seenKeyCode = input.KeyCode
+            end)
+            "#,
+        )
+        .exec()
+        .expect("connect");
+
+        let listeners = live(&mut state.lock().expect("pointer").began);
+        deliver(listeners, "MouseButton1", 0.0, 0.0, 0.0);
+
+        let got: bool = lua.load("return seenKeyCode == nil").eval().expect("nil");
+        assert!(got);
     }
 }

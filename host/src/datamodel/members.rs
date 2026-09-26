@@ -179,6 +179,15 @@ const MEMBERS: &[Member] = &[
         name: "FocusLost",
         introduced_on: "TextBox",
     },
+    // -- Keyboard/gamepad selection, `GuiService.SelectedObject` ─────────────
+    Member {
+        name: "SelectionGained",
+        introduced_on: "GuiObject",
+    },
+    Member {
+        name: "SelectionLost",
+        introduced_on: "GuiObject",
+    },
     // -- ScrollingFrame velocity, milestone 4 sprint 7 ───────────────────────
     Member {
         name: "GetScrollVelocity",
@@ -473,6 +482,8 @@ pub fn lookup(
         "InputEnded" => Some(signal::Kind::InputEnded),
         "Focused" => Some(signal::Kind::Focused),
         "FocusLost" => Some(signal::Kind::FocusLost),
+        "SelectionGained" => Some(signal::Kind::SelectionGained),
+        "SelectionLost" => Some(signal::Kind::SelectionLost),
         _ => None,
     };
     if let Some(kind) = event {
@@ -1422,5 +1433,90 @@ mod tests {
     fn a_style_link_refuses_a_non_style_sheet_instance() {
         let message = err(r#"Instance.new("StyleLink").StyleSheet = Instance.new("Frame")"#);
         assert!(message.contains("StyleSheet instance"), "{message}");
+    }
+
+    // ── `GuiService.SelectedObject` ───────────────────────────────────────────
+
+    #[test]
+    fn selecting_an_object_fires_selection_gained_and_reads_back() {
+        let got: (bool, bool) = eval(
+            r#"
+            local GuiService = services:GetService("GuiService")
+            local frame = Instance.new("Frame")
+            local gained = false
+            frame.SelectionGained:Connect(function() gained = true end)
+
+            GuiService.SelectedObject = frame
+
+            return GuiService.SelectedObject == frame, gained
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (true, true));
+    }
+
+    #[test]
+    fn reselecting_fires_lost_on_the_old_one_then_gained_on_the_new_one() {
+        let got: Vec<String> = eval(
+            r#"
+            local GuiService = services:GetService("GuiService")
+            local a = Instance.new("Frame")
+            local b = Instance.new("Frame")
+            local order = {}
+            a.SelectionLost:Connect(function() table.insert(order, "a lost") end)
+            b.SelectionGained:Connect(function() table.insert(order, "b gained") end)
+
+            GuiService.SelectedObject = a
+            GuiService.SelectedObject = b
+
+            return order
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, vec!["a lost".to_string(), "b gained".to_string()]);
+    }
+
+    #[test]
+    fn clearing_the_selection_fires_selection_lost() {
+        let got: bool = eval(
+            r#"
+            local GuiService = services:GetService("GuiService")
+            local frame = Instance.new("Frame")
+            local lost = false
+            frame.SelectionLost:Connect(function() lost = true end)
+
+            GuiService.SelectedObject = frame
+            GuiService.SelectedObject = nil
+
+            return lost and GuiService.SelectedObject == nil
+        "#,
+        )
+        .expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn an_unset_selection_reads_nil() {
+        let got: bool = eval(r#"return services:GetService("GuiService").SelectedObject == nil"#)
+            .expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn selected_object_refuses_a_non_gui_object() {
+        let message =
+            err(r#"services:GetService("GuiService").SelectedObject = Instance.new("Folder")"#);
+        assert!(message.contains("GuiObject"), "{message}");
+    }
+
+    #[test]
+    fn get_service_answers_the_same_gui_service_every_time() {
+        let got: bool = eval(
+            r#"
+            return services:GetService("GuiService") == services:GetService("GuiService")
+        "#,
+        )
+        .expect("eval");
+        assert!(got);
     }
 }

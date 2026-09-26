@@ -425,7 +425,12 @@ impl Renderer {
     }
 
     #[cfg(windows)]
-    fn key(&mut self, name: &str) -> Result<(), String> {
+    fn key(&mut self, name: &str, service_pointer: &services::SharedPointer) -> Result<(), String> {
+        // `desktop.Input.InputBegan` HEARS EVERY NAMED KEY, focus or no focus
+        // -- the same as the engine's `UserInputService.InputBegan` does.
+        // What follows is the DataModel's own, narrower reaction: `TextBox`
+        // editing, gated on which instance currently holds focus.
+        crate::services::key_down_on(service_pointer, name);
         match self {
             Renderer::DataModel {
                 dom,
@@ -1815,7 +1820,7 @@ fn run_applet(
                 // leaves the registry entry for the coordinator to notice
                 // and drop.
                 Event::CloseRequested => return Ok(()),
-                Event::Key { name, .. } => renderer.borrow_mut().key(&name)?,
+                Event::Key { name, .. } => renderer.borrow_mut().key(&name, &service_pointer)?,
                 // WAS A NO-OP UNTIL FOUND LIVE, building the dashboard's own
                 // sign-in form: a `TextBox` could be focused, but typing did
                 // nothing at all. See `input::Renderer::char`'s own doc
