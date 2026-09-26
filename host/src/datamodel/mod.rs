@@ -307,6 +307,10 @@ impl Dom {
                 .entry(id)
                 .or_default()
                 .insert(tag.to_string());
+            // A `.class` selector reads this, so a tag change can change
+            // what the cascade resolves for `id` -- the same reason any
+            // other property write below marks the tree dirty.
+            self.dirty = true;
         }
         added
     }
@@ -328,6 +332,7 @@ impl Dom {
                     self.instance_tags.remove(&id);
                 }
             }
+            self.dirty = true;
         }
         removed
     }
@@ -382,6 +387,13 @@ impl Dom {
     /// is the ordinary case, not a special one.
     fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) {
         let table = self.style_properties.entry(id).or_default();
+        // SAME VALUE, NO CHANGE, NO REPAINT -- the rule every other property
+        // write in this file already follows, and a `StyleRule` a mod
+        // reassigns every tick needs it as much as any of them.
+        let changed = match &value {
+            Some(v) => table.get(name) != Some(v),
+            None => table.contains_key(name),
+        };
         match value {
             Some(v) => {
                 table.insert(name.to_string(), v);
@@ -392,6 +404,9 @@ impl Dom {
         }
         if table.is_empty() {
             self.style_properties.remove(&id);
+        }
+        if changed {
+            self.dirty = true;
         }
     }
 

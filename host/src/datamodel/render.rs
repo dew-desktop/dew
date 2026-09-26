@@ -1868,6 +1868,67 @@ mod tests {
     }
 
     #[test]
+    fn mutating_a_style_rule_live_marks_the_tree_dirty_and_repaints() {
+        // THE GAP THIS CLOSES: `SetProperty` and `SetProperties` wrote into
+        // `Dom::style_properties` without marking anything dirty, so a mod
+        // that restyled a rule at runtime would sit on a frame the render
+        // loop never knew to redraw -- correct once painted, and never
+        // painted again. No restart: one `Lua`, one `Dom`, one long-lived
+        // `rule` handle, mutated between two reads of the same frame.
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+
+        lua.load(
+            r#"
+            local sheet = Instance.new("StyleSheet")
+            sheet.Parent = root
+
+            rule = Instance.new("StyleRule")
+            rule.Selector = "Frame"
+            rule:SetProperty("BackgroundColor3", Color3.fromRGB(10, 10, 10))
+            rule.Parent = sheet
+
+            local a = Instance.new("Frame")
+            a.Size = UDim2.new(0, 10, 0, 10)
+            a.Parent = root
+        "#,
+        )
+        .exec()
+        .expect("guest");
+
+        let before = frame_of(&dom, root, 100.0, 100.0);
+        assert_eq!(before.nodes[0].fill, Some(Rgb(10, 10, 10)));
+
+        // Drain whatever setup above already marked dirty, so the assertion
+        // below is about the mutation that follows and nothing earlier.
+        dom.lock().expect("dom").take_dirty();
+
+        lua.load(r#"rule:SetProperty("BackgroundColor3", Color3.fromRGB(200, 100, 50))"#)
+            .exec()
+            .expect("mutate live");
+
+        assert!(
+            dom.lock().expect("dom").take_dirty(),
+            "a live StyleRule mutation should mark the tree dirty"
+        );
+
+        let after = frame_of(&dom, root, 100.0, 100.0);
+        assert_eq!(after.nodes[0].fill, Some(Rgb(200, 100, 50)));
+    }
+
+    #[test]
     fn text_reaches_the_display_list_only_from_a_text_class() {
         let f = render(
             r#"

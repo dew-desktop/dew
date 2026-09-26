@@ -324,4 +324,40 @@ mod tests {
         .expect("eval");
         assert_eq!(got, ("removed".to_string(), 0));
     }
+
+    #[test]
+    fn tagging_and_untagging_mark_the_tree_dirty() {
+        // A `.class` selector reads a tag, so a tag change can change what
+        // the cascade resolves -- the same reason `AddTag`/`RemoveTag` have
+        // to mark the tree dirty that any other property write already does.
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+
+        lua.load(
+            r#"
+            CollectionService = services:GetService("CollectionService")
+            frame = Instance.new("Frame")
+        "#,
+        )
+        .exec()
+        .expect("setup");
+        dom.lock().expect("dom").take_dirty();
+
+        lua.load(r#"CollectionService:AddTag(frame, "Enemy")"#)
+            .exec()
+            .expect("add tag");
+        assert!(
+            dom.lock().expect("dom").take_dirty(),
+            "AddTag should mark the tree dirty"
+        );
+
+        lua.load(r#"CollectionService:RemoveTag(frame, "Enemy")"#)
+            .exec()
+            .expect("remove tag");
+        assert!(
+            dom.lock().expect("dom").take_dirty(),
+            "RemoveTag should mark the tree dirty"
+        );
+    }
 }
