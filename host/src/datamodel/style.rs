@@ -84,13 +84,9 @@ pub fn parse(selector: &str) -> Result<Selector, String> {
     Ok(Selector::ClassName(selector.to_string()))
 }
 
-/// Does `id` match `selector`?
-///
-/// NO CALLER OUTSIDE THIS FILE'S OWN TESTS YET, AND THAT IS STAGING, NOT AN
-/// OVERSIGHT. Cascade resolution, resolving a `StyleSheet`'s rules against an
-/// instance with `Priority` as the tiebreak, is what calls this; proving the
-/// predicate against a hand-built tree first is what this file is for.
-#[allow(dead_code)]
+/// Does `id` match `selector`? Cascade resolution calls this once per
+/// candidate `StyleRule` to decide whether it reaches a given instance at
+/// all, before `Priority` ever enters into it.
 pub fn matches(dom: &Dom, id: usize, selector: &Selector) -> bool {
     match selector {
         Selector::ClassName(name) => dom
@@ -114,8 +110,10 @@ pub fn matches(dom: &Dom, id: usize, selector: &Selector) -> bool {
 /// ambiguity error would fail a paint pass over a mistake nothing else in
 /// this host treats as one.
 ///
-/// Also unused outside this file's own tests until sprint 3 -- see
-/// `matches`'s own doc comment just above.
+/// Unlike `matches`, nothing outside this file's own tests calls this yet:
+/// cascade resolution walks outward from one instance rather than needing
+/// every match under a root at once, so this stays a test-only convenience
+/// until something asks the other direction of the same question.
 #[allow(dead_code)]
 pub fn matching_in(dom: &Dom, root: usize, selector: &Selector) -> Vec<usize> {
     let mut out = Vec::new();

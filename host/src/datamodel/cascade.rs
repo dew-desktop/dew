@@ -25,14 +25,22 @@
 //!    which is source order, the oldest and least surprising tiebreak
 //!    there is.
 //!
-//! WHAT THIS FILE DOES NOT DO. No paint: nothing here reaches `render.rs`,
-//! and the map [`resolve`] returns is not filtered against the target's own
-//! declared properties -- an instance receiving a name a paint pass has no
-//! use for is that pass's decision, not this one's. No re-resolution
-//! scoping: this is one full resolve of one instance, called however often a
-//! future live-update needs it; making that call cheap when only a handful
-//! of properties actually changed is that update mechanism's problem to
-//! solve, not a shortcut to bake in before it exists.
+//! WHERE PAINT MEETS THIS. [`Dom::styled_property`] is the render path's own
+//! read: an instance's own explicit value first, this file's resolution
+//! filling the gap, the engine default last. It is deliberately NOT what
+//! `Index` reads -- a script reading a property back still sees only what it,
+//! or nothing, set. Cascading into every property read a guest can make,
+//! rather than only the ones a paint pass takes, is a bigger and separate
+//! decision than wiring the resolved cascade into paint is, and this sprint
+//! is scoped to the latter.
+//!
+//! WHAT [`resolve`] ITSELF DOES NOT DO. Its map is not filtered against the
+//! target's own declared properties -- an instance receiving a name a paint
+//! pass has no use for is that pass's decision, not this one's. And no
+//! re-resolution scoping: this is one full resolve of one instance, called
+//! however often a live-update mechanism needs it; making that call cheap
+//! when only a handful of properties actually changed is that mechanism's
+//! problem to solve, not a shortcut to bake in before it exists.
 
 use super::{style, Dom};
 use rbx_types::Variant;
@@ -53,13 +61,8 @@ struct Candidate {
 }
 
 /// Every property value the cascade resolves for `id`, `StyleRule.Priority`
-/// breaking every contest -- the map a paint pass would apply on top of
-/// `id`'s own explicit properties.
-///
-/// NO CALLER OUTSIDE THIS FILE'S OWN TESTS YET. Wiring this into the paint
-/// path, and re-resolving it live as rules change, are both later work; this
-/// is the resolution itself, proven against hand-built trees first.
-#[allow(dead_code)]
+/// breaking every contest -- the map [`Dom::styled_property`] consults for
+/// whatever `id`'s own explicit properties leave unset.
 pub fn resolve(dom: &Dom, id: usize) -> BTreeMap<String, Variant> {
     let mut candidates = Vec::new();
     for (distance, sheet) in applicable_style_sheets(dom, id) {
@@ -153,6 +156,22 @@ fn priority_of(dom: &Dom, rule: usize) -> f64 {
         Some(Variant::Int32(v)) => v as f64,
         Some(Variant::Int64(v)) => v as f64,
         _ => 0.0,
+    }
+}
+
+impl Dom {
+    /// `property`, with a matching `StyleRule` filling the gap between `id`'s
+    /// own explicit value and its engine default. The render path's own
+    /// read -- see this module's own doc comment for why `Index` does not
+    /// call this instead.
+    pub fn styled_property(&self, id: usize, key: &str) -> Option<Variant> {
+        if let Some(explicit) = self.node(id)?.props.get(key).cloned() {
+            return Some(explicit);
+        }
+        if let Some(styled) = resolve(self, id).remove(key) {
+            return Some(styled);
+        }
+        self.property(id, key)
     }
 }
 
