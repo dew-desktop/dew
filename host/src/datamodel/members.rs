@@ -1390,4 +1390,37 @@ mod tests {
             "{message}"
         );
     }
+
+    // ── `StyleLink.StyleSheet`, an instance reference ─────────────────────────
+
+    #[test]
+    fn a_style_link_round_trips_its_style_sheet_and_clears_on_nil() {
+        let got: (bool, bool) = eval(
+            r#"
+            local sheet = Instance.new("StyleSheet")
+            local link = Instance.new("StyleLink")
+            link.StyleSheet = sheet
+            local before = link.StyleSheet == sheet
+
+            link.StyleSheet = nil
+            local after = link.StyleSheet == nil
+            return before, after
+        "#,
+        )
+        .expect("eval");
+        assert_eq!(got, (true, true));
+    }
+
+    #[test]
+    fn an_unset_style_link_reads_nil() {
+        let got: bool =
+            eval(r#"return Instance.new("StyleLink").StyleSheet == nil"#).expect("eval");
+        assert!(got);
+    }
+
+    #[test]
+    fn a_style_link_refuses_a_non_style_sheet_instance() {
+        let message = err(r#"Instance.new("StyleLink").StyleSheet = Instance.new("Frame")"#);
+        assert!(message.contains("StyleSheet instance"), "{message}");
+    }
 }

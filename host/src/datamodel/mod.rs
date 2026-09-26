@@ -34,6 +34,7 @@
 //! than reporting a rejection, because "this host has not built that yet" and
 //! "your program is wrong" must never arrive as the same message.
 
+mod cascade;
 mod collection_service;
 mod content;
 pub mod enums;
@@ -146,6 +147,14 @@ pub struct Dom {
     /// applied to, exactly as `attributes` are arbitrary names an ordinary
     /// instance carries rather than reflected properties of its own class.
     style_properties: BTreeMap<usize, BTreeMap<String, Variant>>,
+    /// `StyleLink.StyleSheet`: the link's own id to the `StyleSheet` it points
+    /// at. AN INSTANCE REFERENCE, WHICH `Node::props` CANNOT HOLD -- `Variant`
+    /// (`rbx_types`) has no case for one of this arena's own ids, only the
+    /// serialised `Ref` shape a file format uses. `Parent` is the only other
+    /// property with this problem, and it is solved the same way one arena id
+    /// lower: a side table, read and written by the same special case in
+    /// `Index`/`NewIndex` that already carries `Parent`.
+    style_links: BTreeMap<usize, usize>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -164,6 +173,7 @@ impl Default for Dom {
             instance_tags: BTreeMap::new(),
             collection_service_id: None,
             style_properties: BTreeMap::new(),
+            style_links: BTreeMap::new(),
         }
     }
 }
@@ -393,6 +403,26 @@ impl Dom {
         self.style_properties.get(&id).cloned().unwrap_or_default()
     }
 
+    /// `StyleLink.StyleSheet`, or `None` for an unset link or one whose target
+    /// has since been destroyed -- a dangling id reads as unset rather than
+    /// naming a slot that is not there any more.
+    fn get_style_link(&self, id: usize) -> Option<usize> {
+        let target = *self.style_links.get(&id)?;
+        self.node(target)?;
+        Some(target)
+    }
+
+    fn set_style_link(&mut self, id: usize, target: Option<usize>) {
+        match target {
+            Some(target) => {
+                self.style_links.insert(id, target);
+            }
+            None => {
+                self.style_links.remove(&id);
+            }
+        }
+    }
+
     // ── Connections ──────────────────────────────────────────────────────────
     //
     // THE HANDLER TABLE IS AN ARENA TOO, and ids are never reused for the same
@@ -515,6 +545,13 @@ impl Dom {
             // connections do -- nothing else can reach it by id once the slot
             // above is gone.
             self.style_properties.remove(&current);
+            // A destroyed `StyleLink` forgets what it pointed at. A destroyed
+            // `StyleSheet` a link still names is handled at read time instead
+            // -- `get_style_link` already checks the target exists -- because
+            // scrubbing every link that might point at `current` here would be
+            // a scan over every link for every destroy, for a case reading
+            // already answers correctly on its own.
+            self.style_links.remove(&current);
             stack.extend(node.children);
         }
         self.dirty = true;
@@ -1151,6 +1188,18 @@ impl UserData for InstanceRef {
                         None => Ok(LuaValue::Nil),
                     };
                 }
+                // `StyleLink.StyleSheet`: AN INSTANCE REFERENCE, read the same
+                // way `Parent` is -- see `Dom::style_links`'s own doc comment
+                // for why it cannot live in `node.props` like an ordinary
+                // property.
+                "StyleSheet" if node.class == "StyleLink" => {
+                    let target = dom.get_style_link(this.id);
+                    drop(dom);
+                    return match target {
+                        Some(target) => handle(lua, &this.dom, target)?.into_lua(lua),
+                        None => Ok(LuaValue::Nil),
+                    };
+                }
                 _ => {}
             }
 
@@ -1363,6 +1412,43 @@ impl UserData for InstanceRef {
                         drop(dom);
                         signal::property_changed(lua, &this.dom, this.id, "Selector")?;
                         return signal::property_changed(lua, &this.dom, this.id, "SelectorError");
+                    }
+                    // `StyleLink.StyleSheet`, WRITTEN THE SAME WAY `Parent` IS:
+                    // an `Instance` handle or nil, stored as an id in
+                    // `Dom::style_links` rather than in `node.props`. Guarded
+                    // on `StyleLink` so `StyleDerive.StyleSheet` (declared,
+                    // never implemented) still falls through to the generic
+                    // path's honest "cannot accept yet" refusal below.
+                    "StyleSheet" if class == "StyleLink" => {
+                        let target = match &value {
+                            LuaValue::Nil => None,
+                            LuaValue::UserData(ud) => Some(ud.borrow::<InstanceRef>()?.id),
+                            other => {
+                                return Err(LuaError::runtime(format!(
+                                    "StyleSheet expects an Instance or nil, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        if let Some(target_id) = target {
+                            if dom.node(target_id).is_none() {
+                                return Err(LuaError::runtime(
+                                    "the new StyleSheet has been destroyed",
+                                ));
+                            }
+                            if dom.class_of(target_id).as_deref() != Some("StyleSheet") {
+                                return Err(LuaError::runtime(
+                                    "StyleLink.StyleSheet expects a StyleSheet instance",
+                                ));
+                            }
+                        }
+                        if dom.get_style_link(this.id) == target {
+                            return Ok(());
+                        }
+                        dom.set_style_link(this.id, target);
+                        dom.touch();
+                        drop(dom);
+                        return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
                     }
                     _ => {}
                 }
