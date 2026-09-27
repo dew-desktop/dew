@@ -18,6 +18,11 @@ local vide = require("./roblox_packages/vide")
 local source = vide.source
 local effect = vide.effect
 
+local Aether = require("./roblox_packages/aether")
+local PointerRouter = Aether.Engine.PointerRouter
+local SelectionRouter = Aether.Engine.SelectionRouter
+local createTabs = Aether.Core.createTabs
+
 local window = assert(desktop.Window, "dew.toml must grant `window`")
 local marketplace = assert(dew.Marketplace, "dew.toml must grant `discover` and `install`")
 local library = assert(dew.Library, "dew.toml must grant `library`")
@@ -72,15 +77,18 @@ body.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
 body.Parent = root
 
 --------------------------------------------------------------------------
--- THE TAB BAR. Three buttons, one active at a time; `activeTab` is the
--- only state, and the effect below is the only thing that reacts to it --
--- the same split the Store tab's own `packages` source already uses.
+-- THE TAB BAR, on `Aether.Core.createTabs` as of this milestone -- the
+-- hand-rolled `activeTab` source and its effect are gone; `tabs.Active` is
+-- the same idea, backed by a machine that also enforces exactly one active
+-- tab and answers a Space/Return press or an arrow key while a tab button
+-- holds keyboard selection, neither of which the hand-rolled version ever
+-- had. The effect below is still the only thing that reacts to it, the
+-- same split the Store tab's own `packages` source already uses.
 --------------------------------------------------------------------------
 
 local TAB_BAR_HEIGHT = 40
 
 type TabName = "library" | "store" | "account"
-local activeTab = source("library" :: TabName)
 
 local ACTIVE_TAB_COLOR = Color3.fromRGB(48, 66, 94)
 local INACTIVE_TAB_COLOR = Color3.fromRGB(26, 29, 38)
@@ -94,6 +102,19 @@ tabBar.Parent = body
 
 local TAB_WIDTH = 132
 
+-- `Source = source` IS LOAD BEARING. Left at the machine's own default (a
+-- bare closure with no vide hooks), `tabs.Active` would change correctly
+-- but the `effect` below would never re-run, since only a real vide source
+-- subscribes an effect to it -- this dashboard's own reactivity, handed to
+-- the machine rather than the machine inventing its own.
+local tabs = createTabs({
+	Router = PointerRouter,
+	Selection = SelectionRouter,
+	Source = source,
+	Tabs = { "library", "store", "account" } :: { TabName },
+	InitialActive = "library" :: TabName,
+})
+
 local function tabButton(name: TabName, text: string, x: number): TextButton
 	local b = button(
 		tabBar,
@@ -104,9 +125,21 @@ local function tabButton(name: TabName, text: string, x: number): TextButton
 		INACTIVE_TAB_COLOR,
 		Color3.fromRGB(206, 222, 246)
 	)
-	b.Activated:Connect(function()
-		activeTab(name)
-	end)
+	-- A LEGAL KEYBOARD/GAMEPAD SELECTION TARGET, matching what
+	-- `createTabs`'s own defaults would set on an element it created
+	-- itself -- this button is built by the existing helper above instead,
+	-- so that default has to be applied here by hand.
+	b.Selectable = true
+	-- ONLY THE ARRAY PART OF `GetRootProps`, deliberately: its own cosmetic
+	-- defaults (`Name`, `BackgroundTransparency`) are not wanted on a button
+	-- this file already styled its own way. What is wanted is the bound
+	-- pointer and selection actions, which is exactly what `ipairs` finds
+	-- here and nothing else does.
+	for _, entry in ipairs(tabs.GetTab(name).GetRootProps()) do
+		if type(entry) == "function" then
+			entry(b)
+		end
+	end
 	return b
 end
 
@@ -133,7 +166,7 @@ local accountTab = contentFrame("AccountTab")
 
 vide.root(function()
 	effect(function()
-		local tab = activeTab()
+		local tab = tabs.Active()
 		libraryTab.Visible = tab == "library"
 		storeTab.Visible = tab == "store"
 		accountTab.Visible = tab == "account"
