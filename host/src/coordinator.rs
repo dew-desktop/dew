@@ -567,8 +567,16 @@ fn sync_running(registry: &std::collections::HashMap<u32, Loaded>) {
 ///
 /// `first_dir` IS LOADED HERE RATHER THAN THE PROCESS STARTING EMPTY, because
 /// `dew run <dir>` asks to see `<dir>` running, not to start a service and be
-/// told to ask again.
-pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> Result<(), String> {
+/// told to ask again. `dew start` names no applet at all, so this is `None`
+/// there rather than a directory forced into existing just to satisfy this
+/// parameter -- the tray and the bundled dashboard are reachable regardless
+/// of whether anything is installed and enabled yet.
+pub fn run(
+    _mutex: MutexGuard,
+    first_dir: Option<PathBuf>,
+    stats: bool,
+    bench: bool,
+) -> Result<(), String> {
     let (load_tx, load_rx) = mpsc::channel::<PathBuf>();
     spawn_pipe_server(load_tx);
 
@@ -593,15 +601,10 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
     let mut next_id: u32 = 1;
     let (closed_tx, closed_rx) = mpsc::channel::<u32>();
 
-    spawn_applet(
-        first_dir,
-        stats,
-        bench,
-        next_id,
-        closed_tx.clone(),
-        &mut registry,
-    );
-    next_id += 1;
+    if let Some(dir) = first_dir {
+        spawn_applet(dir, stats, bench, next_id, closed_tx.clone(), &mut registry);
+        next_id += 1;
+    }
 
     // EVERY INSTALLED, ENABLED APPLET LOADS ALONGSIDE `first_dir`, UNLESS IT
     // IS `first_dir` ITSELF UNDER ANOTHER NAME. `dew run` against a

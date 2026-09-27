@@ -1474,7 +1474,7 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
         println!("💧 Dew starting");
         match coordinator::acquire()? {
             coordinator::Role::Primary(guard) => {
-                coordinator::run(guard, dir.to_path_buf(), stats, bench)
+                coordinator::run(guard, Some(dir.to_path_buf()), stats, bench)
             }
             coordinator::Role::Secondary => coordinator::send_to_running(dir),
         }
@@ -1485,6 +1485,12 @@ fn execute_run(dir: &Path, stats: bool, bench: bool) -> Result<(), String> {
 /// installed and enabled. If the service is already running, there is
 /// nothing to send it -- unlike `dew run <path>`, this names no applet
 /// the running instance might not already have.
+///
+/// STARTS WITH NOTHING ENABLED, TOO. The tray and the bundled dashboard
+/// (`dashboard::open_or_focus`, reachable from the tray regardless of
+/// `dew.Library`'s own state) do not depend on any applet being installed,
+/// so refusing to start here would block the one surface a person would use
+/// to install or enable something in the first place.
 fn execute_start(stats: bool, bench: bool) -> Result<(), String> {
     #[cfg(not(windows))]
     {
@@ -1499,12 +1505,7 @@ fn execute_start(stats: bool, bench: bool) -> Result<(), String> {
     {
         match coordinator::acquire()? {
             coordinator::Role::Primary(guard) => {
-                let Some((_, first_dir)) = installed::enabled().pop() else {
-                    return Err(
-                        "nothing installed; use `dew install` or `dew <path>` to run something directly"
-                            .to_string(),
-                    );
-                };
+                let first_dir = installed::enabled().pop().map(|(_, dir)| dir);
                 println!("💧 Dew starting");
                 coordinator::run(guard, first_dir, stats, bench)
             }
