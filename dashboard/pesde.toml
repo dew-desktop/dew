@@ -1,15 +1,16 @@
 name = "dew/dashboard"
 version = "0.0.1"
 
-# STILL NO FRAMEWORK, matching `examples/host/widget-behaviors/draggable`'s own
-# convention. `Instance.new`, property assignment and `Parent` build the
-# tree; vide's `source`/`effect` are the one exception, for reacting to
-# `dew.Marketplace`'s poll without hand-rolled diffing.
+# NO LONGER FRAMEWORK-FREE, as of the tab bar's own migration onto
+# `Aether.Core.createTabs`. `Instance.new`, property assignment and `Parent`
+# still build the rest of the tree by hand; Aether owns exactly one thing
+# here, which tab is active and how a click or a keyboard press changes it.
 [target]
 environment = "roblox"
 lib = "dashboard.luau"
 
 [dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "f9febda032464d5b20dd23e91b1cdeedda14730a" }
 vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
 
 [indices]
