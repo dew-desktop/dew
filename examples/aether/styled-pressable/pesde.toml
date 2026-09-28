@@ -9,8 +9,8 @@ environment = "roblox"
 lib = "styled-pressable.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "08f4abed76d18cb119f82501709c603aed491818" }
-vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+aether = { repo = "project-aether-ui/aether", rev = "7c8977171c42d9d4110d18df7b236329baacb796" }
+vide = { repo = "es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"
