@@ -41,6 +41,20 @@
 //! however often a live-update mechanism needs it; making that call cheap
 //! when only a handful of properties actually changed is that mechanism's
 //! problem to solve, not a shortcut to bake in before it exists.
+//!
+//! `$TOKEN` VALUES (milestone 28 sprint 1). Roblox's own real cascade lets a
+//! `StyleRule` property name an Attribute instead of a literal value, with a
+//! `$` prefix -- confirmed against Roblox's own documentation (`ui/styling
+//! /css-comparisons`), not assumed from the property system looking
+//! CSS-shaped. `$FrameColor` on a rule whose own `StyleSheet` (its parent)
+//! carries `FrameColor` as an Attribute resolves to that Attribute's value.
+//! SCOPED TO THE RULE'S OWN SHEET FOR NOW -- real Roblox also walks a
+//! `StyleDerive` chain to sheets a rule's own sheet composes from, which does
+//! not exist in this file yet (milestone 28 sprint 2). An unresolved token
+//! (no Attribute by that name on the rule's own sheet) is left as the
+//! literal string rather than silently dropped -- loud in the painted
+//! output, the same reason an invalid selector keeps its own
+//! `SelectorError` rather than resolving to nothing quietly.
 
 use super::{style, Dom};
 use rbx_types::Variant;
@@ -100,9 +114,33 @@ pub fn resolve(dom: &Dom, id: usize) -> BTreeMap<String, Variant> {
 
     let mut resolved = BTreeMap::new();
     for candidate in candidates {
-        resolved.extend(dom.get_style_properties(candidate.style_rule));
+        // A `StyleRule`'s own `Selector` and `Priority` never carry a `$`
+        // token themselves -- `dom.parent_of` is the rule's own `StyleSheet`
+        // by construction (a rule is always a `StyleSheet` child), which is
+        // the only place sprint 1 looks for the Attribute a token names.
+        let sheet = dom.parent_of(candidate.style_rule);
+        for (name, value) in dom.get_style_properties(candidate.style_rule) {
+            resolved.insert(name, resolve_token(dom, sheet, value));
+        }
     }
     resolved
+}
+
+/// `value`, unless it is a `$Name` token string, in which case the value of
+/// `sheet`'s own `Name` Attribute -- or the literal string back, unresolved,
+/// if `sheet` carries no such Attribute. See this module's own doc comment
+/// for why an unresolved token stays loud rather than disappearing.
+fn resolve_token(dom: &Dom, sheet: Option<usize>, value: Variant) -> Variant {
+    let Variant::String(s) = &value else {
+        return value;
+    };
+    let Some(token) = s.strip_prefix('$') else {
+        return value;
+    };
+    let Some(sheet) = sheet else {
+        return value;
+    };
+    dom.get_attribute(sheet, token).unwrap_or(value)
 }
 
 /// `(distance, StyleSheet id)` for every `StyleSheet` that reaches `id`,
@@ -348,5 +386,115 @@ mod tests {
         let guard = dom.lock().expect("dom");
         let resolved = resolve(&guard, target);
         assert!(!resolved.contains_key("BackgroundTransparency"));
+    }
+
+    /// THE FIRST HALF OF SPRINT 1'S OWN COMPLETION TEST: a `$Name` value
+    /// resolves against its own rule's `StyleSheet`, the same shape
+    /// Roblox's own `ui/styling/css-comparisons` doc states directly.
+    #[test]
+    fn a_dollar_token_resolves_against_its_own_sheet() {
+        let dom = SharedDom::default();
+        let (root, target, sheet) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let sheet = guard.insert("StyleSheet".to_string(), "StyleSheet".to_string());
+            (root, target, sheet)
+        };
+        parent(&dom, target, root);
+        parent(&dom, sheet, root);
+        dom.lock().expect("dom").set_attribute(
+            sheet,
+            "FrameColor",
+            Some(Variant::Color3(rbx_types::Color3::new(1.0, 0.0, 0.0))),
+        );
+        rule(
+            &dom,
+            sheet,
+            "Frame",
+            1.0,
+            &[(
+                "BackgroundColor3",
+                Variant::String("$FrameColor".to_string()),
+            )],
+        );
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundColor3"),
+            Some(&Variant::Color3(rbx_types::Color3::new(1.0, 0.0, 0.0)))
+        );
+    }
+
+    /// AN UNRESOLVED TOKEN STAYS LOUD, per this module's own stated decision
+    /// -- the literal string survives rather than silently vanishing.
+    #[test]
+    fn an_unresolved_token_stays_as_the_literal_string() {
+        let dom = SharedDom::default();
+        let (root, target, sheet) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let sheet = guard.insert("StyleSheet".to_string(), "StyleSheet".to_string());
+            (root, target, sheet)
+        };
+        parent(&dom, target, root);
+        parent(&dom, sheet, root);
+        // NO Attribute named "Missing" is ever set on `sheet`.
+        rule(
+            &dom,
+            sheet,
+            "Frame",
+            1.0,
+            &[("BackgroundColor3", Variant::String("$Missing".to_string()))],
+        );
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundColor3"),
+            Some(&Variant::String("$Missing".to_string()))
+        );
+    }
+
+    /// A STRING VALUE WITH NO `$` PREFIX IS ORDINARY DATA, not a token this
+    /// file has any business intercepting -- `Text = "Hello"` must reach
+    /// paint unchanged, and must not be looked up as an Attribute named
+    /// "Hello" either.
+    #[test]
+    fn a_plain_string_without_a_dollar_prefix_is_untouched() {
+        let dom = SharedDom::default();
+        let (root, target, sheet) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("TextLabel".to_string(), "Card".to_string());
+            let sheet = guard.insert("StyleSheet".to_string(), "StyleSheet".to_string());
+            (root, target, sheet)
+        };
+        parent(&dom, target, root);
+        parent(&dom, sheet, root);
+        // An Attribute happens to share the literal value's own text, so a
+        // test that only checked "is it unresolved" could pass by accident
+        // if the `$` check were missing entirely.
+        dom.lock().expect("dom").set_attribute(
+            sheet,
+            "Hello",
+            Some(Variant::String("wrong".to_string())),
+        );
+        rule(
+            &dom,
+            sheet,
+            "TextLabel",
+            1.0,
+            &[("Text", Variant::String("Hello".to_string()))],
+        );
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("Text"),
+            Some(&Variant::String("Hello".to_string()))
+        );
     }
 }
