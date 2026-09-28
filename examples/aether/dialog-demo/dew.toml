@@ -1,0 +1,16 @@
+# Dialog demo
+#
+# Milestone 60 sprint B2's own live consumer: a real Dialog primitive
+# (createDialog's focus trap, Presence's enter/exit transition, ScreenStack's
+# stacking) opened over existing background content, with a second dialog
+# nested inside the first to prove stacking rather than assume it.
+
+id = "dialog-demo"
+name = "Dialog demo"
+description = "A Dialog primitive opened over background content, with a nested second dialog to prove stacking"
+
+# NO PERMISSIONS BEYOND A SURFACE. Keyboard/pointer arrive through Aether's
+# own Deps.Host.Services (desktop.Input under the hood), which needs no
+# separate grant -- the same as every other Aether example under this
+# directory.
+permissions = ["widget"]
