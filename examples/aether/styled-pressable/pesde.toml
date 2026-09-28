@@ -1,0 +1,19 @@
+name = "dew_examples/styled_pressable"
+version = "0.0.1"
+description = "A Pressable styled through a real StyleSheet cascade, theme swappable live"
+
+# A DEMO INSTALLS ITS OWN FRAMEWORK, per ADR-008, the same as
+# examples/aether/pressable already does.
+[target]
+environment = "roblox"
+lib = "styled-pressable.luau"
+
+[dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "08f4abed76d18cb119f82501709c603aed491818" }
+vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"
