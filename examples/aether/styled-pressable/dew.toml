@@ -1,0 +1,15 @@
+# Styled Pressable
+#
+# A Pressable colored entirely by a real StyleSheet cascade -- no
+# BackgroundColor3 set in Luau anywhere. Milestone 28 sprint 4's own live
+# prototype: does Aether's existing architecture already compose with a
+# real cascade, or does it need new code first? It composes; this needed
+# none.
+
+id = "styled-pressable"
+name = "Styled Pressable"
+description = "A Pressable styled through StyleSheet/StyleRule/StyleDerive, theme swappable live"
+
+# NO PERMISSIONS BEYOND A SURFACE. It reads and writes only its own
+# in-memory StyleSheet tree.
+permissions = ["widget"]
