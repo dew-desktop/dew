@@ -52,6 +52,7 @@
 //! partial one. So it stays on the backlog in `docs/datamodel_scope.md`, where a
 //! method this host does not implement belongs, and it arrives with the scheduler.
 
+use super::transition::LuaTweenInfo;
 use super::{handle, signal, InstanceRef};
 use mlua::prelude::*;
 use rbx_types::Variant;
@@ -314,6 +315,19 @@ const MEMBERS: &[Member] = &[
     },
     Member {
         name: "GetProperties",
+        introduced_on: "StyleRule",
+    },
+    // -- `StyleRule:SetPropertyTransition` (milestone 29 part C4) --------
+    //
+    // A DIFFERENT SIDE TABLE FROM `SetProperty`'s OWN, keyed the same way
+    // (rule id, property name) but holding a `TweenInfo` rather than a
+    // property value -- see `Dom::style_transitions`'s own doc comment.
+    Member {
+        name: "SetPropertyTransition",
+        introduced_on: "StyleRule",
+    },
+    Member {
+        name: "GetPropertyTransition",
         introduced_on: "StyleRule",
     },
     // -- `GuiState`, writable (milestone 29 part B) --------------------------
@@ -824,6 +838,42 @@ pub fn lookup(
             }
             Ok(out)
         })?,
+        // `StyleRule:SetPropertyTransition` (milestone 29 part C4): a
+        // `TweenInfo` a cascade-driven change of `name` should animate
+        // through, in `Dom::style_transitions` -- a DIFFERENT side table
+        // from `SetProperty`'s own, since a `TweenInfo` is not a property
+        // value the cascade would ever write onto a matching instance.
+        "SetPropertyTransition" => lua.create_function(
+            move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
+                let info = match &value {
+                    LuaValue::Nil => None,
+                    other => Some(LuaTweenInfo::from_value(other).ok_or_else(|| {
+                        LuaError::runtime(format!(
+                            "SetPropertyTransition expects a TweenInfo or nil, got {}",
+                            other.type_name()
+                        ))
+                    })?),
+                };
+                let mut dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                dom.set_style_transition(this.id, &name, info);
+                Ok(())
+            },
+        )?,
+        "GetPropertyTransition" => {
+            lua.create_function(move |_lua, (_, name): (LuaValue, String)| {
+                let dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                match dom.get_style_transition(this.id, &name) {
+                    Some(info) => LuaTweenInfo(info).into_lua(_lua),
+                    None => Ok(LuaValue::Nil),
+                }
+            })?
+        }
         // `GuiState`, WRITTEN DIRECTLY INTO `node.props` -- the same table
         // the generic property read already consults first, so `f.GuiState`
         // reads back exactly what this stored with no separate side table.

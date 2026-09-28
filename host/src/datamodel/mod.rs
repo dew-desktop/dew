@@ -45,6 +45,7 @@ pub mod render;
 mod service_provider;
 pub mod signal;
 mod style;
+mod transition;
 mod vocabulary;
 
 use content::{LuaContent, LuaFont};
@@ -147,6 +148,28 @@ pub struct Dom {
     /// applied to, exactly as `attributes` are arbitrary names an ordinary
     /// instance carries rather than reflected properties of its own class.
     style_properties: BTreeMap<usize, BTreeMap<String, Variant>>,
+    /// `StyleRule:SetPropertyTransition`'s own table (milestone 29 part
+    /// C4): rule id to property name to the `TweenInfo` a cascade-driven
+    /// change of that property should animate through, instead of
+    /// snapping. The SAME side-table shape `style_properties` already
+    /// uses, for the same reason -- a `TweenInfo` a rule carries is not a
+    /// reflected property of the rule's own class either.
+    style_transitions: BTreeMap<usize, BTreeMap<String, transition::TweenInfoValue>>,
+    /// One entry per `(instance, property)` pair CURRENTLY ANIMATING
+    /// through a transition -- absent once settled, which is what lets
+    /// `Dom::styled_property` tell "still animating" from "just resolve it
+    /// plainly" with one lookup. See `transition.rs`'s own module doc for
+    /// why this lives here rather than being folded into `style_properties`
+    /// or `style_transitions` above: it is per-INSTANCE runtime state, not
+    /// per-rule authored data.
+    active_transitions: BTreeMap<(usize, String), transition::ActiveTransition>,
+    /// The last value the cascade resolved for a `(instance, property)`
+    /// pair THAT HAS A TRANSITION DECLARED ON IT -- what a NEW change gets
+    /// diffed against to notice a change happened at all, and what a fresh
+    /// transition's own start point is read from if nothing is animating
+    /// yet. Bounded by "has a transition declared", not by every property
+    /// the cascade has ever touched.
+    transitioned_targets: BTreeMap<(usize, String), Variant>,
     /// `StyleLink.StyleSheet`: the link's own id to the `StyleSheet` it points
     /// at. AN INSTANCE REFERENCE, WHICH `Node::props` CANNOT HOLD -- `Variant`
     /// (`rbx_types`) has no case for one of this arena's own ids, only the
@@ -172,6 +195,15 @@ pub struct Dom {
     /// `GuiService.SelectedObject`. One value, not a side table keyed by id --
     /// there is one selection, the same as there is one pointer position.
     selected_object: Option<usize>,
+    /// The window's own current size, in pixels. What a `@ViewportDisplaySize*`
+    /// `StyleQuery` reads (milestone 29 part C3) -- set from `main.rs`'s own
+    /// render loop, which already knows it, the same way `dirty` is read
+    /// there and set everywhere else.
+    viewport: (u32, u32),
+    /// The clock's own current reading, in seconds -- what a `StyleRule`
+    /// transition (milestone 29 part C4) times itself against. Set from
+    /// `main.rs`'s own render loop, the same way `viewport` is.
+    now: f64,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -190,10 +222,15 @@ impl Default for Dom {
             instance_tags: BTreeMap::new(),
             collection_service_id: None,
             style_properties: BTreeMap::new(),
+            style_transitions: BTreeMap::new(),
+            active_transitions: BTreeMap::new(),
+            transitioned_targets: BTreeMap::new(),
             style_links: BTreeMap::new(),
             style_derives: BTreeMap::new(),
             gui_service_id: None,
             selected_object: None,
+            viewport: (0, 0),
+            now: 0.0,
         }
     }
 }
@@ -234,6 +271,20 @@ impl Dom {
         if let Some(node) = self.node_mut(id) {
             node.parent = None;
         }
+    }
+
+    /// Parents a freshly [`insert`](Self::insert)ed `child` under `parent`,
+    /// no cycle check and no signal fired. THIS IS NOT THE `Parent`
+    /// NEWINDEX HANDLER'S JOB DONE TWICE -- a guest-visible reparent goes
+    /// through that instead, which announces `ChildRemoved`/`ChildAdded` to
+    /// anything listening. This is for the engine's own synthesized
+    /// children (`::Modifier`'s auto-spawn, milestone 29 part C2), which
+    /// never had an old parent to leave and never need a cycle check since
+    /// `child` was just inserted.
+    pub fn adopt(&mut self, parent: usize, child: usize) {
+        self.node_mut(parent).expect("checked").children.push(child);
+        self.node_mut(child).expect("checked").parent = Some(parent);
+        self.touch();
     }
 
     // ── What the renderer reads ──────────────────────────────────────────────
@@ -438,6 +489,29 @@ impl Dom {
         self.style_properties.get(&id).cloned().unwrap_or_default()
     }
 
+    /// `StyleRule:SetPropertyTransition`'s own table (milestone 29 part
+    /// C4), the same shape `set_style_property` already has just above.
+    fn set_style_transition(
+        &mut self,
+        id: usize,
+        name: &str,
+        info: Option<transition::TweenInfoValue>,
+    ) {
+        let table = self.style_transitions.entry(id).or_default();
+        match info {
+            Some(info) => {
+                table.insert(name.to_string(), info);
+            }
+            None => {
+                table.remove(name);
+            }
+        }
+    }
+
+    fn get_style_transition(&self, id: usize, name: &str) -> Option<transition::TweenInfoValue> {
+        self.style_transitions.get(&id)?.get(name).copied()
+    }
+
     /// `StyleLink.StyleSheet`, or `None` for an unset link or one whose target
     /// has since been destroyed -- a dangling id reads as unset rather than
     /// naming a slot that is not there any more.
@@ -580,6 +654,30 @@ impl Dom {
     /// loses a frame that will never be asked for again.
     pub fn take_dirty(&mut self) -> bool {
         std::mem::replace(&mut self.dirty, false)
+    }
+
+    /// The window's own current size, for a `@ViewportDisplaySize*`
+    /// `StyleQuery` to read (milestone 29 part C3).
+    pub fn viewport(&self) -> (u32, u32) {
+        self.viewport
+    }
+
+    /// Set from `main.rs`'s own render loop, which already knows the
+    /// window's size every frame -- does NOT mark the tree dirty on its
+    /// own, since a resize already reaches `Dom` through whatever path
+    /// changed `width`/`height` in the first place.
+    pub fn set_viewport(&mut self, width: u32, height: u32) {
+        self.viewport = (width, height);
+    }
+
+    /// A `StyleRule` transition's own clock (milestone 29 part C4) -- NOT
+    /// `services::Clock` (`desktop.Clock`), which is gated on a guest
+    /// having subscribed a listener and would leave every transition
+    /// frozen in a mod that never did. `advance_transitions` is the one
+    /// place that advances this, from the render loop's own per-frame
+    /// `dt`; nothing else writes it.
+    pub fn now(&self) -> f64 {
+        self.now
     }
 
     /// Free `id` and everything under it, and detach it from its parent.
@@ -1831,7 +1929,8 @@ pub fn handle(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<LuaAnyUserData
 pub fn install_vocabulary(lua: &Lua) -> LuaResult<()> {
     vocabulary::install(lua)?;
     enums::install(lua)?;
-    content::install(lua)
+    content::install(lua)?;
+    transition::install(lua)
 }
 
 pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {

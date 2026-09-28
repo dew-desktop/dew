@@ -231,10 +231,41 @@ impl Renderer {
                 pointer,
                 ..
             } => {
-                let _ = dt;
-                if !dom.lock().expect("dom").take_dirty() {
+                // A TRANSITION IN FLIGHT (milestone 29 part C4) KEEPS
+                // PAINTING even on a frame `take_dirty` alone would call
+                // settled -- an in-progress animation is not a tree
+                // mutation `Changed` fires for, so nothing else would mark
+                // it dirty on its own.
+                let should_paint = {
+                    let mut guard = dom.lock().expect("dom");
+                    guard.take_dirty() || guard.transitions_active()
+                };
+                if !should_paint {
                     return Ok(false);
                 }
+                // VIEWPORT FIRST -- a `@ViewportDisplaySize*` query (part
+                // C3) reads this, and `apply_modifiers` just below may
+                // itself depend on a query gate that reads it too.
+                // `Dom::now` is set by `advance_transitions` below, the one
+                // call that owns it (see that method's own doc comment).
+                {
+                    let mut guard = dom.lock().expect("dom");
+                    guard.set_viewport(*width as u32, *height as u32);
+                    guard.refresh_style_queries(*root);
+                }
+                // `::MODIFIER` AUTO-SPAWN, BEFORE THIS FRAME'S OWN PAINT --
+                // milestone 29 part C2. Idempotent, so running it every
+                // painted frame costs nothing once a modifier's own child
+                // already exists; a child it creates just now still needs
+                // to reach THIS frame's `frame_of`, not next one.
+                dom.lock().expect("dom").apply_modifiers(*root);
+                // ADVANCE ANY TRANSITION (part C4) BEFORE THIS FRAME'S OWN
+                // PAINT, same reasoning as `apply_modifiers` just above --
+                // a newly-started or newly-finished animation still needs
+                // to reach THIS frame's `frame_of`. `dt` is the render
+                // loop's own real per-frame delta, not `services::Clock`
+                // (see `advance_transitions`'s own doc comment for why).
+                dom.lock().expect("dom").advance_transitions(*root, dt);
                 let frame = datamodel::render::frame_of(dom, *root, *width, *height);
                 dew_runtime::Painter::paint_frame(painter, &frame, *background);
 
