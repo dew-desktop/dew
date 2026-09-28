@@ -48,17 +48,35 @@
 //! /css-comparisons`), not assumed from the property system looking
 //! CSS-shaped. `$FrameColor` on a rule whose own `StyleSheet` (its parent)
 //! carries `FrameColor` as an Attribute resolves to that Attribute's value.
-//! SCOPED TO THE RULE'S OWN SHEET FOR NOW -- real Roblox also walks a
-//! `StyleDerive` chain to sheets a rule's own sheet composes from, which does
-//! not exist in this file yet (milestone 28 sprint 2). An unresolved token
-//! (no Attribute by that name on the rule's own sheet) is left as the
-//! literal string rather than silently dropped -- loud in the painted
-//! output, the same reason an invalid selector keeps its own
-//! `SelectorError` rather than resolving to nothing quietly.
+//! An unresolved token (no Attribute by that name anywhere in the sheet's
+//! own derive chain) is left as the literal string rather than silently
+//! dropped -- loud in the painted output, the same reason an invalid
+//! selector keeps its own `SelectorError` rather than resolving to nothing
+//! quietly.
+//!
+//! `StyleDerive` (milestone 28 sprint 2). Parented INSIDE a `StyleSheet`
+//! (unlike `StyleLink`, which reaches OUT from an instance's own ancestry
+//! toward a sheet elsewhere), a `StyleDerive` names a second `StyleSheet`
+//! its own parent composes rules and tokens from -- Roblox's own real
+//! theming primitive, confirmed against the same documentation. Composition
+//! is TRANSPARENT to distance: a derived sheet's own rules and tokens are
+//! treated as though they belonged to the deriving sheet itself, at that
+//! sheet's own tree position, not as a separate, farther contribution.
+//! MULTIPLE `StyleDerive`s under one sheet rank by `StyleDerive.Priority`,
+//! the same explicit-tiebreak philosophy `StyleRule.Priority` already uses
+//! here -- higher wins a token contest, applied last over weaker sources.
+//! CYCLES ARE BROKEN, NOT ERRORED: a chain that would revisit a sheet
+//! already being composed for the current resolution stops at that edge
+//! rather than failing the whole resolve, the same "a fact about the rule,
+//! not a thrown error" spirit `style::parse`'s own `SelectorError` already
+//! has for a different kind of authoring mistake. Real Roblox's own
+//! behavior for a derive cycle is not documented anywhere this project
+//! checked; this is this file's own stated decision, not a mirror of a
+//! confirmed spec.
 
 use super::{style, Dom};
 use rbx_types::Variant;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 /// One `StyleRule` that matched the target, with what it takes to rank it
 /// against every other one that also matched.
@@ -127,8 +145,9 @@ pub fn resolve(dom: &Dom, id: usize) -> BTreeMap<String, Variant> {
 }
 
 /// `value`, unless it is a `$Name` token string, in which case the value of
-/// `sheet`'s own `Name` Attribute -- or the literal string back, unresolved,
-/// if `sheet` carries no such Attribute. See this module's own doc comment
+/// `Name` found on `sheet` or anywhere in the `StyleDerive` chain it
+/// composes from -- or the literal string back, unresolved, if nothing in
+/// that chain carries such an Attribute. See this module's own doc comment
 /// for why an unresolved token stays loud rather than disappearing.
 fn resolve_token(dom: &Dom, sheet: Option<usize>, value: Variant) -> Variant {
     let Variant::String(s) = &value else {
@@ -140,11 +159,75 @@ fn resolve_token(dom: &Dom, sheet: Option<usize>, value: Variant) -> Variant {
     let Some(sheet) = sheet else {
         return value;
     };
-    dom.get_attribute(sheet, token).unwrap_or(value)
+    lookup_token(dom, sheet, token, &mut HashSet::new()).unwrap_or(value)
+}
+
+/// `token`, read as an Attribute on `sheet` itself, or on the strongest
+/// `StyleDerive` source that has it -- weakest source first, so a stronger
+/// one's own answer overwrites a weaker one's, the same rule
+/// [`resolve`]'s own candidate loop already applies to `StyleRule`
+/// properties. `visited` is fresh per top-level lookup ([`resolve_token`]
+/// starts it empty); a sheet already being composed for this same lookup is
+/// skipped rather than revisited, breaking a cycle at the edge that would
+/// close it rather than failing the whole resolve.
+fn lookup_token(
+    dom: &Dom,
+    sheet: usize,
+    token: &str,
+    visited: &mut HashSet<usize>,
+) -> Option<Variant> {
+    if !visited.insert(sheet) {
+        return None;
+    }
+    if let Some(v) = dom.get_attribute(sheet, token) {
+        return Some(v);
+    }
+    let mut found = None;
+    for source in derive_sources(dom, sheet) {
+        if let Some(v) = lookup_token(dom, source, token, visited) {
+            found = Some(v);
+        }
+    }
+    found
+}
+
+/// Every `StyleSheet` a `StyleDerive` child of `sheet` names, weakest
+/// `StyleDerive.Priority` first (ties by child order) -- the order a caller
+/// should apply them in so a stronger source's own answer wins last, the
+/// same convention [`resolve`]'s own `Candidate` sort already uses for
+/// `StyleRule.Priority`. A `StyleDerive` naming a destroyed or non-sheet
+/// target contributes nothing, the same tolerance [`style_link_target`]
+/// already has for a dangling `StyleLink`.
+fn derive_sources(dom: &Dom, sheet: usize) -> Vec<usize> {
+    let mut derives: Vec<(f64, usize, usize)> = Vec::new();
+    for (order, child) in dom.children(sheet).into_iter().enumerate() {
+        if dom.class_of(child).as_deref() != Some("StyleDerive") {
+            continue;
+        }
+        let Some(target) = style_derive_target(dom, child) else {
+            continue;
+        };
+        derives.push((priority_of(dom, child), order, target));
+    }
+    derives.sort_by(|a, b| {
+        a.0.partial_cmp(&b.0)
+            .expect("Priority is never NaN: coerce refuses a value fraction check already needs")
+            .then(a.1.cmp(&b.1))
+    });
+    derives.into_iter().map(|(_, _, target)| target).collect()
+}
+
+fn style_derive_target(dom: &Dom, derive: usize) -> Option<usize> {
+    let target = dom.get_style_derive(derive)?;
+    (dom.class_of(target).as_deref() == Some("StyleSheet")).then_some(target)
 }
 
 /// `(distance, StyleSheet id)` for every `StyleSheet` that reaches `id`,
-/// through direct parenting or through a `StyleLink`, nearest first.
+/// through direct parenting, through a `StyleLink`, or composed into either
+/// one through a `StyleDerive` chain -- nearest first. A derived sheet's own
+/// entry carries the SAME distance as whatever sheet composes from it: see
+/// this module's own doc comment for why composition is transparent to tree
+/// position rather than a farther, separate contribution.
 fn applicable_style_sheets(dom: &Dom, id: usize) -> Vec<(usize, usize)> {
     let mut sheets = Vec::new();
     let mut cursor = Some(id);
@@ -152,13 +235,23 @@ fn applicable_style_sheets(dom: &Dom, id: usize) -> Vec<(usize, usize)> {
     while let Some(current) = cursor {
         for child in dom.children(current) {
             match dom.class_of(child).as_deref() {
-                Some("StyleSheet") => sheets.push((distance, child)),
+                Some("StyleSheet") => {
+                    sheets.push((distance, child));
+                    collect_derived_sheets(dom, child, distance, &mut sheets, &mut HashSet::new());
+                }
                 // A `StyleLink` NAMES A SHEET, IT IS NOT ONE. Its own
                 // children (it has none that matter here) are never walked
                 // for `StyleRule`s; only the sheet it points at is.
                 Some("StyleLink") => {
                     if let Some(target) = style_link_target(dom, child) {
                         sheets.push((distance, target));
+                        collect_derived_sheets(
+                            dom,
+                            target,
+                            distance,
+                            &mut sheets,
+                            &mut HashSet::new(),
+                        );
                     }
                 }
                 _ => {}
@@ -168,6 +261,26 @@ fn applicable_style_sheets(dom: &Dom, id: usize) -> Vec<(usize, usize)> {
         distance += 1;
     }
     sheets
+}
+
+/// Every `StyleSheet` `sheet`'s own `StyleDerive` children compose from,
+/// pushed at `distance` alongside `sheet` itself, then recursed into --
+/// a derive chain can be more than one link long. `visited` guards one
+/// call's own chain against a cycle; see this module's own doc comment.
+fn collect_derived_sheets(
+    dom: &Dom,
+    sheet: usize,
+    distance: usize,
+    out: &mut Vec<(usize, usize)>,
+    visited: &mut HashSet<usize>,
+) {
+    if !visited.insert(sheet) {
+        return;
+    }
+    for source in derive_sources(dom, sheet) {
+        out.push((distance, source));
+        collect_derived_sheets(dom, source, distance, out, visited);
+    }
 }
 
 fn style_link_target(dom: &Dom, link: usize) -> Option<usize> {
@@ -495,6 +608,244 @@ mod tests {
         assert_eq!(
             resolved.get("Text"),
             Some(&Variant::String("Hello".to_string()))
+        );
+    }
+
+    fn derive(dom: &SharedDom, on_sheet: usize, target_sheet: usize, priority: f64) -> usize {
+        let mut guard = dom.lock().expect("dom");
+        let d = guard.insert("StyleDerive".to_string(), "StyleDerive".to_string());
+        guard
+            .node_mut(d)
+            .expect("derive")
+            .props
+            .insert("Priority".to_string(), Variant::Float64(priority));
+        drop(guard);
+        parent(dom, d, on_sheet);
+        dom.lock()
+            .expect("dom")
+            .set_style_derive(d, Some(target_sheet));
+        d
+    }
+
+    /// THE FIRST HALF OF SPRINT 2'S OWN COMPLETION TEST: a token declared
+    /// only on a `StyleSheet` a `StyleDerive` composes from resolves through
+    /// the deriving sheet, the same way real Roblox's own theming is
+    /// documented to work.
+    #[test]
+    fn a_token_resolves_through_a_style_derive() {
+        let dom = SharedDom::default();
+        let (root, target, design, tokens) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let design = guard.insert("StyleSheet".to_string(), "Design".to_string());
+            let tokens = guard.insert("StyleSheet".to_string(), "Tokens".to_string());
+            (root, target, design, tokens)
+        };
+        parent(&dom, target, root);
+        parent(&dom, design, root);
+        dom.lock().expect("dom").set_attribute(
+            tokens,
+            "FrameColor",
+            Some(Variant::Color3(rbx_types::Color3::new(0.0, 1.0, 0.0))),
+        );
+        derive(&dom, design, tokens, 1.0);
+        rule(
+            &dom,
+            design,
+            "Frame",
+            1.0,
+            &[(
+                "BackgroundColor3",
+                Variant::String("$FrameColor".to_string()),
+            )],
+        );
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundColor3"),
+            Some(&Variant::Color3(rbx_types::Color3::new(0.0, 1.0, 0.0)))
+        );
+    }
+
+    /// THE SECOND HALF: re-pointing the `StyleDerive` at a DIFFERENT source
+    /// sheet changes the resolved token in one write -- the real engine's
+    /// own equivalent of a `data-theme` swap.
+    #[test]
+    fn re_pointing_a_style_derive_changes_the_resolved_token() {
+        let dom = SharedDom::default();
+        let (root, target, design, theme_a, theme_b) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let design = guard.insert("StyleSheet".to_string(), "Design".to_string());
+            let theme_a = guard.insert("StyleSheet".to_string(), "ThemeA".to_string());
+            let theme_b = guard.insert("StyleSheet".to_string(), "ThemeB".to_string());
+            (root, target, design, theme_a, theme_b)
+        };
+        parent(&dom, target, root);
+        parent(&dom, design, root);
+        dom.lock().expect("dom").set_attribute(
+            theme_a,
+            "FrameColor",
+            Some(Variant::Color3(rbx_types::Color3::new(1.0, 0.0, 0.0))),
+        );
+        dom.lock().expect("dom").set_attribute(
+            theme_b,
+            "FrameColor",
+            Some(Variant::Color3(rbx_types::Color3::new(0.0, 0.0, 1.0))),
+        );
+        let d = derive(&dom, design, theme_a, 1.0);
+        rule(
+            &dom,
+            design,
+            "Frame",
+            1.0,
+            &[(
+                "BackgroundColor3",
+                Variant::String("$FrameColor".to_string()),
+            )],
+        );
+
+        {
+            let guard = dom.lock().expect("dom");
+            let resolved = resolve(&guard, target);
+            assert_eq!(
+                resolved.get("BackgroundColor3"),
+                Some(&Variant::Color3(rbx_types::Color3::new(1.0, 0.0, 0.0))),
+                "should start on ThemeA"
+            );
+        }
+
+        dom.lock().expect("dom").set_style_derive(d, Some(theme_b));
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundColor3"),
+            Some(&Variant::Color3(rbx_types::Color3::new(0.0, 0.0, 1.0))),
+            "one StyleDerive.StyleSheet write should re-resolve to ThemeB"
+        );
+    }
+
+    /// A `StyleRule` on a DERIVED sheet applies to the deriving sheet's own
+    /// reach, competing directly on its own `Priority` alongside the
+    /// deriving sheet's own rules -- this file's own stated decision for
+    /// how `StyleDerive` composition and `StyleRule.Priority` interact.
+    #[test]
+    fn a_rule_on_a_derived_sheet_applies_through_the_deriving_sheet() {
+        let dom = SharedDom::default();
+        let (root, target, design, base) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let design = guard.insert("StyleSheet".to_string(), "Design".to_string());
+            let base = guard.insert("StyleSheet".to_string(), "Base".to_string());
+            (root, target, design, base)
+        };
+        parent(&dom, target, root);
+        parent(&dom, design, root);
+        derive(&dom, design, base, 1.0);
+        rule(
+            &dom,
+            base,
+            "Frame",
+            1.0,
+            &[("BackgroundTransparency", Variant::Float64(0.25))],
+        );
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundTransparency"),
+            Some(&Variant::Float64(0.25))
+        );
+    }
+
+    /// HIGHER `StyleDerive.Priority` WINS a token contest between two
+    /// sources composed into the same sheet, applied last over the weaker
+    /// one -- the same convention `StyleRule.Priority` already has here.
+    #[test]
+    fn a_higher_priority_style_derive_wins_a_token_contest() {
+        let dom = SharedDom::default();
+        let (root, target, design, weak, strong) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let design = guard.insert("StyleSheet".to_string(), "Design".to_string());
+            let weak = guard.insert("StyleSheet".to_string(), "Weak".to_string());
+            let strong = guard.insert("StyleSheet".to_string(), "Strong".to_string());
+            (root, target, design, weak, strong)
+        };
+        parent(&dom, target, root);
+        parent(&dom, design, root);
+        dom.lock().expect("dom").set_attribute(
+            weak,
+            "FrameColor",
+            Some(Variant::Color3(rbx_types::Color3::new(1.0, 0.0, 0.0))),
+        );
+        dom.lock().expect("dom").set_attribute(
+            strong,
+            "FrameColor",
+            Some(Variant::Color3(rbx_types::Color3::new(0.0, 1.0, 0.0))),
+        );
+        // DECLARED WEAKEST FIRST, on purpose: this proves Priority decides
+        // the winner, not insertion order.
+        derive(&dom, design, weak, 1.0);
+        derive(&dom, design, strong, 5.0);
+        rule(
+            &dom,
+            design,
+            "Frame",
+            1.0,
+            &[(
+                "BackgroundColor3",
+                Variant::String("$FrameColor".to_string()),
+            )],
+        );
+
+        let guard = dom.lock().expect("dom");
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundColor3"),
+            Some(&Variant::Color3(rbx_types::Color3::new(0.0, 1.0, 0.0)))
+        );
+    }
+
+    /// A CYCLE STOPS AT THE EDGE THAT WOULD CLOSE IT, rather than recursing
+    /// forever or failing the whole resolve -- this file's own stated
+    /// decision where real Roblox's behavior is undocumented.
+    #[test]
+    fn a_style_derive_cycle_does_not_hang_or_panic() {
+        let dom = SharedDom::default();
+        let (root, target, a, b) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let a = guard.insert("StyleSheet".to_string(), "A".to_string());
+            let b = guard.insert("StyleSheet".to_string(), "B".to_string());
+            (root, target, a, b)
+        };
+        parent(&dom, target, root);
+        parent(&dom, a, root);
+        derive(&dom, a, b, 1.0);
+        derive(&dom, b, a, 1.0);
+        rule(
+            &dom,
+            a,
+            "Frame",
+            1.0,
+            &[("BackgroundTransparency", Variant::Float64(0.5))],
+        );
+
+        let guard = dom.lock().expect("dom");
+        // Must return at all (a hang would time out the test binary) and
+        // must still resolve the one real rule reachable in the cycle.
+        let resolved = resolve(&guard, target);
+        assert_eq!(
+            resolved.get("BackgroundTransparency"),
+            Some(&Variant::Float64(0.5))
         );
     }
 }

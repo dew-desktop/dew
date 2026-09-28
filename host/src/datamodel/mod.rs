@@ -155,6 +155,13 @@ pub struct Dom {
     /// lower: a side table, read and written by the same special case in
     /// `Index`/`NewIndex` that already carries `Parent`.
     style_links: BTreeMap<usize, usize>,
+    /// `StyleDerive.StyleSheet`: the same instance-reference problem
+    /// `style_links` solves, for a different real class (milestone 28
+    /// sprint 2 -- `StyleDerive` was "declared, never implemented" before
+    /// this). A `StyleDerive` is parented INSIDE a `StyleSheet` (not
+    /// anywhere in the target's own ancestry, unlike `StyleLink`) and names
+    /// a second `StyleSheet` its own parent composes rules and tokens from.
+    style_derives: BTreeMap<usize, usize>,
     /// The id of `GuiService`'s own pseudo-instance, minted the first time
     /// anything reaches it -- the same construction as
     /// `collection_service_id`, and for the same reason: `SelectionGained`
@@ -184,6 +191,7 @@ impl Default for Dom {
             collection_service_id: None,
             style_properties: BTreeMap::new(),
             style_links: BTreeMap::new(),
+            style_derives: BTreeMap::new(),
             gui_service_id: None,
             selected_object: None,
         }
@@ -450,6 +458,25 @@ impl Dom {
         }
     }
 
+    /// `StyleDerive.StyleSheet`, the same shape as `get_style_link` for the
+    /// same reason -- a dangling id reads as unset.
+    fn get_style_derive(&self, id: usize) -> Option<usize> {
+        let target = *self.style_derives.get(&id)?;
+        self.node(target)?;
+        Some(target)
+    }
+
+    fn set_style_derive(&mut self, id: usize, target: Option<usize>) {
+        match target {
+            Some(target) => {
+                self.style_derives.insert(id, target);
+            }
+            None => {
+                self.style_derives.remove(&id);
+            }
+        }
+    }
+
     // ── `GuiService` ─────────────────────────────────────────────────────────
 
     /// The id of `GuiService`'s own pseudo-instance, minting it on first use.
@@ -607,6 +634,9 @@ impl Dom {
             // a scan over every link for every destroy, for a case reading
             // already answers correctly on its own.
             self.style_links.remove(&current);
+            // A destroyed `StyleDerive` forgets what it composed from, same
+            // reasoning as the `StyleLink` line above.
+            self.style_derives.remove(&current);
             stack.extend(node.children);
         }
         self.dirty = true;
@@ -1255,6 +1285,16 @@ impl UserData for InstanceRef {
                         None => Ok(LuaValue::Nil),
                     };
                 }
+                // `StyleDerive.StyleSheet`, read the same way `StyleLink`'s
+                // own is -- see `Dom::style_derives`'s own doc comment.
+                "StyleSheet" if node.class == "StyleDerive" => {
+                    let target = dom.get_style_derive(this.id);
+                    drop(dom);
+                    return match target {
+                        Some(target) => handle(lua, &this.dom, target)?.into_lua(lua),
+                        None => Ok(LuaValue::Nil),
+                    };
+                }
                 // `GuiService.SelectedObject`: AN INSTANCE REFERENCE, read the
                 // same way `Parent` and `StyleLink.StyleSheet` are.
                 "SelectedObject" if node.class == "GuiService" => {
@@ -1480,10 +1520,7 @@ impl UserData for InstanceRef {
                     }
                     // `StyleLink.StyleSheet`, WRITTEN THE SAME WAY `Parent` IS:
                     // an `Instance` handle or nil, stored as an id in
-                    // `Dom::style_links` rather than in `node.props`. Guarded
-                    // on `StyleLink` so `StyleDerive.StyleSheet` (declared,
-                    // never implemented) still falls through to the generic
-                    // path's honest "cannot accept yet" refusal below.
+                    // `Dom::style_links` rather than in `node.props`.
                     "StyleSheet" if class == "StyleLink" => {
                         let target = match &value {
                             LuaValue::Nil => None,
@@ -1511,6 +1548,43 @@ impl UserData for InstanceRef {
                             return Ok(());
                         }
                         dom.set_style_link(this.id, target);
+                        dom.touch();
+                        drop(dom);
+                        return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
+                    }
+                    // `StyleDerive.StyleSheet` (milestone 28 sprint 2 --
+                    // previously "declared, never implemented"), the same
+                    // instance-reference shape as `StyleLink.StyleSheet`
+                    // just above, stored in its own side table since a
+                    // `StyleDerive` and a `StyleLink` reaching the same
+                    // target mean different things to the cascade.
+                    "StyleSheet" if class == "StyleDerive" => {
+                        let target = match &value {
+                            LuaValue::Nil => None,
+                            LuaValue::UserData(ud) => Some(ud.borrow::<InstanceRef>()?.id),
+                            other => {
+                                return Err(LuaError::runtime(format!(
+                                    "StyleSheet expects an Instance or nil, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        if let Some(target_id) = target {
+                            if dom.node(target_id).is_none() {
+                                return Err(LuaError::runtime(
+                                    "the new StyleSheet has been destroyed",
+                                ));
+                            }
+                            if dom.class_of(target_id).as_deref() != Some("StyleSheet") {
+                                return Err(LuaError::runtime(
+                                    "StyleDerive.StyleSheet expects a StyleSheet instance",
+                                ));
+                            }
+                        }
+                        if dom.get_style_derive(this.id) == target {
+                            return Ok(());
+                        }
+                        dom.set_style_derive(this.id, target);
                         dom.touch();
                         drop(dom);
                         return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
