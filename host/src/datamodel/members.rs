@@ -316,6 +316,21 @@ const MEMBERS: &[Member] = &[
         name: "GetProperties",
         introduced_on: "StyleRule",
     },
+    // -- `GuiState`, writable (milestone 29 part B) --------------------------
+    //
+    // REAL ROBLOX MAKES THIS ENGINE-COMPUTED AND READ-ONLY, and the generic
+    // property path already refuses a write for exactly that reason (its own
+    // `descriptor.scriptability` check). Native hit-testing cannot compute it
+    // FOR AN AETHER PRIMITIVE regardless: `input.rs`'s own `sinks()` gates all
+    // hit-testing on `Active == true`, which Aether's own `PointerRouter`
+    // never sets, by its own stated rule. So this is a deliberate divergence
+    // -- `GuiState` here is a plain writable value, the same shape an
+    // Attribute already is, set by whichever real arbiter a guest is using
+    // (`PointerRouter`, if one is Aether's) rather than derived by this host.
+    Member {
+        name: "SetGuiState",
+        introduced_on: "GuiObject",
+    },
 ];
 
 /// Does `class` match `ancestor`, or descend from it?
@@ -808,6 +823,31 @@ pub fn lookup(
                 out.set(k, super::to_lua(lua, &v, None)?)?;
             }
             Ok(out)
+        })?,
+        // `GuiState`, WRITTEN DIRECTLY INTO `node.props` -- the same table
+        // the generic property read already consults first, so `f.GuiState`
+        // reads back exactly what this stored with no separate side table.
+        // The generic NewIndex path is not reused: it refuses this specific
+        // write on purpose (`descriptor.scriptability`), which is right for
+        // an ordinary reflected property and exactly what this method exists
+        // to go around, the same relationship `SetProperty` already has to
+        // an ordinary property write.
+        "SetGuiState" => lua.create_function(move |lua, (_, value): (LuaValue, LuaValue)| {
+            let mut dom = this.dom.lock().expect("dom");
+            let Some(class) = dom.class_of(this.id) else {
+                return Err(dead());
+            };
+            let stored = super::coerce_enum(&value, "GuiState", &class, "GuiState")?;
+            if dom.property(this.id, "GuiState") == Some(Variant::Enum(stored)) {
+                return Ok(());
+            }
+            dom.node_mut(this.id)
+                .expect("checked")
+                .props
+                .insert("GuiState".to_string(), Variant::Enum(stored));
+            dom.touch();
+            drop(dom);
+            signal::property_changed(lua, &this.dom, this.id, "GuiState")
         })?,
         "CaptureFocus" => lua.create_function(move |lua, _: LuaValue| {
             let dom = this.dom.lock().expect("dom");
