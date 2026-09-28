@@ -26,7 +26,8 @@
 //! collide with a completely different Lua/OOP idea of "class" this codebase
 //! does not have.
 
-use super::{class_exists, members, Dom};
+use super::{class_exists, enums, members, Dom};
+use rbx_types::Variant;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Selector {
@@ -36,6 +37,18 @@ pub enum Selector {
     Tag(String),
     /// `#foo`: `Instance.Name`.
     Name(String),
+    /// `:Hover`, `:Press`, `:Idle`, `:NonInteractable` -- `GuiState`,
+    /// milestone 29 part B. BARE ONLY, not the real engine's own compound
+    /// form (`"ImageLabel:Hover"`, class name AND state together) -- that
+    /// needs the compound-selector support part C of the same milestone
+    /// scopes separately, not smuggled in here. A bare state selector is
+    /// not the narrower half of a feature on this host specifically: unlike
+    /// real Roblox, where every `GuiObject` carries a `GuiState` the engine
+    /// computes automatically (making a bare `:Hover` match everything
+    /// interactive on screen), this host's own `GuiState` is set only where
+    /// a caller explicitly calls `SetGuiState` -- already exactly as scoped
+    /// as a class filter would make it.
+    State(u32),
 }
 
 /// Parse one `StyleRule.Selector` string, or say why it does not parse.
@@ -63,13 +76,23 @@ pub fn parse(selector: &str) -> Result<Selector, String> {
         return Ok(Selector::Name(name.to_string()));
     }
 
+    if let Some(state) = selector.strip_prefix(':') {
+        if state.is_empty() {
+            return Err("a `:` selector needs a state name after the colon".to_string());
+        }
+        let Some(item) = enums::item_by_name("GuiState", state) else {
+            return Err(format!("`{state}` is not a GuiState this host knows"));
+        };
+        return Ok(Selector::State(item.value));
+    }
+
     // A COMPOUND OR COMBINATOR SELECTOR IS REFUSED, NOT MISREAD. Roblox's own
     // grammar allows one, and treating `Frame.Enemy` as the class name
     // `Frame.Enemy` (which matches nothing) would fail silently instead of
     // saying why.
     if selector
         .chars()
-        .any(|c| c.is_whitespace() || c == '.' || c == '#')
+        .any(|c| c.is_whitespace() || c == '.' || c == '#' || c == ':')
     {
         return Err(format!(
             "`{selector}` looks like a compound or combinator selector, \
@@ -94,6 +117,15 @@ pub fn matches(dom: &Dom, id: usize, selector: &Selector) -> bool {
             .is_some_and(|class| members::class_is_a(&class, name)),
         Selector::Tag(tag) => dom.has_tag(id, tag),
         Selector::Name(name) => dom.name_of(id).as_deref() == Some(name.as_str()),
+        // NO `GuiState` SET AT ALL DOES NOT MATCH `:Idle`. Real Roblox's own
+        // default is `Idle` for every `GuiObject`, but this host never
+        // writes one unless `SetGuiState` is called -- an instance nobody
+        // has arbitrated yet is simply not in any state, not silently
+        // `Idle`, the same reason an unset Attribute is absent rather than
+        // a default token value.
+        Selector::State(value) => {
+            dom.property(id, "GuiState") == Some(Variant::Enum(rbx_types::Enum::from_u32(*value)))
+        }
     }
 }
 
@@ -228,6 +260,66 @@ mod tests {
         // milestone's scope; refusing it beats matching the class name
         // `Frame.Enemy`, which is nothing.
         let err = parse("Frame.Enemy").unwrap_err();
+        assert!(err.contains("compound"), "{err}");
+    }
+
+    fn set_gui_state(dom: &SharedDom, id: usize, state: &str) {
+        let item = enums::item_by_name("GuiState", state).expect("a real GuiState name");
+        dom.lock()
+            .expect("dom")
+            .node_mut(id)
+            .expect("id")
+            .props
+            .insert(
+                "GuiState".to_string(),
+                Variant::Enum(rbx_types::Enum::from_u32(item.value)),
+            );
+    }
+
+    /// THE FIRST HALF OF PART B'S OWN COMPLETION TEST: a `:StateName`
+    /// selector matches only the instance whose `GuiState` is that state.
+    #[test]
+    fn a_state_selector_matches_only_that_state() {
+        let (dom, root, card, _label, other) = tree();
+        set_gui_state(&dom, card, "Hover");
+        set_gui_state(&dom, other, "Press");
+
+        let guard = dom.lock().expect("dom");
+        let hover = parse(":Hover").expect("parse");
+        let press = parse(":Press").expect("parse");
+
+        assert_eq!(matching_in(&guard, root, &hover), vec![card]);
+        assert_eq!(matching_in(&guard, root, &press), vec![other]);
+    }
+
+    /// AN INSTANCE NOBODY HAS ARBITRATED YET MATCHES NOTHING, not `:Idle` by
+    /// a real-engine-shaped default -- confirmed directly (`f.GuiState`
+    /// reads `nil` on a fresh instance, not `Enum.GuiState.Idle`), not
+    /// assumed from how the reflection database treats other properties.
+    #[test]
+    fn an_unset_gui_state_does_not_match_idle() {
+        let (dom, root, _card, _label, _other) = tree();
+        let guard = dom.lock().expect("dom");
+        let idle = parse(":Idle").expect("parse");
+        assert_eq!(matching_in(&guard, root, &idle), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn an_unknown_state_name_does_not_parse() {
+        let err = parse(":NotARealState").unwrap_err();
+        assert!(err.contains("NotARealState"), "{err}");
+    }
+
+    #[test]
+    fn a_colon_with_nothing_after_it_does_not_parse() {
+        assert!(parse(":").is_err());
+    }
+
+    #[test]
+    fn a_compound_state_selector_is_refused_rather_than_misread() {
+        // `"Frame:Hover"` is the real engine's own compound form and out of
+        // this milestone's own part B scope (part C's own combinator work).
+        let err = parse("Frame:Hover").unwrap_err();
         assert!(err.contains("compound"), "{err}");
     }
 }
