@@ -1,0 +1,19 @@
+name = "dew_examples/slider_demo"
+version = "0.0.1"
+description = "A Slider primitive dragged live, proving proportional movement and no snap-back"
+
+# A DEMO INSTALLS ITS OWN FRAMEWORK, per ADR-008, the same as
+# examples/aether/contextmenu already does.
+[target]
+environment = "roblox"
+lib = "slider-demo.luau"
+
+[dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "e7b0ffa" }
+vide = { repo = "es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"
