@@ -1565,33 +1565,106 @@ pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
 mod tests {
     use super::*;
 
+    /// What the suite in `dir` must add up to, counted from the case files
+    /// themselves rather than from the runner: how many files the loader would
+    /// pick up, and how many of those declare `roblox` and `asserted` provenance.
+    struct ExpectedTally {
+        total: usize,
+        roblox: usize,
+        asserted: usize,
+    }
+
+    fn expected_tally(dir: &Path) -> ExpectedTally {
+        let mut tally = ExpectedTally {
+            total: 0,
+            roblox: 0,
+            asserted: 0,
+        };
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("directory entry").path();
+            // The same filter `run_suite_with_options` applies.
+            if path.extension().map(|ext| ext == "luau") != Some(true) {
+                continue;
+            }
+            tally.total += 1;
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+            match declared_provenance(&source) {
+                Some("roblox") => tally.roblox += 1,
+                Some("asserted") => tally.asserted += 1,
+                Some(_) => {}
+                None => panic!("{} declares no provenance", path.display()),
+            }
+        }
+        tally
+    }
+
+    /// The value of the first `provenance = "..."` field in a case file.
+    fn declared_provenance(source: &str) -> Option<&str> {
+        let mut rest = source;
+        while let Some(at) = rest.find("provenance") {
+            rest = &rest[at + "provenance".len()..];
+            let Some(value) = rest.trim_start().strip_prefix('=') else {
+                continue;
+            };
+            let Some(value) = value.trim_start().strip_prefix('"') else {
+                continue;
+            };
+            return value.find('"').map(|end| &value[..end]);
+        }
+        None
+    }
+
+    /// The counts are derived rather than written as literals because the cases
+    /// live in the Aether repository, which CI clones at main. A literal would
+    /// couple this test to that repository's case count.
+    fn assert_tally_matches_cases(dir: &Path, summary: &SuiteSummary) {
+        let expected = expected_tally(dir);
+        assert!(
+            expected.total > 0,
+            "no case files found in {}",
+            dir.display()
+        );
+        assert_eq!(
+            summary.total,
+            expected.total,
+            "expected {} cases from {}",
+            expected.total,
+            dir.display()
+        );
+        assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
+        assert_eq!(summary.unsupported, 0, "expected 0 unsupported cases");
+        assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
+        assert_eq!(summary.divergent, 0, "no documented gaps remain");
+        assert_eq!(
+            summary.verified_against_roblox, expected.roblox,
+            "expected every roblox case to be counted as verified"
+        );
+        // An `asserted` case states a belief nobody has checked in Studio, so it
+        // counts as an open question rather than as evidence.
+        assert_eq!(
+            summary.open_questions, expected.asserted,
+            "expected every asserted case to be counted as an open question"
+        );
+        // Every case either passes or is an asserted case this implementation
+        // disagrees with; nothing else is allowed to fall through.
+        assert_eq!(
+            summary.passed + summary.disagreed_open,
+            summary.total,
+            "expected {} passed plus {} disagreed open questions to cover all {} cases",
+            summary.passed,
+            summary.disagreed_open,
+            summary.total
+        );
+    }
+
     #[test]
     fn conformance_suite_loads_and_runs() {
         let dir = find_cases_dir(None).expect("cases dir");
         let (results, summary) = run_suite(&dir, None);
-        assert_eq!(
-            summary.total, 24,
-            "expected 24 cases, got {}",
-            summary.total
-        );
-        assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
-        assert_eq!(summary.unsupported, 0, "expected 0 unsupported cases");
-        assert_eq!(
-            summary.passed, 24,
-            "expected all 24 executable conformance cases to pass"
-        );
-        assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
-        // TWO SINCE MILESTONE 4 CLOSED THE CLIP RADIUS. The clipping case was a
-        // documented gap; it now asserts the engine's behaviour and Dew matches it,
-        // but the PIXEL half has never been rendered in Studio and compared, so
-        // it counts as a belief rather than as evidence.
-        //
-        // EXACT, AND IT WAS BRIEFLY NOT. While aether#2 was unmerged, CI read the
-        // case from the pinned pesde package and still saw 1, so this was widened
-        // to accept either. An assertion that passes whether the divergence is
-        // closed or open tests neither; the pin is bumped and the number is one
-        // number again.
-        assert_eq!(summary.open_questions, 2, "expected 2 open questions");
+        assert_tally_matches_cases(&dir, &summary);
 
         // Verify the 21 passing cases
         let passing_names: Vec<&str> = results
@@ -1638,7 +1711,10 @@ mod tests {
     #[test]
     fn single_case_filter_works() {
         let dir = find_cases_dir(None).expect("cases dir");
-        let (results, summary) = run_suite(&dir, Some("scale resolves against the parent"));
+        let (results, summary) = run_suite(
+            &dir,
+            Some("scale resolves against the parent, not the surface"),
+        );
         assert_eq!(results.len(), 1);
         assert_eq!(summary.passed, 1);
         assert_eq!(results[0].status, CaseStatus::Pass);
@@ -1701,14 +1777,7 @@ mod tests {
     fn pixel_runner_full_suite_passes() {
         let dir = find_cases_dir(None).expect("cases dir");
         let (_results, summary) = run_suite_pixel(&dir, None, false, false);
-        assert_eq!(summary.total, 24);
-        assert_eq!(summary.undecodable, 0);
-        assert_eq!(summary.unsupported, 0);
-        assert_eq!(summary.passed, 24);
-        assert_eq!(summary.failed, 0);
-        assert_eq!(summary.divergent, 0, "no documented gaps remain");
-        assert_eq!(summary.verified_against_roblox, 21);
-        assert_eq!(summary.open_questions, 2);
+        assert_tally_matches_cases(&dir, &summary);
     }
 
     const TALLY_LUAU_ORACLE: &str = r#"--!strict
