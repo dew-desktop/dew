@@ -134,6 +134,18 @@ pub fn load(
     aliases: &std::collections::HashMap<String, PathBuf>,
     state: &Shared,
 ) -> Result<Applet, String> {
+    load_observed(dir, aliases, state, &mut |_| {})
+}
+
+/// [`load`], handing `before_entry` the VM once the host has installed
+/// everything it installs and before any of the applet's own Luau has run.
+/// What it sees there is the host's, which is the only reason to look.
+pub fn load_observed(
+    dir: &Path,
+    aliases: &std::collections::HashMap<String, PathBuf>,
+    state: &Shared,
+    before_entry: &mut dyn FnMut(&Lua),
+) -> Result<Applet, String> {
     // 1 ── the manifest, before anything of the mod's runs.
     let manifest = Manifest::load(dir)?;
 
@@ -340,6 +352,8 @@ pub fn load(
         .globals()
         .set("desktop", desktop.clone())
         .map_err(|e| format!("{}: {e}", manifest.id))?;
+
+    before_entry(vm.lua());
 
     let returned: LuaValue = modules::load_entry(&vm, &entry)
         .and_then(|f| f.call(()))

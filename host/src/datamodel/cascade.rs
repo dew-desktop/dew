@@ -660,6 +660,19 @@ impl Dom {
         self.property(id, key)
     }
 
+    /// Every property `id` carries by assignment or by a matching `StyleRule`,
+    /// with an assignment winning over a rule as it does in
+    /// [`Dom::styled_property`]. What nothing set is absent.
+    pub fn set_properties(&self, id: usize) -> BTreeMap<String, Variant> {
+        let mut out = resolve(self, id);
+        if let Some(node) = self.node(id) {
+            for (key, value) in &node.props {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+        out
+    }
+
     /// Wires [`apply_modifiers`] onto `Dom` itself, the same way
     /// `styled_property` sits beside `resolve` above -- `main.rs`'s own
     /// render loop lives outside `datamodel`'s own private module tree and

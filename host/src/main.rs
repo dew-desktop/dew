@@ -25,6 +25,7 @@ mod applets;
 mod coordinator;
 #[cfg(windows)]
 mod dashboard;
+mod examples_compat;
 #[cfg(windows)]
 mod installed;
 #[cfg(windows)]
@@ -590,6 +591,22 @@ impl Renderer {
 /// Aether-mod concern, and no version of it would be what a standalone script
 /// parents into.
 fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPainter), String> {
+    let (_vm, dom, root) = load_script(path, &mut |_| {})?;
+    let frame = datamodel::render::frame_of(&dom, root, width as f32, height as f32);
+    let drawn = frame.nodes.len();
+    let mut surface = painter(width, height)?;
+    dew_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
+    Ok((format!("{drawn} node(s)"), surface))
+}
+
+/// Run a standalone script and hand back the tree it built under `DewRoot`.
+///
+/// `before_exec` sees the VM once the host has installed everything and before
+/// the script's own Luau runs.
+fn load_script(
+    path: &str,
+    before_exec: &mut dyn FnMut(&Lua),
+) -> Result<(dew_runtime::Vm, datamodel::SharedDom, usize), String> {
     let script = PathBuf::from(path);
     let dir = script
         .parent()
@@ -639,6 +656,8 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .set("DewRoot", root_handle)
         .map_err(|e| e.to_string())?;
 
+    before_exec(vm.lua());
+
     let source =
         std::fs::read_to_string(&script).map_err(|e| format!("{}: {e}", script.display()))?;
     vm.lua()
@@ -647,11 +666,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .exec()
         .map_err(|e| format!("{}: {e}", script.display()))?;
 
-    let frame = datamodel::render::frame_of(&dom, root, width as f32, height as f32);
-    let drawn = frame.nodes.len();
-    let mut surface = painter(width, height)?;
-    dew_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
-    Ok((format!("{drawn} node(s)"), surface))
+    Ok((vm, dom, root))
 }
 
 fn create_renderer(
@@ -753,6 +768,11 @@ pub enum Command {
         generate_goldens: bool,
         run_unsupported: bool,
     },
+    /// Regenerate the examples compatibility table, or with `check` fail when
+    /// the committed one differs from a regeneration.
+    Compat {
+        check: bool,
+    },
     Help {
         subcommand: Option<String>,
     },
@@ -807,6 +827,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
+        "compat" => parse_compat(&args_vec[1..]),
         "help" | "--help" | "-h" => Ok(Command::Help {
             subcommand: args_vec.get(1).cloned(),
         }),
@@ -1235,6 +1256,17 @@ fn parse_conformance(args: &[String]) -> Result<Command, String> {
         generate_goldens,
         run_unsupported,
     })
+}
+
+fn parse_compat(args: &[String]) -> Result<Command, String> {
+    let mut check = false;
+    for arg in args {
+        match arg.as_str() {
+            "--check" => check = true,
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+    Ok(Command::Compat { check })
 }
 
 fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, String> {
@@ -3071,6 +3103,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
+            println!("  compat [--check] Regenerate the examples compatibility table, or check it");
             println!("  help [COMMAND]   Show help for a command");
             println!();
             println!("Options:");
@@ -3168,6 +3201,7 @@ fn run() -> Result<(), String> {
             generate_goldens,
             run_unsupported,
         } => execute_conformance(filter, dir, pixel, generate_goldens, run_unsupported),
+        Command::Compat { check } => examples_compat::execute(check),
         Command::Help { subcommand } => {
             execute_help(subcommand);
             Ok(())
