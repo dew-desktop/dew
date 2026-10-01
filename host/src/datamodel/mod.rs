@@ -856,6 +856,13 @@ fn class_exists(class: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// The default `class.property` reads before anything assigns it: the
+/// extension registry's for a row it carries, otherwise the reflection
+/// database's, walking superclasses.
+pub fn default_value(class: &str, property: &str) -> Option<Variant> {
+    default_for(class, property)
+}
+
 /// The default a property reads before anything assigns it.
 fn default_for(class: &str, property: &str) -> Option<Variant> {
     let db = rbx_reflection_database::get().ok()?;

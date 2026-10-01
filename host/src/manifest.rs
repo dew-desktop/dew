@@ -110,6 +110,33 @@ impl Permission {
         }
     }
 
+    /// What the engine offers in place of this permission, or `None` when it
+    /// offers nothing a game client could use for it.
+    ///
+    /// AN EQUIVALENT IS NOT THE SAME API. `desktop.Storage` does not run on
+    /// the engine whatever this says; the member a guest reaches is reported
+    /// on its own. This answers only whether a manifest asking for the
+    /// permission describes something a Roblox place could have at all.
+    /// Exhaustive, so a new permission has to be answered here.
+    pub fn roblox_equivalent(self) -> Option<&'static str> {
+        match self {
+            // A corner of the screen with a tree in it is a `ScreenGui`.
+            Permission::Widget => Some("a ScreenGui"),
+            Permission::RbxAssetId => Some("rbxassetid content, native to the engine"),
+            Permission::Storage => Some("DataStoreService"),
+            Permission::Audio => Some("Sound"),
+            Permission::Notifications => Some("StarterGui:SetCore(\"SendNotification\")"),
+            // An operating system window, a topmost click-through layer over
+            // the desktop, and a popover outside the widget's own bounds all
+            // describe the desktop rather than a game viewport.
+            Permission::Window | Permission::Overlay | Permission::Popover => None,
+            Permission::Clipboard => None,
+            Permission::Auth | Permission::Discover | Permission::Install | Permission::Library => {
+                None
+            }
+        }
+    }
+
     /// The surface permission named by a word, for `dew init --surface`.
     ///
     /// SURFACES ONLY, not every permission. The scaffolder's job is to grant the

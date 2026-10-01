@@ -132,6 +132,9 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
+              # The compatibility table in it is generated and checked by
+              # the build job, so a hand edit to it has to reach that job.
+              examples/README.md) ;;
               docs/*|scripts/*) continue ;;
               *.md) continue ;;
             esac
@@ -447,6 +450,14 @@ jobs:
       # instead of silently going stale.
       - name: Check the generated DataModel editor types are current
         run: cargo run --manifest-path host/Cargo.toml --bin generate-datamodel-types -- --check
+
+      # THE EXAMPLES COMPATIBILITY TABLE IS GENERATED TOO. `dew compat --check`
+      # loads every example the way `dew snapshot` does, rebuilds the table in
+      # `examples/README.md` in memory and fails when the committed one
+      # differs. It needs the packages installed above, which is why it runs in
+      # this job.
+      - name: Check the examples compatibility table is current
+        run: cargo run --manifest-path host/Cargo.toml -- compat --check
 
   linux:
     name: Linux, build and render headlessly
