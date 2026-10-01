@@ -29,9 +29,11 @@ pub static SUPPORTS: &[&str] = &[
     "ClipsDescendants",
     "TextScaled",
     "TextWrapped",
+    "UIAspectRatioConstraint",
     "UICorner",
     "UIFlexItem",
     "UIGradient.Radial",
+    "UIGridLayout",
     "UIListLayout.Flex",
     "UIListLayout.IgnoresAnchorPoint",
     "UIListLayout.ItemLineAlignment",
@@ -1781,6 +1783,13 @@ mod tests {
     /// `AbsoluteContentSize` of the UIListLayout named `Layout` back through
     /// Luau, the way a guest reads it.
     fn list_content_size(stem: &str) -> (f32, f32) {
+        read_back(stem, "Layout", &["AbsoluteContentSize"])[0]
+    }
+
+    /// Build the tree of the case file `stem`, lay it out once, and read each
+    /// Vector2 property in `properties` off the panel's child named `layout`
+    /// back through Luau, the way a guest reads it.
+    fn read_back(stem: &str, layout: &str, properties: &[&str]) -> Vec<(f32, f32)> {
         let dir = find_cases_dir(None).expect("cases dir");
         let lua = Lua::new();
         let case = decode_case(&lua, &dir.join(format!("{stem}.luau"))).expect("case decodes");
@@ -1798,15 +1807,60 @@ mod tests {
 
         let _ = frame_of(&dom, root, case.surface.width, case.surface.height);
 
-        lua.load(
-            r#"
-            local panel = ...
-            local size = panel:FindFirstChild("Layout").AbsoluteContentSize
-            return size.X, size.Y
-        "#,
-        )
-        .call(panel)
-        .expect("read back")
+        let read: Function = lua
+            .load(
+                r#"
+                local panel, layout, property = ...
+                local size = panel:FindFirstChild(layout)[property]
+                return size.X, size.Y
+            "#,
+            )
+            .into_function()
+            .expect("reader");
+        properties
+            .iter()
+            .map(|property| {
+                read.call((panel.clone(), layout, *property))
+                    .expect("read back")
+            })
+            .collect()
+    }
+
+    /// The engine's own read-backs for a grid, taken in Studio from the same
+    /// trees with the command bar. The content size is the block of filled
+    /// cells with the padding between them, and the cell count is columns by
+    /// rows: three default cells in 220 make a 2 by 2 block 205 square, and
+    /// five 50 cells capped at two a row make 2 by 3, 105 by 160.
+    #[test]
+    fn a_grid_reports_the_sizes_the_engine_reads_back() {
+        for (stem, content, cell, count) in [
+            (
+                "uigridlayout_defaults",
+                (205.0, 205.0),
+                (100.0, 100.0),
+                (2.0, 2.0),
+            ),
+            (
+                "uigridlayout_fill_direction_max_cells",
+                (105.0, 160.0),
+                (50.0, 50.0),
+                (2.0, 3.0),
+            ),
+        ] {
+            assert_eq!(
+                read_back(
+                    stem,
+                    "Grid",
+                    &[
+                        "AbsoluteContentSize",
+                        "AbsoluteCellSize",
+                        "AbsoluteCellCount"
+                    ]
+                ),
+                vec![content, cell, count],
+                "{stem}"
+            );
+        }
     }
 
     /// The engine's own read-backs, taken in Studio from the same trees with

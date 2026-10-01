@@ -60,6 +60,18 @@ cargo run -- examples/widgets/flex-item-demo
 cargo run -- test examples/widgets/flex-item-demo
 ```
 
+`grid-layout-demo` is an app launcher whose tiles are placed by one
+`UIGridLayout`; no tile has a position or a size of its own. Its buttons change
+the grid's `CellSize`, `FillDirectionMaxCells`, `StartCorner` and
+`FillDirection` while it runs, a click selects a tile, and a
+`UIAspectRatioConstraint` keeps each icon square in a wide cell. Its test clicks
+the buttons and the tiles and checks where each tile lands.
+
+```sh
+cargo run -- examples/widgets/grid-layout-demo
+cargo run -- test examples/widgets/grid-layout-demo
+```
+
 ## `aether/`
 
 Applets built with [Aether](https://github.com/project-aether-ui/aether), a UI
