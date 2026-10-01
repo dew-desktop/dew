@@ -1,0 +1,13 @@
+# Flex item demo
+#
+# A chat pane laid out by UIListLayouts, where UIFlexItem and UISizeConstraint
+# on individual children decide who takes the spare width, who gives it back,
+# and where each stops.
+
+id = "flex-item-demo"
+name = "Flex item demo"
+description = "A chat pane whose children grow, shrink and stop at bounds, with live controls"
+
+# A SURFACE AND NOTHING ELSE. Pointer input reaches a TextButton's Activated
+# without a grant of its own.
+permissions = ["widget"]
