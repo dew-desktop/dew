@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// The scriptable API surface, pinned.
 ///
 /// Both the property half and the method/event half of the DataModel standard
-/// are pinned from the engine's API dump at `0.736.0.7361346`.
+/// are pinned from the engine's API dump at `0.741.19.7411056`.
 ///
 /// READ AT RUNTIME, AND NOT REDISTRIBUTED.
 ///
