@@ -153,7 +153,7 @@ end
 ---
 --- `Security` gates that, and it is two shapes in one file: a string for
 --- functions and events, a `{ Read, Write }` table for properties. Only `None`
---- is reachable from ordinary Luau, so `the engineScriptSecurity` and
+--- is reachable from ordinary Luau, so `RobloxScriptSecurity` and
 --- `PluginSecurity` members are dropped -- a standard that demanded
 --- `SetTextFromInput` of an implementation would be describing the engine's
 --- internals rather than describing a UI.

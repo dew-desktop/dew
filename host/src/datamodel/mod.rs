@@ -1312,10 +1312,10 @@ pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> Lua
 impl UserData for InstanceRef {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         // `typeof(instance) == "Instance"` IS THE CONFORMANCE TEST, not a nicety.
-        // Aether picks its host with `the engineHost.available()`, which is exactly
-        // `typeof(game) == "Instance"` -- so a faithful DataModel here means
-        // Aether's existing host runs on Dew unmodified, with no Dew branch and
-        // no adapter.
+        // Aether picks its host with `DataModel.available()`, which asks whether
+        // what `Instance.new` builds is something `typeof` calls "Instance" -- so
+        // a faithful DataModel here means Aether's existing host runs on Dew
+        // unmodified, with no Dew branch and no adapter.
         //
         // A FIELD, NOT A METHOD. Luau's `typeof` reads `__type` as a STRING off
         // the metatable; registering a function there leaves it unread. And mlua
