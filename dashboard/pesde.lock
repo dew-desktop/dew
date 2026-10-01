@@ -5,31 +5,31 @@ name = "dew/dashboard"
 version = "0.0.1"
 target = "roblox"
 
-[graph."centau/vide@0.0.0-730e7398fc80d6b26b7aa0c761960498283850db roblox"]
-direct = ["vide", { repo = "https://github.com/es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }, "standard"]
+[graph."centau/vide@0.0.0-df9f00944e9e98297d21fafb64a76a16b0643fd5 roblox"]
+direct = ["vide", { repo = "https://github.com/es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }, "standard"]
 
-[graph."centau/vide@0.0.0-730e7398fc80d6b26b7aa0c761960498283850db roblox".pkg_ref]
+[graph."centau/vide@0.0.0-df9f00944e9e98297d21fafb64a76a16b0643fd5 roblox".pkg_ref]
 ref_ty = "git"
 repo = "https://github.com/es9-dev/vide"
-tree_id = "730e7398fc80d6b26b7aa0c761960498283850db"
+tree_id = "df9f00944e9e98297d21fafb64a76a16b0643fd5"
 new_structure = true
 
-[graph."spektr/aether@0.0.0-20aff265f082effbdf1dee26c23c6db7263eb919 roblox"]
-direct = ["aether", { repo = "https://github.com/project-aether-ui/aether", rev = "f9febda032464d5b20dd23e91b1cdeedda14730a" }, "standard"]
+[graph."spektr/aether@0.0.0-193d58b0e10e599f8f15c338f0a2b3f943770dfa roblox"]
+direct = ["aether", { repo = "https://github.com/project-aether-ui/aether", rev = "d10d08111f8095439144a0ae3a113578d68f934e" }, "standard"]
 
-[graph."spektr/aether@0.0.0-20aff265f082effbdf1dee26c23c6db7263eb919 roblox".dependencies]
-vide = ["centau/vide@0.0.0-730e7398fc80d6b26b7aa0c761960498283850db roblox", "peer"]
+[graph."spektr/aether@0.0.0-193d58b0e10e599f8f15c338f0a2b3f943770dfa roblox".dependencies]
+vide = ["centau/vide@0.0.0-df9f00944e9e98297d21fafb64a76a16b0643fd5 roblox", "peer"]
 Virtual = ["spektr/virtual@0.0.0-b956a128e07be89ff24225f8870a06741c79a993 roblox", "standard"]
 
-[graph."spektr/aether@0.0.0-20aff265f082effbdf1dee26c23c6db7263eb919 roblox".pkg_ref]
+[graph."spektr/aether@0.0.0-193d58b0e10e599f8f15c338f0a2b3f943770dfa roblox".pkg_ref]
 ref_ty = "git"
 repo = "https://github.com/project-aether-ui/aether"
-tree_id = "20aff265f082effbdf1dee26c23c6db7263eb919"
+tree_id = "193d58b0e10e599f8f15c338f0a2b3f943770dfa"
 new_structure = true
 
-[graph."spektr/aether@0.0.0-20aff265f082effbdf1dee26c23c6db7263eb919 roblox".pkg_ref.dependencies]
-vide = [{ repo = "https://github.com/es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }, "peer"]
-Virtual = [{ repo = "https://github.com/project-aether-ui/aether", rev = "f9febda032464d5b20dd23e91b1cdeedda14730a", path = "packages/virtual" }, "standard"]
+[graph."spektr/aether@0.0.0-193d58b0e10e599f8f15c338f0a2b3f943770dfa roblox".pkg_ref.dependencies]
+vide = [{ repo = "https://github.com/es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }, "peer"]
+Virtual = [{ repo = "https://github.com/project-aether-ui/aether", rev = "d10d08111f8095439144a0ae3a113578d68f934e", path = "packages/virtual" }, "standard"]
 
 [graph."spektr/virtual@0.0.0-b956a128e07be89ff24225f8870a06741c79a993 roblox".pkg_ref]
 ref_ty = "git"

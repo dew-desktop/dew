@@ -2,16 +2,26 @@ name = "dew/dashboard"
 version = "0.0.1"
 
 # NO LONGER FRAMEWORK-FREE, as of the tab bar's own migration onto
-# `Aether.Core.createTabs`. `Instance.new`, property assignment and `Parent`
-# still build the rest of the tree by hand; Aether owns exactly one thing
-# here, which tab is active and how a click or a keyboard press changes it.
+# `Aether.Tabs`. `Instance.new`, property assignment and `Parent` still build
+# the rest of the tree by hand; Aether owns exactly one thing here, which tab
+# is active and how a click or a keyboard press changes it.
+#
+# PINNED PAST MILESTONE 60, for `recipe()`/`createSlotRecipe`/`Dialog`/
+# `Slider` -- this sprint only wires a `Dom`-port adapter (`dom.luau`)
+# against the new pin, no `recipe()` call yet. `vide` moves alongside it:
+# aether's own `pesde.toml` at this rev declares a `vide` peer dependency at
+# a newer rev than the one this file previously pinned, and pesde resolves
+# peer dependencies against the consumer's own declared version, not
+# aether's -- an unmatched pin here would link two different vide copies
+# side by side, which is exactly what `[peer_dependencies]` exists to
+# prevent.
 [target]
 environment = "roblox"
 lib = "dashboard.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "f9febda032464d5b20dd23e91b1cdeedda14730a" }
-vide = { repo = "es9-dev/vide", rev = "caa0d6dd42ea882f5e27af379b504eb428014aab" }
+aether = { repo = "project-aether-ui/aether", rev = "d10d08111f8095439144a0ae3a113578d68f934e" }
+vide = { repo = "es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }
 
 [indices]
 default = "https://github.com/pesde-pkg/index"
