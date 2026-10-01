@@ -4,6 +4,7 @@
 	toolbar of buttons that change that layout while it runs.
 
 	    cargo run -- examples/widgets/flex-list-demo
+	    rojo serve examples/widgets/flex-list-demo
 
 	Plain DataModel: `Instance.new`, properties and `Activated`, nothing imported,
 	so the same file builds the same tree in a Roblox place. Nothing here
@@ -34,11 +35,30 @@
 	The line under the tray always says what the layout is set to.
 ]]
 
-local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
-
 local WIDTH, HEIGHT = 440, 320
 
-local root = widget({ width = WIDTH, height = HEIGHT })
+--- WHERE THE TREE GOES is the one thing that depends on the host. Dew installs
+--- `desktop`, and a widget of this size is the root. A Roblox place has no
+--- `desktop`, so the root is a Frame of the same size, centred in a ScreenGui
+--- in this player's PlayerGui, below the engine's top bar.
+local root: Instance
+if desktop then
+	local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
+	root = widget({ width = WIDTH, height = HEIGHT })
+else
+	local screen = Instance.new("ScreenGui")
+	screen.Name = "FlexListDemo"
+	screen.ResetOnSpawn = false
+	local frame = Instance.new("Frame")
+	frame.Name = "Root"
+	frame.AnchorPoint = Vector2.new(0.5, 0.5)
+	frame.Position = UDim2.fromScale(0.5, 0.5)
+	frame.Size = UDim2.fromOffset(WIDTH, HEIGHT)
+	frame.BackgroundTransparency = 1
+	frame.Parent = screen
+	screen.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+	root = frame
+end
 
 local TEXT = Color3.fromRGB(226, 232, 244)
 local MUTED = Color3.fromRGB(140, 152, 176)
@@ -235,3 +255,7 @@ local function describe()
 end
 flow.Changed:Connect(describe)
 describe()
+
+--- A Roblox ModuleScript must return exactly one value, so this file returns
+--- the card it built.
+return card

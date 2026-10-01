@@ -37,6 +37,44 @@ would build the same tree on any host implementing the DataModel.
 cargo run -- examples/widgets/nameplate
 ```
 
+### The same file on Roblox
+
+`flex-list-demo`, `flex-item-demo` and `grid-layout-demo` also run in Roblox
+Studio, from the same file. The only line that depends on the host is where the
+tree goes, and each file says it at the top:
+
+```luau
+local root: Instance
+if desktop then
+	root = desktop.Widget({ width = WIDTH, height = HEIGHT })
+else
+	-- a Frame of the same size, centred in a ScreenGui in the player's PlayerGui
+end
+```
+
+Dew installs `desktop`; a Roblox place does not. Nothing defines `game`, so
+Aether's own host check is unaffected. The file ends in `return card` because a
+Roblox ModuleScript must return exactly one value.
+
+Beside each file is a `default.project.json` and a `roblox.client.luau`. The
+project puts the demo in `ReplicatedStorage` as a ModuleScript and the entry in
+`StarterPlayerScripts` as a LocalScript, and the entry requires the demo. With
+[Rojo](https://rojo.space) 7.6 (pinned in `rokit.toml`), either serve it to a
+place open in Studio and press Play:
+
+```sh
+rojo serve examples/widgets/flex-list-demo
+```
+
+or build a place file and open that:
+
+```sh
+rojo build examples/widgets/flex-list-demo -o flex-list-demo.rbxl
+```
+
+CI builds every example that has a `default.project.json`. It cannot press
+Play, so whether the tree looks right in Studio is checked by a person.
+
 `flex-list-demo` lays out a tray of tag chips and its own toolbar with
 `UIListLayout` and positions nothing by hand. The toolbar's buttons change the
 tray's `Wraps`, `HorizontalFlex`, `VerticalFlex`, alignment and
@@ -46,6 +84,7 @@ chips land.
 ```sh
 cargo run -- examples/widgets/flex-list-demo
 cargo run -- test examples/widgets/flex-list-demo
+rojo serve examples/widgets/flex-list-demo
 ```
 
 `flex-item-demo` is a chat pane where each child decides its own share of a
@@ -58,6 +97,7 @@ clicks them and checks each width against the engine's.
 ```sh
 cargo run -- examples/widgets/flex-item-demo
 cargo run -- test examples/widgets/flex-item-demo
+rojo serve examples/widgets/flex-item-demo
 ```
 
 `grid-layout-demo` is an app launcher whose tiles are placed by one
@@ -70,6 +110,7 @@ the buttons and the tiles and checks where each tile lands.
 ```sh
 cargo run -- examples/widgets/grid-layout-demo
 cargo run -- test examples/widgets/grid-layout-demo
+rojo serve examples/widgets/grid-layout-demo
 ```
 
 ## `aether/`
@@ -118,7 +159,9 @@ strings, tests and installed packages left out. It lists every global the host
 installs that the engine has no counterpart for, and every manifest permission
 with no engine equivalent. Some entries do not decide the verdict: the surface
 an example parents its tree into, marked "mount", which a mount helper can
-replace, and Aether, which asks which host it is on and runs on both.
+replace, and Aether, which asks which host it is on and runs on both. Asking
+whether a global is there at all, as in `if desktop then`, is not counted as
+reaching it; what the branch then reaches is.
 
 **Set, and not read by Dew's renderer** walks the tree the example built. For
 every instance, and every property whose value differs from the reflection
