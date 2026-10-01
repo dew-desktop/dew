@@ -1567,9 +1567,12 @@ mod tests {
 
     /// What the suite in `dir` must add up to, counted from the case files
     /// themselves rather than from the runner: how many files the loader would
-    /// pick up, and how many of those declare `roblox` and `asserted` provenance.
+    /// pick up, how many name a `requires` feature missing from `SUPPORTS`, and,
+    /// of the rest, how many declare `roblox` and `asserted` provenance. An
+    /// unsupported case is counted only as unsupported, as the tally does.
     struct ExpectedTally {
         total: usize,
+        unsupported: usize,
         roblox: usize,
         asserted: usize,
     }
@@ -1577,6 +1580,7 @@ mod tests {
     fn expected_tally(dir: &Path) -> ExpectedTally {
         let mut tally = ExpectedTally {
             total: 0,
+            unsupported: 0,
             roblox: 0,
             asserted: 0,
         };
@@ -1591,30 +1595,51 @@ mod tests {
             tally.total += 1;
             let source = std::fs::read_to_string(&path)
                 .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
-            match declared_provenance(&source) {
-                Some("roblox") => tally.roblox += 1,
-                Some("asserted") => tally.asserted += 1,
-                Some(_) => {}
-                None => panic!("{} declares no provenance", path.display()),
+            let provenance = declared_provenance(&source)
+                .unwrap_or_else(|| panic!("{} declares no provenance", path.display()));
+            if declared_requires(&source)
+                .iter()
+                .any(|feature| !SUPPORTS.contains(feature))
+            {
+                tally.unsupported += 1;
+                continue;
+            }
+            match provenance {
+                "roblox" => tally.roblox += 1,
+                "asserted" => tally.asserted += 1,
+                _ => {}
             }
         }
         tally
     }
 
-    /// The value of the first `provenance = "..."` field in a case file.
-    fn declared_provenance(source: &str) -> Option<&str> {
+    /// The text after the first `field =` in a case file, or `None`.
+    fn after_field<'a>(source: &'a str, field: &str) -> Option<&'a str> {
         let mut rest = source;
-        while let Some(at) = rest.find("provenance") {
-            rest = &rest[at + "provenance".len()..];
-            let Some(value) = rest.trim_start().strip_prefix('=') else {
-                continue;
-            };
-            let Some(value) = value.trim_start().strip_prefix('"') else {
-                continue;
-            };
-            return value.find('"').map(|end| &value[..end]);
+        while let Some(at) = rest.find(field) {
+            rest = &rest[at + field.len()..];
+            if let Some(value) = rest.trim_start().strip_prefix('=') {
+                return Some(value.trim_start());
+            }
         }
         None
+    }
+
+    /// The value of the first `provenance = "..."` field in a case file.
+    fn declared_provenance(source: &str) -> Option<&str> {
+        let value = after_field(source, "provenance")?.strip_prefix('"')?;
+        value.find('"').map(|end| &value[..end])
+    }
+
+    /// The quoted names in the first `requires = { ... }` field in a case file,
+    /// read from the text rather than from the loader's parsed `requires`, so a
+    /// loader that dropped the field would show up as a mismatch here.
+    fn declared_requires(source: &str) -> Vec<&str> {
+        let Some(list) = after_field(source, "requires").and_then(|v| v.strip_prefix('{')) else {
+            return Vec::new();
+        };
+        let list = &list[..list.find('}').unwrap_or(list.len())];
+        list.split('"').skip(1).step_by(2).collect()
     }
 
     /// The counts are derived rather than written as literals because the cases
@@ -1635,27 +1660,33 @@ mod tests {
             dir.display()
         );
         assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
-        assert_eq!(summary.unsupported, 0, "expected 0 unsupported cases");
+        // A case naming a feature this runner does not claim reports unsupported
+        // rather than failing, until the feature joins `SUPPORTS`.
+        assert_eq!(
+            summary.unsupported, expected.unsupported,
+            "expected every case requiring a feature outside SUPPORTS to be unsupported"
+        );
         assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
         assert_eq!(summary.divergent, 0, "no documented gaps remain");
         assert_eq!(
             summary.verified_against_roblox, expected.roblox,
-            "expected every roblox case to be counted as verified"
+            "expected every supported roblox case to be counted as verified"
         );
         // An `asserted` case states a belief nobody has checked in Studio, so it
         // counts as an open question rather than as evidence.
         assert_eq!(
             summary.open_questions, expected.asserted,
-            "expected every asserted case to be counted as an open question"
+            "expected every supported asserted case to be counted as an open question"
         );
-        // Every case either passes or is an asserted case this implementation
-        // disagrees with; nothing else is allowed to fall through.
+        // Every case passes, is an asserted case this implementation disagrees
+        // with, or is unsupported; nothing else is allowed to fall through.
         assert_eq!(
-            summary.passed + summary.disagreed_open,
+            summary.passed + summary.disagreed_open + summary.unsupported,
             summary.total,
-            "expected {} passed plus {} disagreed open questions to cover all {} cases",
+            "expected {} passed plus {} disagreed open questions plus {} unsupported to cover all {} cases",
             summary.passed,
             summary.disagreed_open,
+            summary.unsupported,
             summary.total
         );
     }
