@@ -185,6 +185,25 @@ jobs:
       - name: Check that Dew's host depends on no framework
         run: lune run scripts/verify_boundaries.luau
 
+      # AN EXAMPLE THAT RUNS ON ROBLOX TOO carries a `default.project.json`, and
+      # this builds each one into a place file. It proves the project maps its
+      # files into a place; it does not run them, which needs Studio.
+      - name: Build every example that has a Rojo project
+        shell: bash
+        run: |
+          found=0
+          while IFS= read -r project; do
+            dir=$(dirname "$project")
+            echo "rojo build $dir"
+            rojo build "$dir" -o "$RUNNER_TEMP/$(basename "$dir").rbxl"
+            found=$((found + 1))
+          done < <(find examples -name default.project.json -not -path "*/roblox_packages/*" | sort)
+          if [ "$found" -eq 0 ]; then
+            echo "no example has a default.project.json, so this step checked nothing"
+            exit 1
+          fi
+          echo "built $found Rojo project(s)"
+
 
   build:
     name: Windows, build and render every example
