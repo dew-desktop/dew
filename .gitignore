@@ -30,6 +30,8 @@ Thumbs.db
 # be in the clone or the applet draws a missing-image box for everyone but its author.
 # Milestone 2 sprint 4 added the first one.
 !applets/*/*.png
+# The same for the images gallery scenes name as `mod://assets/...`.
+!gallery/assets/*.png
 
 
 # pesde install output

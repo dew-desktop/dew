@@ -7,20 +7,11 @@
 
 	A gallery scene, not a conformance case. It asserts nothing about the engine.
 
-	WHAT THIS SCENE CURRENTLY SHOWS, and it is not what it was written to show:
-	the `Wrapped` label does NOT wrap. `TextWrapped` grows the element's box in
-	layout -- `text_wrapping_grows_height` passes on that -- but the display list
-	carries no wrapped flag and `fill_text` does no line breaking, so the painted
-	string is a single clipped line.
-
-	Left in deliberately. The gallery's whole job is to show what the host
-	actually draws, and a scene edited to hide a gap is a scene that lies. This
-	is reported as a finding rather than fixed here; fixing it is not this
-	sprint's scope.
+	The `Wrapped` label breaks its sentence across two lines inside its box.
 ]]
 return {
 	name = "TextLabel: colour, size and alignment",
-	shows = "The same font at four alignments and transparencies -- and a TextWrapped label that does NOT wrap, painting one clipped line while its box grows.",
+	shows = "The same font at four alignments and transparencies, and a TextWrapped label breaking its sentence across two lines.",
 	surface = { width = 300, height = 160 },
 
 	variants = {
@@ -30,8 +21,6 @@ return {
 		{ node = "Centred", prop = "TextXAlignment", value = { "Enum", "TextXAlignment", "Left" } },
 		{ node = "Centred", prop = "TextYAlignment", value = { "Enum", "TextYAlignment", "Top" } },
 		{ node = "Faded", prop = "TextTransparency", value = 0 },
-		--- EXPECTED TO CHANGE NOTHING. The box grows in layout but the painted
-		--- string is one clipped line either way; see this file's header.
 		{ node = "Wrapped", prop = "TextWrapped", value = false },
 	},
 

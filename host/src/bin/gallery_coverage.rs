@@ -1,7 +1,8 @@
 //! How much of the property surface the gallery actually shows.
 //!
 //! `datamodel-surface` answers "does the host accept this". This answers "does
-//! anything show it doing something", and the gap between the two is the point.
+//! anything show it doing something", per (class, property) pair, and the gap
+//! between the two is the point.
 //!
 //!     cargo run --bin gallery-coverage                  # the number
 //!     cargo run --bin gallery-coverage -- --render      # write the PNGs too
@@ -10,6 +11,7 @@
 
 use dew_host::gallery;
 use mlua::Lua;
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 fn main() {
@@ -69,12 +71,12 @@ fn main() {
         }
     }
 
-    // THE DIFFERENTIAL PASS repaints every scene twice per variant, so it is
+    // THE DIFFERENTIAL PASS repaints every scene once per variant, so it is
     // opt-out rather than always-on -- but it is the number that matters, so it
     // runs by default and `--no-diff` skips it for a quick coverage read.
     let skip_diff = args.iter().any(|a| a == "--no-diff");
-    let (moved, inert) = if skip_diff {
-        (Default::default(), Vec::new())
+    let diff = if skip_diff {
+        gallery::Differential::default()
     } else {
         match gallery::differential(&scenes) {
             Ok(r) => r,
@@ -84,9 +86,13 @@ fn main() {
             }
         }
     };
+    let moved: BTreeSet<gallery::Pair> = diff.moved.keys().cloned().collect();
 
     let cov = gallery::coverage_with_moved(&scenes, &moved);
 
+    // EVERY FIGURE IS (class, property) PAIRS. Counted by name, `Color` moving
+    // on a `UIGradient` credited `UIStroke.Color`, and one horizontal list
+    // moving `VerticalAlignment` credited it in scenes where it was inert.
     println!();
     println!(
         "GALLERY: {} scene(s), {} class(es)",
@@ -94,19 +100,10 @@ fn main() {
         gallery::classes_used(&scenes).len()
     );
     println!(
-        "DEMONSTRATED: {} of {} in-scope properties ({:.0}%)",
+        "DEMONSTRATED: {} of {} in-scope (class, property) pairs ({:.0}%)",
         cov.count(),
         cov.total(),
         100.0 * cov.count() as f64 / cov.total() as f64
-    );
-
-    // THE FINER FIGURE, kept beside the headline because counting by name is
-    // exactly how one class's answer once masked another's and the surface read
-    // 100%. `Color` demonstrated on `UIGradient` says nothing about
-    // `UIStroke.Color`, and the by-name number cannot tell them apart.
-    println!(
-        "  by class and property: {} of {} pairs",
-        cov.pairs_demonstrated, cov.pairs_in_scope
     );
 
     if !skip_diff {
@@ -114,7 +111,7 @@ fn main() {
         // ignores; "differential" is not, because the image has to change.
         let checked = cov.differential.len() + cov.excused.len();
         println!(
-            "DIFFERENTIAL: {} of {} moved pixels when changed, {} excused with a reason",
+            "DIFFERENTIAL: {} of {} pairs moved pixels when changed, {} excused with a reason",
             cov.differential.len(),
             cov.total(),
             cov.excused.len()
@@ -127,11 +124,11 @@ fn main() {
 
         // A VARIANT THAT MOVED NOTHING IS THE MOST INTERESTING LINE HERE. The
         // property reached the host and did not reach the pixels, which is
-        // exactly the gap this milestone exists to surface.
-        if !inert.is_empty() {
+        // exactly the gap the differential exists to surface.
+        if !diff.inert.is_empty() {
             println!();
-            println!("CHANGED NOTHING ({}):", inert.len());
-            for line in &inert {
+            println!("CHANGED NOTHING ({}):", diff.inert.len());
+            for line in &diff.inert {
                 println!("  {line}");
             }
         }
@@ -144,7 +141,7 @@ fn main() {
     println!("BY PILLAR:");
     for (pillar, (n, props)) in gallery::by_pillar(&dir, &scenes) {
         let note = if n == 0 { "   <- no scenes yet" } else { "" };
-        println!("  {pillar:<12} {n:>2} scene(s), {props:>3} propert(ies){note}");
+        println!("  {pillar:<12} {n:>2} scene(s), {props:>3} pair(s){note}");
     }
 
     if list_scenes {
@@ -164,11 +161,16 @@ fn main() {
     // percentage tells you to feel bad without telling you what to do.
     println!();
     println!(
-        "  {} property name(s) not demonstrated by any scene",
+        "  {} (class, property) pair(s) not demonstrated by any scene",
         cov.missing.len()
     );
     if list_missing {
-        for chunk in cov.missing.chunks(6) {
+        let names: Vec<String> = cov
+            .missing
+            .iter()
+            .map(|(c, p)| format!("{c}.{p}"))
+            .collect();
+        for chunk in names.chunks(4) {
             println!("    {}", chunk.join(", "));
         }
     } else if !cov.missing.is_empty() {

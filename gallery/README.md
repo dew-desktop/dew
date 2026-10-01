@@ -5,7 +5,7 @@ person looks at.
 
 `datamodel-surface` reports what the host ACCEPTS -- 139 of 139 in-scope
 properties. That says none of them is rejected. It does not say any of them
-draws anything. This is what says that.
+draws anything. This is what shows that, class by class.
 
     cargo run --bin gallery-coverage               # both numbers
     cargo run --bin gallery-coverage -- --render   # write the PNGs too
@@ -20,25 +20,37 @@ day this was written.
 
 ## Two numbers, and the second is the one that matters
 
-    DEMONSTRATED: 32 of 139   a scene SETS the property
-    DIFFERENTIAL: 22 of 139   changing it MOVED PIXELS
+    DEMONSTRATED: 190 of 471   a scene SETS the property on that class
+    DIFFERENTIAL: 180 of 471   changing it on that class MOVED PIXELS
+
+Both count (class, property) pairs, not names. `Padding` moving pixels on a
+`UIListLayout` says nothing about `Padding` on a `UITableLayout`, and a count by
+name would credit both.
 
 `DEMONSTRATED` is satisfied by a property the renderer ignores entirely: setting
-it changes nothing and nobody looks. `DIFFERENTIAL` renders the scene twice --
-once with one property changed -- and asks whether the image moved. That cannot
-be satisfied by a property that does nothing.
+it changes nothing and nobody looks. `DIFFERENTIAL` renders the scene once as
+written and once per variant, with one property changed on one node, and asks
+whether the image moved. That cannot be satisfied by a property that does
+nothing.
 
-The difference is not academic. Switching `BackgroundColor3` off in the renderer
-leaves `DEMONSTRATED` at 32 and drops `DIFFERENTIAL` from 22 to 10.
+**A variant that changes nothing is reported, not swallowed,** with the class and
+property it was on. It is the most useful line in the report: the property
+reached the host and did not reach the pixels.
 
-**A variant that changes nothing is reported, not swallowed.** It is the most
-useful line in the report: the property reached the host and did not reach the
-pixels. Three currently do, and each is a real gap rather than a scene defect --
-`TextWrapped`, `TextTransparency` and `UIListLayout.HorizontalAlignment`.
-
-Some properties cannot move a pixel on their own -- `Name`, `Parent`, `Active`,
-`InputSink` -- and are excused in `CANNOT_DIFFER` with a stated reason. A reason,
+Some properties cannot move a pixel on their own: `Parent`, `Active` and
+`InputSink`. They are excused in `CANNOT_DIFFER` with a stated reason. A reason,
 not a name: a bare entry is indistinguishable from something nobody got round to.
+
+## What the renderer claims is held to this
+
+`dew_host::datamodel::render::honours` answers, per class and property, whether
+Dew's renderer reads it, and `docs/datamodel_scope.md` prints its answers. A test
+beside it fails on any claim without evidence: a variant here that moved pixels
+on that class, a passing engine-verified conformance case that sets the property
+on that class, or an entry in `CANNOT_DIFFER`. A renderer change that makes a
+claim true needs a variant here to show it.
+
+Scenes name images as `mod://assets/...`, resolved against this directory.
 
 ## Adding a scene
 
@@ -129,12 +141,8 @@ the ugly informative cases get sanded off.
 
 ## Scenes show gaps rather than hiding them
 
-Two scenes currently demonstrate that something does NOT work, and say so in
-their header:
+A scene that demonstrates something does NOT work says so in its header:
 
-- `text/text_labels_and_alignment.luau` -- `TextWrapped` grows the element's box
-  but the painted string is one clipped line. The display list carries no
-  wrapped flag and `fill_text` does no line breaking.
 - `paint/frame_backgrounds_and_corners.luau` -- `UICorner` with a scale radius
   does not round, because `corner_radius` returns the offset and drops the
   scale.
