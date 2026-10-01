@@ -21,16 +21,21 @@
 //! changing a line. Building a `Frame` here and handing it to the same painter is
 //! using that seam as intended rather than going around it.
 //!
-//! THIS IS THE DEMO PATH, NOT THE PARITY PATH, and the distinction is the whole
-//! reason it is affordable now. It resolves offset and scale against the parent,
-//! applies `AnchorPoint`, honours `Visible`, `ZIndex`, `ClipsDescendants`,
-//! `UICorner` and `UIStroke`, draws text, and draws an image. It does NOT do
-//! `AutomaticSize`, `UIListLayout`, gradients, or any of the constraints. Those
-//! are `conformance/LAYOUT.md`'s subject and they arrive with the Rust
-//! conformance runner that can hold them to the engine's own answers --
-//! `AutomaticSize` alone cost four wrong rules in Aether, each fitting every case
-//! that existed when it was written, and reimplementing it here from memory would
-//! be the fifth.
+//! WHAT IT PLACES. It resolves offset and scale against the parent, applies
+//! `AnchorPoint`, honours `Visible`, `ZIndex`, `ClipsDescendants`, `UIPadding`
+//! (offsets only), `UICorner`, `UIStroke` and `UIGradient`, grows elements by
+//! `AutomaticSize`, scrolls a `ScrollingFrame`, draws text, and draws an image.
+//!
+//! `UIListLayout` is placed in full: `FillDirection`, `SortOrder`, `Padding`
+//! (scale and offset), alignment on both axes, `Wraps`, `HorizontalFlex` and
+//! `VerticalFlex`, and `ItemLineAlignment`, and it reports
+//! `AbsoluteContentSize`. Each rule is held to an engine-verified case in
+//! `conformance/cases`, and the rules no case pins down say so where they are
+//! written.
+//!
+//! IT DOES NOT DO `UIFlexItem`, `UIGridLayout`, `UITableLayout`,
+//! `UIPageLayout`, or any of the constraints. They are skipped as modifiers, so a
+//! tree that uses one draws as though it were absent.
 //!
 //! WHAT AN IMAGE HONOURS, STATED THE SAME WAY. `Image`, `ImageContent`,
 //! `ImageColor3`, `ImageTransparency`, `ImageRectOffset`, `ImageRectSize`, and
@@ -224,7 +229,8 @@ fn list_layout_of(dom: &Dom, id: usize) -> Option<usize> {
 /// `anchor_point_after_automatic_size` was opened in Studio to confirm.
 ///
 /// `laid_out` marks an element positioned by a layout container (`UIListLayout`).
-/// Its own `Position` is ignored per LAYOUT.md section 4.
+/// Its own `Position` is ignored per LAYOUT.md section 4, and so is its
+/// `AnchorPoint` on both axes (`uilistlayout_ignores_a_child_anchor_point`).
 fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
     let (sxs, sxo, sys, syo) = udim2(dom, id, "Size");
     let (pxs, pxo, pys, pyo) = if laid_out {
@@ -232,7 +238,11 @@ fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
     } else {
         udim2(dom, id, "Position")
     };
-    let anchor = vector2(dom, id, "AnchorPoint");
+    let anchor = if laid_out {
+        Vector2::new(0.0, 0.0)
+    } else {
+        vector2(dom, id, "AnchorPoint")
+    };
 
     let w = sxs * parent.w + sxo;
     let h = sys * parent.h + syo;
@@ -645,6 +655,32 @@ pub struct SolvedItem {
     pub z_index: i32,
 }
 
+/// Everything one solve produces: the placed elements, in walk order, and the
+/// `AbsoluteContentSize` of every `UIListLayout` that placed children.
+///
+/// DEREFS TO THE ELEMENTS because the walk indexes, pushes and truncates them
+/// everywhere; the content sizes ride along. A subtree placed twice (after
+/// AutomaticSize grows its parent) appends a second content size for the same
+/// layout, and the later one is the answer.
+#[derive(Default)]
+pub struct Solved {
+    pub items: Vec<SolvedItem>,
+    pub content_sizes: Vec<(usize, Vector2)>,
+}
+
+impl std::ops::Deref for Solved {
+    type Target = Vec<SolvedItem>;
+    fn deref(&self) -> &Self::Target {
+        &self.items
+    }
+}
+
+impl std::ops::DerefMut for Solved {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.items
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn grow(
     dom: &Dom,
@@ -791,6 +827,11 @@ fn grow(
     (entry_rect, did_x, did_y)
 }
 
+/// Place one element and everything under it.
+///
+/// `forced` is a width and a height a list layout has already decided for this
+/// element (flex `Fill`, `ItemLineAlignment.Stretch`). A forced axis replaces
+/// the authored size and AutomaticSize does not grow it again.
 #[allow(clippy::too_many_arguments)]
 fn visit(
     dom: &Dom,
@@ -801,13 +842,20 @@ fn visit(
     depth: usize,
     laid_out: bool,
     offered: Box2,
-    out: &mut Vec<SolvedItem>,
+    forced: (Option<f32>, Option<f32>),
+    out: &mut Solved,
 ) {
     if boolean(dom, id, "Visible") == Some(false) {
         return;
     }
 
-    let rect = solve_rect(dom, id, parent_box, laid_out);
+    let mut rect = solve_rect(dom, id, parent_box, laid_out);
+    if let Some(w) = forced.0 {
+        rect.w = w.max(0.0);
+    }
+    if let Some(h) = forced.1 {
+        rect.h = h.max(0.0);
+    }
     let z = number(dom, id, "ZIndex").unwrap_or(1.0) as i32;
     let entry_idx = out.len();
     out.push(SolvedItem {
@@ -841,7 +889,9 @@ fn visit(
         };
 
     let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
-    let (grow_x, grow_y) = automatic_axes(dom, id);
+    let (auto_x, auto_y) = automatic_axes(dom, id);
+    let grow_x = auto_x && forced.0.is_none();
+    let grow_y = auto_y && forced.1.is_none();
     let children_from = out.len();
 
     let (canvas_w, canvas_h) = if is_scrolling_frame {
@@ -863,6 +913,7 @@ fn visit(
             child_clip,
             child_clip_radius,
             depth,
+            (false, false),
             out,
         );
 
@@ -916,6 +967,7 @@ fn visit(
                         child_clip,
                         child_clip_radius,
                         depth,
+                        (false, false),
                         out,
                     );
                 }
@@ -923,7 +975,16 @@ fn visit(
         }
         (cw, ch)
     } else {
-        place_children(dom, id, box_rect, child_clip, child_clip_radius, depth, out);
+        place_children(
+            dom,
+            id,
+            box_rect,
+            child_clip,
+            child_clip_radius,
+            depth,
+            (grow_x, grow_y),
+            out,
+        );
         (0.0, 0.0)
     };
 
@@ -950,8 +1011,8 @@ fn visit(
     let grew_w = out[entry_idx].rect.w > before_w;
     let grew_h = out[entry_idx].rect.h > before_h;
 
-    // AnchorPoint post-growth adjustment
-    if grew_w || grew_h {
+    // AnchorPoint post-growth adjustment. A laid-out element has no anchor.
+    if (grew_w || grew_h) && !laid_out {
         let anchor = vector2(dom, id, "AnchorPoint");
         let dx = if grew_w {
             (out[entry_idx].rect.w - before_w) * anchor.x
@@ -973,9 +1034,15 @@ fn visit(
         }
     }
 
-    // Re-placement: if any descendant depends on an axis that grew via scale
-    if grew_w || grew_h {
-        let mut dependent = false;
+    // Re-placement: if any descendant depends on an axis that grew via scale,
+    // or a list was measured packed against the start of an axis AutomaticSize
+    // owns and has to be placed again in the box it grew into.
+    let mut dependent = (grow_x || grow_y)
+        && !is_scrolling_frame
+        && list_layout_of(dom, id)
+            .map(|layout| ListLayout::read(dom, layout, box_rect).measured_packed(grow_x, grow_y))
+            .unwrap_or(false);
+    if (grew_w || grew_h) && !dependent {
         for item in &out[children_from..] {
             let (sxs, _, sys, _) = udim2(dom, item.id, "Size");
             if (grew_w && sxs != 0.0) || (grew_h && sys != 0.0) {
@@ -983,19 +1050,20 @@ fn visit(
                 break;
             }
         }
-        if dependent {
-            out.truncate(children_from);
-            let grown_box = content_box(dom, id, out[entry_idx].rect);
-            place_children(
-                dom,
-                id,
-                grown_box,
-                child_clip,
-                child_clip_radius,
-                depth,
-                out,
-            );
-        }
+    }
+    if dependent {
+        out.truncate(children_from);
+        let grown_box = content_box(dom, id, out[entry_idx].rect);
+        place_children(
+            dom,
+            id,
+            grown_box,
+            child_clip,
+            child_clip_radius,
+            depth,
+            (false, false),
+            out,
+        );
     }
 
     // ScrollingFrame scroll shift: applied AFTER children have resolved their sizes
@@ -1019,39 +1087,230 @@ fn visit(
     report_auto(dom, id, grow_x, grow_y, did_x, did_y);
 }
 
-/// Which end of the cross axis a `UIListLayout` gathers its children against.
+/// Where a run gathers along one axis when it has room to spare.
 ///
 /// `Left` and `Top` are the same answer on different axes, and the engine spells
 /// them differently for the two enums, so both map onto one three-way.
 #[derive(Clone, Copy, PartialEq)]
-enum CrossAlign {
+enum Gather {
     Start,
     Center,
     End,
 }
 
-fn alignment_of(dom: &Dom, layout_id: usize, property: &str) -> CrossAlign {
-    let Some(Variant::Enum(raw)) = dom.styled_property(layout_id, property) else {
-        return CrossAlign::Start;
-    };
-    match super::enums::item_by_value(property, raw.to_u32()).map(|item| item.name) {
-        Some("Center") => CrossAlign::Center,
-        Some("Right") | Some("Bottom") => CrossAlign::End,
-        // `Left`, `Top`, and anything a newer build adds that this does not know.
-        _ => CrossAlign::Start,
+impl Gather {
+    /// How far from the start of an axis a run begins, given the room left over.
+    /// `free` may be negative: an overflowing centred run starts before the
+    /// edge rather than being clamped to it (`uilistlayout_center_overflow_is_not_clamped`).
+    fn offset(self, free: f32) -> f32 {
+        match self {
+            Gather::Start => 0.0,
+            Gather::Center => free / 2.0,
+            Gather::End => free,
+        }
     }
 }
 
-/// How far to move a placed child along the cross axis to satisfy the alignment.
-fn cross_shift(align: CrossAlign, slot_start: f32, slot_len: f32, at: f32, len: f32) -> f32 {
-    let target = match align {
-        CrossAlign::Start => slot_start,
-        CrossAlign::Center => slot_start + (slot_len - len) / 2.0,
-        CrossAlign::End => slot_start + slot_len - len,
+/// The name of an enum property's current item, if it has one this host knows.
+fn enum_name(dom: &Dom, id: usize, property: &str, enum_type: &str) -> Option<&'static str> {
+    let Some(Variant::Enum(raw)) = dom.styled_property(id, property) else {
+        return None;
     };
-    target - at
+    super::enums::item_by_value(enum_type, raw.to_u32()).map(|item| item.name)
 }
 
+fn gather_of(dom: &Dom, layout_id: usize, property: &str) -> Gather {
+    match enum_name(dom, layout_id, property, property) {
+        Some("Center") => Gather::Center,
+        Some("Right") | Some("Bottom") => Gather::End,
+        // `Left`, `Top`, and anything a newer build adds that this does not know.
+        _ => Gather::Start,
+    }
+}
+
+/// `Enum.UIFlexAlignment`: how a run shares the room left over on one axis.
+#[derive(Clone, Copy, PartialEq)]
+enum Flex {
+    None,
+    Fill,
+    SpaceAround,
+    SpaceBetween,
+    SpaceEvenly,
+}
+
+fn flex_of(dom: &Dom, layout_id: usize, property: &str) -> Flex {
+    match enum_name(dom, layout_id, property, "UIFlexAlignment") {
+        Some("Fill") => Flex::Fill,
+        Some("SpaceAround") => Flex::SpaceAround,
+        Some("SpaceBetween") => Flex::SpaceBetween,
+        Some("SpaceEvenly") => Flex::SpaceEvenly,
+        _ => Flex::None,
+    }
+}
+
+/// `Enum.ItemLineAlignment`: where a child sits across its own line.
+#[derive(Clone, Copy, PartialEq)]
+enum ItemLine {
+    /// Follows the cross-axis alignment property.
+    Automatic,
+    At(Gather),
+    Stretch,
+}
+
+/// A `UIListLayout`, read once per placement and expressed along its own axes:
+/// "main" is `FillDirection`, "cross" is the other one.
+struct ListLayout {
+    horizontal: bool,
+    /// `Padding`, resolved. The scale is a fraction of the content box along
+    /// the main axis (`uilistlayout_padding_scale_horizontal`, `_vertical`).
+    gap: f32,
+    main_gather: Gather,
+    cross_gather: Gather,
+    main_flex: Flex,
+    cross_flex: Flex,
+    item_line: ItemLine,
+    wraps: bool,
+    by_name: bool,
+}
+
+impl ListLayout {
+    fn read(dom: &Dom, layout_id: usize, box_rect: Box2) -> ListLayout {
+        let horizontal =
+            enum_name(dom, layout_id, "FillDirection", "FillDirection") == Some("Horizontal");
+        let across = gather_of(dom, layout_id, "HorizontalAlignment");
+        let down = gather_of(dom, layout_id, "VerticalAlignment");
+        let across_flex = flex_of(dom, layout_id, "HorizontalFlex");
+        let down_flex = flex_of(dom, layout_id, "VerticalFlex");
+        let (main_gather, cross_gather, main_flex, cross_flex) = if horizontal {
+            (across, down, across_flex, down_flex)
+        } else {
+            (down, across, down_flex, across_flex)
+        };
+        let (scale, offset) = udim(dom, layout_id, "Padding");
+        let main_len = if horizontal { box_rect.w } else { box_rect.h };
+        let item_line = match enum_name(dom, layout_id, "ItemLineAlignment", "ItemLineAlignment") {
+            Some("Start") => ItemLine::At(Gather::Start),
+            Some("Center") => ItemLine::At(Gather::Center),
+            Some("End") => ItemLine::At(Gather::End),
+            Some("Stretch") => ItemLine::Stretch,
+            _ => ItemLine::Automatic,
+        };
+        ListLayout {
+            horizontal,
+            gap: scale * main_len + offset,
+            main_gather,
+            cross_gather,
+            main_flex,
+            cross_flex,
+            item_line,
+            wraps: boolean(dom, layout_id, "Wraps") == Some(true),
+            // NAME IS THE DEFAULT on every layout class, and an unreadable
+            // value is treated as the default. `Custom` names a sort function
+            // the host has no way to receive, so it falls back to LayoutOrder,
+            // which is what this solver did for every value before; that
+            // fallback is unverified.
+            by_name: !matches!(
+                enum_name(dom, layout_id, "SortOrder", "SortOrder"),
+                Some("LayoutOrder") | Some("Custom")
+            ),
+        }
+    }
+
+    /// Would placing the children in a longer box along an AutomaticSize axis
+    /// move them? If so the first placement packs them against the start of
+    /// that axis, so the measured size is the content's own, and they are
+    /// placed again once the box has grown.
+    fn measured_packed(&self, grow_x: bool, grow_y: bool) -> bool {
+        let (grow_main, grow_cross) = if self.horizontal {
+            (grow_x, grow_y)
+        } else {
+            (grow_y, grow_x)
+        };
+        let main = self.wraps || self.main_gather != Gather::Start || self.main_flex != Flex::None;
+        let cross = self.cross_gather != Gather::Start || self.cross_flex != Flex::None;
+        (grow_main && main) || (grow_cross && cross)
+    }
+}
+
+/// Share an axis of length `avail` among `sizes`, in order: each one's start,
+/// and its length after flex.
+///
+/// The same rule serves a line of children along the main axis and the lines
+/// of a wrapped list across the cross axis.
+///
+/// What the verified cases pin down: `None` packs the run with `gap` between and
+/// gathers it by `gather`; `Fill` keeps `gap`, grows each by an equal share of
+/// the room left, and shrinks an overflow in proportion to each size; the three
+/// `Space` values ignore `gap` and share the room left as their names say; a
+/// single child under `SpaceAround` or `SpaceEvenly` is centred.
+///
+/// UNVERIFIED, each the simplest rule that agrees with every case:
+/// a single child under `SpaceBetween` gathers as `None` does (the case has it
+/// at the start, which is also where `Left` puts it); a `Space` value with no
+/// room left over behaves as `None`; and the lines of a wrapped list take the
+/// same rule across the cross axis, `gap` included.
+fn distribute(sizes: &[f32], avail: f32, gap: f32, flex: Flex, gather: Gather) -> Vec<(f32, f32)> {
+    let n = sizes.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let sum: f32 = sizes.iter().sum();
+    let packed = |sizes: &[f32], start: f32| {
+        let mut at = start;
+        sizes
+            .iter()
+            .map(|&s| {
+                let slot = (at, s);
+                at += s + gap;
+                slot
+            })
+            .collect::<Vec<_>>()
+    };
+    let spaced = |first: f32, between: f32| {
+        let mut at = first;
+        sizes
+            .iter()
+            .map(|&s| {
+                let slot = (at, s);
+                at += s + between;
+                slot
+            })
+            .collect::<Vec<_>>()
+    };
+    let room = avail - sum;
+    let count = n as f32;
+    match flex {
+        Flex::Fill => {
+            let free = avail - sum - gap * (count - 1.0);
+            let filled: Vec<f32> = if free > 0.0 {
+                sizes.iter().map(|s| s + free / count).collect()
+            } else if free < 0.0 && sum > 0.0 {
+                sizes
+                    .iter()
+                    .map(|s| (s + free * s / sum).max(0.0))
+                    .collect()
+            } else {
+                sizes.to_vec()
+            };
+            packed(&filled, 0.0)
+        }
+        Flex::SpaceBetween if room > 0.0 && n > 1 => spaced(0.0, room / (count - 1.0)),
+        Flex::SpaceAround if room > 0.0 => spaced(room / count / 2.0, room / count),
+        Flex::SpaceEvenly if room > 0.0 => spaced(room / (count + 1.0), room / (count + 1.0)),
+        _ => {
+            let run = sum + gap * (count - 1.0);
+            packed(sizes, gather.offset(avail - run))
+        }
+    }
+}
+
+/// Lay out the children of `id` inside `box_rect`.
+///
+/// `measuring` names the axes AutomaticSize is about to grow. On those axes a
+/// list packs against the start, without flex or wrapping, so what the parent
+/// measures is the content's own size; `visit` places the list again in the box
+/// it grew into. See `ListLayout::measured_packed`.
+#[allow(clippy::too_many_arguments)]
 fn place_children(
     dom: &Dom,
     id: usize,
@@ -1059,108 +1318,21 @@ fn place_children(
     child_clip: Option<Box2>,
     child_clip_radius: f32,
     depth: usize,
-    out: &mut Vec<SolvedItem>,
+    measuring: (bool, bool),
+    out: &mut Solved,
 ) {
     if let Some(layout_id) = list_layout_of(dom, id) {
-        let (_, pad_offset) = udim(dom, layout_id, "Padding");
-        let is_horizontal =
-            if let Some(Variant::Enum(raw)) = dom.styled_property(layout_id, "FillDirection") {
-                super::enums::item_by_value("FillDirection", raw.to_u32())
-                    .map(|item| item.name == "Horizontal")
-                    .unwrap_or(false)
-            } else {
-                false
-            };
-
-        let align_x = alignment_of(dom, layout_id, "HorizontalAlignment");
-        let align_y = alignment_of(dom, layout_id, "VerticalAlignment");
-
-        let mut kids: Vec<(usize, i32, usize)> = Vec::new();
-        for (idx, child) in dom.children(id).iter().copied().enumerate() {
-            let Some(class) = dom.class_of(child) else {
-                continue;
-            };
-            if is_modifier(&class) {
-                continue;
-            }
-            let order = number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32;
-            kids.push((child, order, idx));
-        }
-        kids.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
-
-        let mut cursor = 0.0;
-        for (child, _, _) in kids {
-            let slot = if is_horizontal {
-                Box2 {
-                    x: box_rect.x + cursor,
-                    y: box_rect.y,
-                    w: box_rect.w,
-                    h: box_rect.h,
-                }
-            } else {
-                Box2 {
-                    x: box_rect.x,
-                    y: box_rect.y + cursor,
-                    w: box_rect.w,
-                    h: box_rect.h,
-                }
-            };
-            let before = out.len();
-            visit(
-                dom,
-                child,
-                slot,
-                child_clip,
-                child_clip_radius,
-                depth + 1,
-                true,
-                box_rect,
-                out,
-            );
-            if out.len() > before {
-                // ALIGNMENT SHIFTS THE RUN ON THE CROSS AXIS, after the child has
-                // resolved its own size against the full slot. Doing it before
-                // would change what a `Scale` size resolves against, which is a
-                // different behaviour wearing the same name.
-                //
-                // The host accepted `HorizontalAlignment` and `VerticalAlignment`
-                // and the solver read neither, so a centred list drew flush to
-                // the corner. Found by the gallery's differential pass.
-                let placed_rect = out[before].rect;
-                let cross = if is_horizontal {
-                    cross_shift(
-                        align_y,
-                        box_rect.y,
-                        box_rect.h,
-                        placed_rect.y,
-                        placed_rect.h,
-                    )
-                } else {
-                    cross_shift(
-                        align_x,
-                        box_rect.x,
-                        box_rect.w,
-                        placed_rect.x,
-                        placed_rect.w,
-                    )
-                };
-                if cross != 0.0 {
-                    for item in out[before..].iter_mut() {
-                        if is_horizontal {
-                            item.rect.y += cross;
-                        } else {
-                            item.rect.x += cross;
-                        }
-                    }
-                }
-                let placed_rect = out[before].rect;
-                cursor += (if is_horizontal {
-                    placed_rect.w
-                } else {
-                    placed_rect.h
-                }) + pad_offset;
-            }
-        }
+        place_list(
+            dom,
+            id,
+            layout_id,
+            box_rect,
+            child_clip,
+            child_clip_radius,
+            depth,
+            measuring,
+            out,
+        );
     } else {
         for child in dom.children(id) {
             let Some(class) = dom.class_of(child) else {
@@ -1178,16 +1350,251 @@ fn place_children(
                 depth + 1,
                 false,
                 box_rect,
+                (None, None),
                 out,
             );
         }
     }
 }
 
+/// One child of a list: which node, and its size before the list flexes it,
+/// along the list's own axes.
+struct Entry {
+    id: usize,
+    main: f32,
+    cross: f32,
+}
+
+/// The size a child asks for before a list moves or flexes it: (width, height).
+///
+/// A child sized only by `Size` resolves without visiting its subtree. One that
+/// AutomaticSize grows has to be visited to be measured, and is visited again
+/// when it is placed; that second walk is the price of knowing the run's
+/// length before placing its first member.
+fn basis_of(dom: &Dom, child: usize, box_rect: Box2, depth: usize) -> Option<(f32, f32)> {
+    if boolean(dom, child, "Visible") == Some(false) {
+        return None;
+    }
+    let (auto_x, auto_y) = automatic_axes(dom, child);
+    if !auto_x && !auto_y {
+        let r = solve_rect(dom, child, box_rect, true);
+        return Some((r.w, r.h));
+    }
+    let mut scratch = Solved::default();
+    visit(
+        dom,
+        child,
+        box_rect,
+        None,
+        0.0,
+        depth,
+        true,
+        box_rect,
+        (None, None),
+        &mut scratch,
+    );
+    scratch.items.first().map(|item| (item.rect.w, item.rect.h))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn place_list(
+    dom: &Dom,
+    id: usize,
+    layout_id: usize,
+    box_rect: Box2,
+    child_clip: Option<Box2>,
+    child_clip_radius: f32,
+    depth: usize,
+    measuring: (bool, bool),
+    out: &mut Solved,
+) {
+    let list = ListLayout::read(dom, layout_id, box_rect);
+    let horizontal = list.horizontal;
+    let (main_len, cross_len) = if horizontal {
+        (box_rect.w, box_rect.h)
+    } else {
+        (box_rect.h, box_rect.w)
+    };
+    let (measuring_main, measuring_cross) = if horizontal {
+        measuring
+    } else {
+        (measuring.1, measuring.0)
+    };
+    let (main_flex, main_gather) = if measuring_main {
+        (Flex::None, Gather::Start)
+    } else {
+        (list.main_flex, list.main_gather)
+    };
+    let (cross_flex, cross_gather) = if measuring_cross {
+        (Flex::None, Gather::Start)
+    } else {
+        (list.cross_flex, list.cross_gather)
+    };
+
+    // ORDER. Stable, so equal keys keep declaration order, which the engine
+    // does for both keys (`uilistlayout_rows_with_one_name_keep_declaration`,
+    // `uilistlayout_equal_layout_order_keeps_declaration`). Names compare as
+    // bytes; how the engine orders case and digits is unverified.
+    let mut kids: Vec<usize> = dom
+        .children(id)
+        .into_iter()
+        .filter(|&child| {
+            dom.class_of(child)
+                .map(|c| !is_modifier(&c))
+                .unwrap_or(false)
+        })
+        .collect();
+    if list.by_name {
+        let mut named: Vec<(String, usize)> = kids
+            .iter()
+            .map(|&child| (dom.name_of(child).unwrap_or_default(), child))
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        kids = named.into_iter().map(|(_, child)| child).collect();
+    } else {
+        kids.sort_by_key(|&child| number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32);
+    }
+
+    // An invisible child takes no slot and no Padding
+    // (`uilistlayout_invisible_child_takes_no_slot`).
+    let entries: Vec<Entry> = kids
+        .into_iter()
+        .filter_map(|child| {
+            let (w, h) = basis_of(dom, child, box_rect, depth + 1)?;
+            let (main, cross) = if horizontal { (w, h) } else { (h, w) };
+            Some(Entry {
+                id: child,
+                main,
+                cross,
+            })
+        })
+        .collect();
+
+    // LINES. Without `Wraps` there is one. With it, a child starts a new line
+    // when it would cross the end of the main axis, and a child longer than the
+    // whole axis still gets a line of its own, unshrunk
+    // (`uilistlayout_wraps_an_oversized_child_onto_its_own_row`).
+    let mut lines: Vec<std::ops::Range<usize>> = Vec::new();
+    if list.wraps && !measuring_main {
+        let mut start = 0;
+        let mut run = 0.0;
+        for (i, entry) in entries.iter().enumerate() {
+            if i > start && run + list.gap + entry.main > main_len + 0.001 {
+                lines.push(start..i);
+                start = i;
+                run = entry.main;
+            } else if i == start {
+                run = entry.main;
+            } else {
+                run += list.gap + entry.main;
+            }
+        }
+        if start < entries.len() {
+            lines.push(start..entries.len());
+        }
+    } else if !entries.is_empty() {
+        lines.push(0..entries.len());
+    }
+
+    // ACROSS: a line is as thick as its thickest child, not the box
+    // (`uilistlayout_item_line_alignment_stretch`), and the lines share the
+    // cross axis by the cross flex and alignment
+    // (`uilistlayout_wraps_with_bottom_alignment`,
+    // `uilistlayout_horizontal_flex_fill_on_a_vertical_list`).
+    let thickness: Vec<f32> = lines
+        .iter()
+        .map(|line| {
+            entries[line.clone()]
+                .iter()
+                .fold(0.0_f32, |m, e| m.max(e.cross))
+        })
+        .collect();
+    let across = distribute(&thickness, cross_len, list.gap, cross_flex, cross_gather);
+    let stretch = cross_flex == Flex::Fill || list.item_line == ItemLine::Stretch;
+    let within = match list.item_line {
+        ItemLine::At(gather) => gather,
+        // Automatic, and Stretch where a child is not stretched.
+        _ => list.cross_gather,
+    };
+
+    let mut content_main = 0.0_f32;
+    let mut content_cross = 0.0_f32;
+    for (line_index, line) in lines.iter().enumerate() {
+        let (line_at, line_thickness) = across[line_index];
+        let members = &entries[line.clone()];
+        let mains: Vec<f32> = members.iter().map(|e| e.main).collect();
+        let along = distribute(&mains, main_len, list.gap, main_flex, main_gather);
+
+        let mut line_main = 0.0_f32;
+        let mut line_cross = 0.0_f32;
+        for (entry, &(main_at, main_size)) in members.iter().zip(along.iter()) {
+            let forced_main = ((main_size - entry.main).abs() > 0.001).then_some(main_size);
+            let (cross_at, forced_cross) = if stretch {
+                (line_at, Some(line_thickness))
+            } else {
+                (line_at + within.offset(line_thickness - entry.cross), None)
+            };
+            let (x, y, forced) = if horizontal {
+                (main_at, cross_at, (forced_main, forced_cross))
+            } else {
+                (cross_at, main_at, (forced_cross, forced_main))
+            };
+            let slot = Box2 {
+                x: box_rect.x + x,
+                y: box_rect.y + y,
+                w: box_rect.w,
+                h: box_rect.h,
+            };
+            let before = out.len();
+            visit(
+                dom,
+                entry.id,
+                slot,
+                child_clip,
+                child_clip_radius,
+                depth + 1,
+                true,
+                box_rect,
+                forced,
+                out,
+            );
+            if out.len() > before {
+                let placed = out[before].rect;
+                let (m, c) = if horizontal {
+                    (placed.w, placed.h)
+                } else {
+                    (placed.h, placed.w)
+                };
+                line_main += m;
+                line_cross = line_cross.max(c);
+            }
+        }
+        // ABSOLUTECONTENTSIZE counts each child's final size and Padding, not
+        // the room a `Space` flex spread between them: SpaceAround reads 120
+        // where Fill reads 240 for the same children in 240.
+        line_main += list.gap * (members.len().saturating_sub(1)) as f32;
+        content_main = content_main.max(line_main);
+        content_cross += line_cross;
+    }
+    content_cross += list.gap * (lines.len().saturating_sub(1)) as f32;
+    let (content_w, content_h) = if horizontal {
+        (content_main, content_cross)
+    } else {
+        (content_cross, content_main)
+    };
+    out.content_sizes
+        .push((layout_id, Vector2::new(content_w, content_h)));
+}
+
 pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
-    let mut out: Vec<SolvedItem> = Vec::new();
+    solve(dom, root, surface).items
+}
+
+/// The placement and the list content sizes it produced.
+pub fn solve(dom: &Dom, root: usize, surface: Box2) -> Solved {
+    let mut out = Solved::default();
     let root_box = content_box(dom, root, surface);
-    place_children(dom, root, root_box, None, 0.0, 0, &mut out);
+    place_children(dom, root, root_box, None, 0.0, 0, (false, false), &mut out);
     out
 }
 
@@ -1202,7 +1609,7 @@ pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
 /// window's titlebar and text vanished under the window.
 ///
 /// COMPUTED OVER THE TREE RATHER THAN BY REORDERING THE WALK, because the walk
-/// also decides layout: a `UIListLayout` positions children in declaration
+/// also decides layout: a `UIListLayout` positions children in its own sort
 /// order, and `ZIndex` must not move anything. This ranks nodes separately and
 /// the solve is sorted by the rank afterwards.
 fn paint_rank(dom: &Dom, root: usize) -> HashMap<usize, usize> {
@@ -1416,8 +1823,14 @@ pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
         w: width,
         h: height,
     };
-    let solved = solve_layout(dom, root, surface);
-    for item in solved {
+    let solved = solve(dom, root, surface);
+    // A LIST'S `AbsoluteContentSize` is written the same way, and read-only to a
+    // guest for the same reason. Before this it read (0, 0) forever, which a
+    // scroll container sizing itself from it cannot tell from an empty list.
+    for (layout, size) in solved.content_sizes {
+        dom.set_internal(layout, "AbsoluteContentSize", Variant::Vector2(size));
+    }
+    for item in solved.items {
         dom.set_internal(
             item.id,
             "AbsolutePosition",

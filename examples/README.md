@@ -37,6 +37,17 @@ would build the same tree on any host implementing the DataModel.
 cargo run -- examples/widgets/nameplate
 ```
 
+`flex-list-demo` lays out a tray of tag chips and its own toolbar with
+`UIListLayout` and positions nothing by hand. The toolbar's buttons change the
+tray's `Wraps`, `HorizontalFlex`, `VerticalFlex`, alignment and
+`ItemLineAlignment` while it runs, and its test clicks them and checks where the
+chips land.
+
+```sh
+cargo run -- examples/widgets/flex-list-demo
+cargo run -- test examples/widgets/flex-list-demo
+```
+
 ## `aether/`
 
 Applets built with [Aether](https://github.com/project-aether-ui/aether), a UI

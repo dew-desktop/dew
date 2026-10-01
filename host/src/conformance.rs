@@ -31,6 +31,13 @@ pub static SUPPORTS: &[&str] = &[
     "TextWrapped",
     "UICorner",
     "UIGradient.Radial",
+    "UIListLayout.Flex",
+    "UIListLayout.IgnoresAnchorPoint",
+    "UIListLayout.ItemLineAlignment",
+    "UIListLayout.MainAxisAlignment",
+    "UIListLayout.PaddingScale",
+    "UIListLayout.SortOrder",
+    "UIListLayout.Wraps",
     "UIStroke",
     "Visible",
     "ZIndex",
@@ -1766,6 +1773,58 @@ mod tests {
         assert_eq!(summary.passed, 1);
         assert_eq!(summary.failed, 0);
         assert_eq!(results[0].status, CaseStatus::Pass);
+    }
+
+    /// Build the tree of the case file `stem`, lay it out once, and read the
+    /// `AbsoluteContentSize` of the UIListLayout named `Layout` back through
+    /// Luau, the way a guest reads it.
+    fn list_content_size(stem: &str) -> (f32, f32) {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let lua = Lua::new();
+        let case = decode_case(&lua, &dir.join(format!("{stem}.luau"))).expect("case decodes");
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("ScreenGui".into(), "DewRoot".into());
+        let root_handle = crate::datamodel::handle(&lua, &dom, root).expect("root handle");
+        let build: Function = lua.load(TREE_BUILDER).eval().expect("tree builder");
+        let tree: Table = lua.registry_value(&case.tree_val).expect("tree");
+        let panel: Value = build.call((tree, root_handle)).expect("tree builds");
+
+        let _ = frame_of(&dom, root, case.surface.width, case.surface.height);
+
+        lua.load(
+            r#"
+            local panel = ...
+            local size = panel:FindFirstChild("Layout").AbsoluteContentSize
+            return size.X, size.Y
+        "#,
+        )
+        .call(panel)
+        .expect("read back")
+    }
+
+    /// The engine's own read-backs, taken in Studio from the same trees with
+    /// the command bar. A list's content size counts each child's final size and
+    /// its Padding: a wrapped list is as wide as its widest row and as tall as
+    /// its rows and the gap between them, `Fill` counts the grown children, and
+    /// the three `Space` values count the children without the room spread
+    /// between them.
+    #[test]
+    fn a_list_reports_the_content_size_the_engine_reads_back() {
+        for (stem, expected) in [
+            ("uilistlayout_wraps_horizontal", (145.0, 55.0)),
+            ("uilistlayout_horizontal_flex_none", (120.0, 20.0)),
+            ("uilistlayout_horizontal_flex_fill", (240.0, 20.0)),
+            ("uilistlayout_horizontal_flex_space_around", (120.0, 20.0)),
+            ("uilistlayout_horizontal_flex_space_between", (120.0, 20.0)),
+            ("uilistlayout_horizontal_flex_space_evenly", (120.0, 20.0)),
+        ] {
+            assert_eq!(list_content_size(stem), expected, "{stem}");
+        }
     }
 
     /// REPOINTED, NOT DELETED, and that is this test working rather than

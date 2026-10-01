@@ -3295,8 +3295,15 @@ fn install_test_surface(
     //  `services` for where the pointer is and connects to the input service for
     //  what happened; driving one without the other leaves half of it reading a
     //  pointer that never moved.
+    //
+    //  ONE POINTER FOR THE WHOLE SUITE, as the window loop keeps one. A release
+    //  completes a click only on the element its press landed on, and the
+    //  pointer is what remembers where that was; a fresh one per call forgot
+    //  every press, so a plain `GuiButton` never fired `Activated` here.
+    let shared = Arc::new(Mutex::new(dew_host::datamodel::input::Pointer::default()));
     let pointer = lua.create_table()?;
     let surface_dom = dom.clone();
+    let moving = shared.clone();
     pointer.set(
         "Move",
         lua.create_function(move |lua, (x, y): (f32, f32)| {
@@ -3307,14 +3314,14 @@ fn install_test_surface(
                 root,
                 size: (0.0, 0.0),
             };
-            let mut p = dew_host::datamodel::input::Pointer::default();
-            let _ = p.moved(&surface, x, y);
+            let _ = moving.lock().expect("pointer").moved(&surface, x, y);
             Ok(())
         })?,
     )?;
 
     for (name, down) in [("Down", true), ("Up", false)] {
         let surface_dom = dom.clone();
+        let pressing = shared.clone();
         pointer.set(
             name,
             lua.create_function(move |lua, (x, y, button): (f32, f32, Option<usize>)| {
@@ -3332,7 +3339,7 @@ fn install_test_surface(
                     2 => dew_host::datamodel::input::Button::Middle,
                     _ => dew_host::datamodel::input::Button::Left,
                 };
-                let mut p = dew_host::datamodel::input::Pointer::default();
+                let mut p = pressing.lock().expect("pointer");
                 let _ = if down {
                     p.down(&surface, kind, x, y)
                 } else {
