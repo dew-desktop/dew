@@ -222,6 +222,10 @@ fn is_punct(token: Option<&Token>, text: &str) -> bool {
     matches!(token, Some(Token::Punct(p)) if p == text)
 }
 
+fn is_word(token: Option<&Token>, words: &[&str]) -> bool {
+    matches!(token, Some(Token::Ident(w)) if words.contains(&w.as_str()))
+}
+
 /// Scan one file of Luau for the globals in `globals`, the `mount` contract,
 /// and a `require` of Aether.
 pub fn reach(source: &str, globals: &BTreeSet<String>) -> Reach {
@@ -244,6 +248,14 @@ pub fn reach(source: &str, globals: &BTreeSet<String>) -> Reach {
                 }
                 _ => None,
             };
+            // ASKING WHETHER A GLOBAL IS THERE IS NOT USING IT. `if desktop then`
+            // is how one file mounts on a host that has `desktop` and on one
+            // that does not; whatever the branch then reaches is reported on its
+            // own. Only the whole condition counts: `if desktop and x then`
+            // hands the value on, and stays reported.
+            if member.is_none() && is_word(before, &["if", "elseif"]) && is_word(after, &["then"]) {
+                continue;
+            }
             out.names.insert(match member {
                 Some(m) => format!("{name}.{m}"),
                 None => name.clone(),
@@ -744,6 +756,34 @@ mod tests {
                 "services"
             ])
         );
+    }
+
+    #[test]
+    fn a_presence_test_is_not_a_reference_but_its_branch_is() {
+        let globals = names(&["desktop"]);
+        let guarded = r#"
+            local root
+            if desktop then
+                root = desktop.Widget({ width = 1, height = 1 })
+            elseif desktop then
+            else
+                root = game:GetService("Players")
+            end
+            local x = if desktop then 1 else 2
+        "#;
+        assert_eq!(reach(guarded, &globals).names, names(&["desktop.Widget"]));
+
+        for handed_on in [
+            "if desktop and x then end",
+            "if not desktop then end",
+            "local d = desktop",
+        ] {
+            assert_eq!(
+                reach(handed_on, &globals).names,
+                names(&["desktop"]),
+                "{handed_on}"
+            );
+        }
     }
 
     #[test]
