@@ -31,13 +31,20 @@
 //! `VerticalFlex`, and `ItemLineAlignment`, and it reports
 //! `AbsoluteContentSize`. A `UIFlexItem` on a list's child grows or shrinks
 //! that child along the list, and a `UISizeConstraint` clamps any element's
-//! size, flexed or not. Each rule is held to an engine-verified case in
-//! `conformance/cases`, and the rules no case pins down say so where they are
-//! written.
+//! size, flexed or not.
 //!
-//! IT DOES NOT DO `UIGridLayout`, `UITableLayout`, `UIPageLayout`,
-//! `UIAspectRatioConstraint` or `UITextSizeConstraint`. They are skipped as
-//! modifiers, so a tree that uses one draws as though it were absent.
+//! `UIGridLayout` is placed in full: `CellSize`, `CellPadding`,
+//! `FillDirection`, `FillDirectionMaxCells`, `StartCorner`, `SortOrder` and
+//! alignment of the grid as a block, and it reports `AbsoluteContentSize`,
+//! `AbsoluteCellSize` and `AbsoluteCellCount`. A `UIAspectRatioConstraint`
+//! reshapes any element's size, and inside a grid cell it is centred there.
+//!
+//! Each rule is held to an engine-verified case in `conformance/cases`, and the
+//! rules no case pins down say so where they are written.
+//!
+//! IT DOES NOT DO `UITableLayout`, `UIPageLayout` or `UITextSizeConstraint`.
+//! They are skipped as modifiers, so a tree that uses one draws as though it
+//! were absent.
 //!
 //! WHAT AN IMAGE HONOURS, STATED THE SAME WAY. `Image`, `ImageContent`,
 //! `ImageColor3`, `ImageTransparency`, `ImageRectOffset`, `ImageRectSize`, and
@@ -222,6 +229,12 @@ fn list_layout_of(dom: &Dom, id: usize) -> Option<usize> {
         .find(|&child| dom.class_of(child).as_deref() == Some("UIListLayout"))
 }
 
+/// The UIGridLayout child on a node, if any. Matched by its exact class, so a
+/// `UITableLayout` or a `UIPageLayout` is never mistaken for one.
+fn grid_layout_of(dom: &Dom, id: usize) -> Option<usize> {
+    modifier_of(dom, id, "UIGridLayout")
+}
+
 /// The first child of `id` whose class is `class`, if any.
 fn modifier_of(dom: &Dom, id: usize, class: &str) -> Option<usize> {
     dom.children(id)
@@ -277,6 +290,50 @@ fn clamp_size(dom: &Dom, id: usize, w: f32, h: f32) -> (f32, f32) {
     (bounded(w, min_w, max_w), bounded(h, min_h, max_h))
 }
 
+/// A width and a height reshaped by the element's `UIAspectRatioConstraint`.
+///
+/// `AspectRatio` is width over height. With the constraint's defaults,
+/// `AspectType` `FitWithinMaxSize` and `DominantAxis` `Width`, the result is the
+/// largest size of that ratio inside the one given: a ratio of 2 in a 100 by
+/// 100 cell is 100 by 50
+/// (`uigridlayout_aspect_ratio_constraint_overrides_the_cell`).
+///
+/// UNVERIFIED, each the simplest rule that agrees with that case and the
+/// documented defaults: `FitWithinMaxSize` ignores `DominantAxis`;
+/// `ScaleWithParentSize` keeps the dominant axis at the size given and derives
+/// the other from the ratio, so it can grow past what it was given; a ratio
+/// that is not a positive finite number changes nothing; and only the first
+/// constraint counts.
+fn aspect_size(dom: &Dom, id: usize, w: f32, h: f32) -> (f32, f32) {
+    let Some(constraint) = modifier_of(dom, id, "UIAspectRatioConstraint") else {
+        return (w, h);
+    };
+    let ratio = number(dom, constraint, "AspectRatio").unwrap_or(1.0);
+    if !(ratio.is_finite() && ratio > 0.0) {
+        return (w, h);
+    }
+    let w = w.max(0.0);
+    let h = h.max(0.0);
+    if enum_name(dom, constraint, "AspectType", "AspectType") == Some("ScaleWithParentSize") {
+        if enum_name(dom, constraint, "DominantAxis", "DominantAxis") == Some("Height") {
+            (h * ratio, h)
+        } else {
+            (w, w / ratio)
+        }
+    } else {
+        let fitted = w.min(h * ratio);
+        (fitted, fitted / ratio)
+    }
+}
+
+/// The size an element's constraints leave it: clamped by its
+/// `UISizeConstraint`, then reshaped by its `UIAspectRatioConstraint`. The
+/// order matters only for an element carrying both, and no case pins it.
+fn constrain_size(dom: &Dom, id: usize, w: f32, h: f32) -> (f32, f32) {
+    let (w, h) = clamp_size(dom, id, w, h);
+    aspect_size(dom, id, w, h)
+}
+
 /// Resolve one element against the box its parent offers.
 ///
 /// THE COORDINATE MODEL, and it is `conformance/LAYOUT.md` section 1 rather than
@@ -285,7 +342,8 @@ fn clamp_size(dom: &Dom, id: usize, w: f32, h: f32) -> (f32, f32) {
 /// The ordering is size first, then anchor, which is the thing
 /// `anchor_point_after_automatic_size` was opened in Studio to confirm.
 ///
-/// `laid_out` marks an element positioned by a layout container (`UIListLayout`).
+/// `laid_out` marks an element positioned by a layout container (`UIListLayout`
+/// or `UIGridLayout`).
 /// Its own `Position` is ignored per LAYOUT.md section 4, and so is its
 /// `AnchorPoint` on both axes (`uilistlayout_ignores_a_child_anchor_point`).
 ///
@@ -293,7 +351,9 @@ fn clamp_size(dom: &Dom, id: usize, w: f32, h: f32) -> (f32, f32) {
 /// element's own `Position` (`uisizeconstraint_min_size_grows_a_plain_child`,
 /// `uisizeconstraint_max_size_shrinks_a_plain_child`). That the anchor then
 /// multiplies the clamped size rather than the authored one follows the size
-/// first rule and is unverified for a constrained element.
+/// first rule and is unverified for a constrained element. A
+/// `UIAspectRatioConstraint` reshapes the size at the same point, by the rules
+/// on `aspect_size`.
 fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
     let (sxs, sxo, sys, syo) = udim2(dom, id, "Size");
     let (pxs, pxo, pys, pyo) = if laid_out {
@@ -307,7 +367,7 @@ fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
         vector2(dom, id, "AnchorPoint")
     };
 
-    let (w, h) = clamp_size(dom, id, sxs * parent.w + sxo, sys * parent.h + syo);
+    let (w, h) = constrain_size(dom, id, sxs * parent.w + sxo, sys * parent.h + syo);
     Box2 {
         x: parent.x + pxs * parent.w + pxo - anchor.x * w,
         y: parent.y + pys * parent.h + pyo - anchor.y * h,
@@ -717,8 +777,9 @@ pub struct SolvedItem {
     pub z_index: i32,
 }
 
-/// Everything one solve produces: the placed elements, in walk order, and the
-/// `AbsoluteContentSize` of every `UIListLayout` that placed children.
+/// Everything one solve produces: the placed elements, in walk order, the
+/// `AbsoluteContentSize` of every layout that placed children, and the
+/// `AbsoluteCellSize` and `AbsoluteCellCount` of every `UIGridLayout`.
 ///
 /// DEREFS TO THE ELEMENTS because the walk indexes, pushes and truncates them
 /// everywhere; the content sizes ride along. A subtree placed twice (after
@@ -728,6 +789,8 @@ pub struct SolvedItem {
 pub struct Solved {
     pub items: Vec<SolvedItem>,
     pub content_sizes: Vec<(usize, Vector2)>,
+    /// A grid's id, its cell size and its cell count (columns, rows).
+    pub cells: Vec<(usize, Vector2, Vector2)>,
 }
 
 impl std::ops::Deref for Solved {
@@ -764,6 +827,9 @@ fn grow(
     }
     let child_depth = if out.len() > from { out[from].depth } else { 0 };
     let has_layout = list_layout_of(dom, node).is_some();
+    // A grid child is as big as its cell whatever its own `Size` says, so it is
+    // measured by where it was placed.
+    let in_grid = grid_layout_of(dom, node).is_some();
 
     let sweep = |base_x: Option<f32>, base_y: Option<f32>| -> (f32, f32) {
         let mut right = -f32::INFINITY;
@@ -784,7 +850,7 @@ fn grow(
             let has_content = i + 1 < out.len() && out[i + 1].depth > d;
 
             if grow_x {
-                if sxs == 0.0 {
+                if sxs == 0.0 || (in_grid && d == child_depth) {
                     right = right.max(r.x + r.w + got_x);
                     inherit_x.insert(d + 1, got_x);
                 } else if d == child_depth && sxs < 1.0 && (has_layout || !has_content) {
@@ -803,7 +869,7 @@ fn grow(
             }
 
             if grow_y {
-                if sys == 0.0 {
+                if sys == 0.0 || (in_grid && d == child_depth) {
                     bottom = bottom.max(r.y + r.h + got_y);
                     inherit_y.insert(d + 1, got_y);
                 } else if d == child_depth && sys < 1.0 && (has_layout || !has_content) {
@@ -917,7 +983,7 @@ fn visit(
 
     let mut rect = solve_rect(dom, id, parent_box, laid_out);
     if forced.0.is_some() || forced.1.is_some() {
-        let (w, h) = clamp_size(
+        let (w, h) = constrain_size(
             dom,
             id,
             forced.0.unwrap_or(rect.w),
@@ -1076,11 +1142,11 @@ fn visit(
         pad_b,
         offered,
     );
-    // THE CONSTRAINT HAS THE LAST WORD over what AutomaticSize measured, so a
+    // THE CONSTRAINTS HAVE THE LAST WORD over what AutomaticSize measured, so a
     // `MaxSize` caps a growing element. No case pins the order of measuring and
     // clamping; this is the simplest order that agrees with every case, and it
     // is unverified.
-    let (clamped_w, clamped_h) = clamp_size(dom, id, new_rect.w, new_rect.h);
+    let (clamped_w, clamped_h) = constrain_size(dom, id, new_rect.w, new_rect.h);
     out[entry_idx].rect = Box2 {
         w: clamped_w,
         h: clamped_h,
@@ -1115,12 +1181,17 @@ fn visit(
 
     // Re-placement: if any descendant depends on an axis that grew via scale,
     // or a list was measured packed against the start of an axis AutomaticSize
-    // owns and has to be placed again in the box it grew into.
+    // owns and has to be placed again in the box it grew into. A grid is always
+    // placed again: how many cells fit a line, the scale in `CellSize` and
+    // `CellPadding` and its alignment all read the box.
     let mut dependent = (grow_x || grow_y)
         && !is_scrolling_frame
-        && list_layout_of(dom, id)
-            .map(|layout| ListLayout::read(dom, layout, box_rect).measured_packed(grow_x, grow_y))
-            .unwrap_or(false);
+        && (grid_layout_of(dom, id).is_some()
+            || list_layout_of(dom, id)
+                .map(|layout| {
+                    ListLayout::read(dom, layout, box_rect).measured_packed(grow_x, grow_y)
+                })
+                .unwrap_or(false));
     if (grew_w || grew_h) && !dependent {
         for item in &out[children_from..] {
             let (sxs, _, sys, _) = udim2(dom, item.id, "Size");
@@ -1236,6 +1307,49 @@ enum ItemLine {
     Stretch,
 }
 
+/// Does a layout order its children by `Name`?
+///
+/// NAME IS THE DEFAULT on every layout class, and an unreadable value is
+/// treated as the default. `Custom` names a sort function the host has no way
+/// to receive, so it falls back to LayoutOrder, which is what this solver did
+/// for every value before; that fallback is unverified.
+fn sorts_by_name(dom: &Dom, layout_id: usize) -> bool {
+    !matches!(
+        enum_name(dom, layout_id, "SortOrder", "SortOrder"),
+        Some("LayoutOrder") | Some("Custom")
+    )
+}
+
+/// The children of `id` a layout places, in the layout's order. Modifiers are
+/// left out; invisible children are left in, for the caller to skip.
+///
+/// Stable, so equal keys keep declaration order, which the engine does for
+/// both keys (`uilistlayout_rows_with_one_name_keep_declaration`,
+/// `uilistlayout_equal_layout_order_keeps_declaration`). Names compare as
+/// bytes; how the engine orders case and digits is unverified.
+fn layout_order(dom: &Dom, id: usize, by_name: bool) -> Vec<usize> {
+    let mut kids: Vec<usize> = dom
+        .children(id)
+        .into_iter()
+        .filter(|&child| {
+            dom.class_of(child)
+                .map(|c| !is_modifier(&c))
+                .unwrap_or(false)
+        })
+        .collect();
+    if by_name {
+        let mut named: Vec<(String, usize)> = kids
+            .iter()
+            .map(|&child| (dom.name_of(child).unwrap_or_default(), child))
+            .collect();
+        named.sort_by(|a, b| a.0.cmp(&b.0));
+        kids = named.into_iter().map(|(_, child)| child).collect();
+    } else {
+        kids.sort_by_key(|&child| number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32);
+    }
+    kids
+}
+
 /// A `UIListLayout`, read once per placement and expressed along its own axes:
 /// "main" is `FillDirection`, "cross" is the other one.
 struct ListLayout {
@@ -1288,15 +1402,7 @@ impl ListLayout {
             cross_flex,
             item_line,
             wraps: boolean(dom, layout_id, "Wraps") == Some(true),
-            // NAME IS THE DEFAULT on every layout class, and an unreadable
-            // value is treated as the default. `Custom` names a sort function
-            // the host has no way to receive, so it falls back to LayoutOrder,
-            // which is what this solver did for every value before; that
-            // fallback is unverified.
-            by_name: !matches!(
-                enum_name(dom, layout_id, "SortOrder", "SortOrder"),
-                Some("LayoutOrder") | Some("Custom")
-            ),
+            by_name: sorts_by_name(dom, layout_id),
         }
     }
 
@@ -1553,7 +1659,8 @@ fn flex_line(members: &[Flexing], avail: f32, gap: f32) -> Vec<f32> {
 /// `measuring` names the axes AutomaticSize is about to grow. On those axes a
 /// list packs against the start, without flex or wrapping, so what the parent
 /// measures is the content's own size; `visit` places the list again in the box
-/// it grew into. See `ListLayout::measured_packed`.
+/// it grew into. See `ListLayout::measured_packed`. A grid's block sits at the
+/// start of those axes, and `visit` always places a grid again.
 #[allow(clippy::too_many_arguments)]
 fn place_children(
     dom: &Dom,
@@ -1577,7 +1684,24 @@ fn place_children(
             measuring,
             out,
         );
+    } else if let Some(layout_id) = grid_layout_of(dom, id) {
+        // A parent holding a list and a grid is placed by the list; which one
+        // the engine honours is unverified.
+        place_grid(
+            dom,
+            id,
+            layout_id,
+            box_rect,
+            child_clip,
+            child_clip_radius,
+            depth,
+            measuring,
+            out,
+        );
     } else {
+        // A `UITableLayout` is not laid out yet: its rows and cells fall
+        // through to here and stand at their own `Position` and `Size`, as
+        // under no layout at all. So do a `UIPageLayout`'s pages.
         for child in dom.children(id) {
             let Some(class) = dom.class_of(child) else {
                 continue;
@@ -1676,29 +1800,7 @@ fn place_list(
         (list.cross_flex, list.cross_gather)
     };
 
-    // ORDER. Stable, so equal keys keep declaration order, which the engine
-    // does for both keys (`uilistlayout_rows_with_one_name_keep_declaration`,
-    // `uilistlayout_equal_layout_order_keeps_declaration`). Names compare as
-    // bytes; how the engine orders case and digits is unverified.
-    let mut kids: Vec<usize> = dom
-        .children(id)
-        .into_iter()
-        .filter(|&child| {
-            dom.class_of(child)
-                .map(|c| !is_modifier(&c))
-                .unwrap_or(false)
-        })
-        .collect();
-    if list.by_name {
-        let mut named: Vec<(String, usize)> = kids
-            .iter()
-            .map(|&child| (dom.name_of(child).unwrap_or_default(), child))
-            .collect();
-        named.sort_by(|a, b| a.0.cmp(&b.0));
-        kids = named.into_iter().map(|(_, child)| child).collect();
-    } else {
-        kids.sort_by_key(|&child| number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32);
-    }
+    let kids = layout_order(dom, id, list.by_name);
 
     // An invisible child takes no slot and no Padding
     // (`uilistlayout_invisible_child_takes_no_slot`).
@@ -1884,6 +1986,172 @@ fn place_list(
     };
     out.content_sizes
         .push((layout_id, Vector2::new(content_w, content_h)));
+}
+
+/// Place the children of `id` in the cells of the `UIGridLayout` `layout_id`.
+///
+/// Every child takes one cell, in the layout's sort order (`Name` by default,
+/// `uigridlayout_default_sort_order_is_name`), and the cell replaces its own
+/// `Size`, `Position` and `AnchorPoint` (`uigridlayout_defaults`). A
+/// `UIFlexItem` on a child changes nothing
+/// (`uiflexitem_under_a_grid_does_nothing`).
+///
+/// THE CELLS. `CellSize` and `CellPadding` both resolve scale against the
+/// content box inside any `UIPadding`: a 0.5 cell in a 220 panel padded by 10
+/// is 100 (`uigridlayout_cell_size_scale_uses_the_content_box`), and a 0.1 gap
+/// there is 20, not 22 (`uigridlayout_cell_padding_scale_uses_the_parent`).
+///
+/// THE LINES. Cells fill along `FillDirection`, across first (the grid's own
+/// default, `uigridlayout_defaults`) or down first
+/// (`uigridlayout_fill_direction_vertical`). A line holds as many cells as fit
+/// the box with the padding between them, at least one, and no more than
+/// `FillDirectionMaxCells` when that is above 0
+/// (`uigridlayout_fill_direction_max_cells`).
+///
+/// THE BLOCK. The filled cells make one block of columns by rows, and the
+/// alignment moves the block, not each line
+/// (`uigridlayout_alignment_moves_the_block`). `StartCorner` is a corner of
+/// that block, not of the box, and the fill runs from it: from `TopRight` the
+/// first cell is in the block's last column and the second to its left
+/// (`uigridlayout_start_corner_top_left`, `_top_right`, `_bottom_left`,
+/// `_bottom_right`).
+///
+/// A CONSTRAINED CHILD. A `UISizeConstraint` or `UIAspectRatioConstraint`
+/// sizes the child within its cell and the cell centres it; the next cell does
+/// not move (`uigridlayout_size_constraint_overrides_the_cell`,
+/// `uigridlayout_aspect_ratio_constraint_overrides_the_cell`).
+///
+/// UNVERIFIED, each the simplest rule that agrees with every case: a line with
+/// room for more cells than there are children is as long as the children, so
+/// the block, its alignment and `AbsoluteCellCount` count children rather than
+/// room; an invisible child takes no cell; a child its constraints make larger
+/// than its cell is centred on it and overflows it evenly; a block larger than
+/// the box overflows it by the same alignment rule as one that fits; and while
+/// AutomaticSize measures an axis the block sits at the start of it, `visit`
+/// placing it again in the grown box.
+#[allow(clippy::too_many_arguments)]
+fn place_grid(
+    dom: &Dom,
+    id: usize,
+    layout_id: usize,
+    box_rect: Box2,
+    child_clip: Option<Box2>,
+    child_clip_radius: f32,
+    depth: usize,
+    measuring: (bool, bool),
+    out: &mut Solved,
+) {
+    let (csx, cox, csy, coy) = udim2(dom, layout_id, "CellSize");
+    let cell_w = (csx * box_rect.w + cox).max(0.0);
+    let cell_h = (csy * box_rect.h + coy).max(0.0);
+    let (psx, pox, psy, poy) = udim2(dom, layout_id, "CellPadding");
+    let pad_x = psx * box_rect.w + pox;
+    let pad_y = psy * box_rect.h + poy;
+    // Read through the layout's own class, whose default is `Horizontal`; a
+    // list's `Vertical` default never applies here.
+    let down_first =
+        enum_name(dom, layout_id, "FillDirection", "FillDirection") == Some("Vertical");
+    let corner = enum_name(dom, layout_id, "StartCorner", "StartCorner").unwrap_or("TopLeft");
+    let from_right = corner.ends_with("Right");
+    let from_bottom = corner.starts_with("Bottom");
+    let max_cells = number(dom, layout_id, "FillDirectionMaxCells")
+        .unwrap_or(0.0)
+        .max(0.0) as usize;
+
+    let kids: Vec<usize> = layout_order(dom, id, sorts_by_name(dom, layout_id))
+        .into_iter()
+        .filter(|&child| boolean(dom, child, "Visible") != Some(false))
+        .collect();
+    let n = kids.len();
+
+    // How many cells one line holds.
+    let (line_len, cell, gap) = if down_first {
+        (box_rect.h, cell_h, pad_y)
+    } else {
+        (box_rect.w, cell_w, pad_x)
+    };
+    let mut per_line = if cell + gap > 0.0 {
+        ((line_len + gap + 0.001) / (cell + gap)).floor().max(0.0) as usize
+    } else {
+        n
+    };
+    if max_cells > 0 {
+        per_line = per_line.min(max_cells);
+    }
+    let per_line = per_line.min(n).max(1);
+    let lines = n.div_ceil(per_line);
+    let filled = if n == 0 { 0 } else { per_line };
+    let (cols, rows) = if down_first {
+        (lines, filled)
+    } else {
+        (filled, lines)
+    };
+
+    let span = |count: usize, cell: f32, gap: f32| {
+        if count == 0 {
+            0.0
+        } else {
+            count as f32 * cell + (count - 1) as f32 * gap
+        }
+    };
+    let block_w = span(cols, cell_w, pad_x);
+    let block_h = span(rows, cell_h, pad_y);
+    let across = if measuring.0 {
+        Gather::Start
+    } else {
+        gather_of(dom, layout_id, "HorizontalAlignment")
+    };
+    let down = if measuring.1 {
+        Gather::Start
+    } else {
+        gather_of(dom, layout_id, "VerticalAlignment")
+    };
+    let left = box_rect.x + across.offset(box_rect.w - block_w);
+    let top = box_rect.y + down.offset(box_rect.h - block_h);
+
+    for (i, &child) in kids.iter().enumerate() {
+        let (line, slot) = (i / per_line, i % per_line);
+        let (mut col, mut row) = if down_first {
+            (line, slot)
+        } else {
+            (slot, line)
+        };
+        if from_right {
+            col = cols - 1 - col;
+        }
+        if from_bottom {
+            row = rows - 1 - row;
+        }
+        let cell_x = left + col as f32 * (cell_w + pad_x);
+        let cell_y = top + row as f32 * (cell_h + pad_y);
+        let (w, h) = constrain_size(dom, child, cell_w, cell_h);
+        let at = Box2 {
+            x: cell_x + (cell_w - w) / 2.0,
+            y: cell_y + (cell_h - h) / 2.0,
+            w: box_rect.w,
+            h: box_rect.h,
+        };
+        visit(
+            dom,
+            child,
+            at,
+            child_clip,
+            child_clip_radius,
+            depth + 1,
+            true,
+            box_rect,
+            (Some(w), Some(h)),
+            out,
+        );
+    }
+
+    out.content_sizes
+        .push((layout_id, Vector2::new(block_w, block_h)));
+    out.cells.push((
+        layout_id,
+        Vector2::new(cell_w, cell_h),
+        Vector2::new(cols as f32, rows as f32),
+    ));
 }
 
 pub fn solve_layout(dom: &Dom, root: usize, surface: Box2) -> Vec<SolvedItem> {
@@ -2130,6 +2398,10 @@ pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
     for (layout, size) in solved.content_sizes {
         dom.set_internal(layout, "AbsoluteContentSize", Variant::Vector2(size));
     }
+    for (grid, cell_size, cell_count) in solved.cells {
+        dom.set_internal(grid, "AbsoluteCellSize", Variant::Vector2(cell_size));
+        dom.set_internal(grid, "AbsoluteCellCount", Variant::Vector2(cell_count));
+    }
     for item in solved.items {
         dom.set_internal(
             item.id,
@@ -2365,6 +2637,37 @@ mod tests {
         assert_eq!(
             row.rect.x, 0.0,
             "an unset alignment should not move a child"
+        );
+    }
+
+    /// A table is a layout class of its own, not a grid: its children keep
+    /// their own Position and Size, where a grid would put them in 100 cells.
+    #[test]
+    fn a_table_layout_is_not_placed_as_a_grid() {
+        let f = render(
+            r#"
+            local panel = Instance.new("Frame")
+            panel.Size = UDim2.new(0, 300, 0, 200)
+            panel.Parent = root
+            Instance.new("UITableLayout").Parent = panel
+            local row = Instance.new("Frame")
+            row.Name = "Row"
+            row.Position = UDim2.new(0, 40, 0, 30)
+            row.Size = UDim2.new(0, 60, 0, 20)
+            row.Parent = panel
+        "#,
+            300.0,
+            200.0,
+        );
+        let row = f
+            .nodes
+            .iter()
+            .find(|n| n.name == "Row")
+            .expect("the row is in the display list");
+        assert_eq!(
+            (row.rect.x, row.rect.y, row.rect.w, row.rect.h),
+            (40.0, 30.0, 60.0, 20.0),
+            "a table's child should stand where it was put"
         );
     }
 
