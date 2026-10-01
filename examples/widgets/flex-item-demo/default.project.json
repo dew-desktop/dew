@@ -1,0 +1,14 @@
+{
+  "name": "FlexItemDemo",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "FlexItemDemo": { "$path": "flex-item-demo.luau" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "FlexItemDemo": { "$path": "roblox.client.luau" }
+      }
+    }
+  }
+}
