@@ -67,7 +67,7 @@ pub struct ApiClass {
 /// Properties that are engine bookkeeping rather than UI.
 pub const NOT_UI: &[&str] = &[
     "Archivable",
-    "the engineLocked",
+    "RobloxLocked",
     "AutoLocalize",
     "RootLocalizationTable",
     "Attributes",

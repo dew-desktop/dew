@@ -60,7 +60,8 @@
 //! nine-patch renders as a smear should be told which of the two of us decided
 //! that.
 //!
-//! So: enough to put a real tree on screen, and no claim beyond that.
+//! So: enough to put a real tree on screen, and no claim beyond that. The
+//! claim, property by property and class by class, is [`honours::honours`].
 
 use dew_runtime::frame::{
     Align, AlphaStop, BlendMode, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale,
@@ -70,6 +71,10 @@ use rbx_types::{Variant, Vector2};
 use std::collections::HashMap;
 
 use super::{Dom, SharedDom};
+
+/// What this file reads, answered per class and property. Changing what the
+/// solver reads and changing that answer belong in one diff.
+pub mod honours;
 
 /// A rectangle in absolute screen coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
