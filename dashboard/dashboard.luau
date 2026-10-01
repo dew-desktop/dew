@@ -198,7 +198,19 @@ tabBar.Size = UDim2.new(1, 0, 0, TAB_BAR_HEIGHT)
 tabBar.BackgroundTransparency = 1
 tabBar.Parent = body
 
-local TAB_WIDTH = 132
+-- The tabs sit in one row, 8 in from the bar's top left corner and 4 apart.
+-- Each button's `LayoutOrder` keeps them in declaration order, since the list
+-- would otherwise sort them by Name.
+local tabBarPadding = Instance.new("UIPadding")
+tabBarPadding.PaddingLeft = UDim.new(0, 8)
+tabBarPadding.PaddingTop = UDim.new(0, 8)
+tabBarPadding.Parent = tabBar
+
+local tabBarLayout = Instance.new("UIListLayout")
+tabBarLayout.FillDirection = Enum.FillDirection.Horizontal
+tabBarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabBarLayout.Padding = UDim.new(0, 4)
+tabBarLayout.Parent = tabBar
 
 -- `Aether.Tabs` HARD-WIRES `PointerRouter`/`SelectionRouter` (milestone 54
 -- sprint 1), so this dashboard no longer needs to name either. `Source` is
@@ -223,11 +235,11 @@ local tabs = Tabs({
 -- (`type(entry) == "function"` is false for one). `create` already knows how
 -- to apply a `vide.action`, a plain property and a child in one pass, which
 -- is what makes the loop unnecessary rather than merely hidden elsewhere.
-local function tabButton(name: TabName, text: string, x: number): TextButton
+local function tabButton(name: TabName, text: string, order: number): TextButton
 	return create("TextButton")(tabs.GetTab(name).GetRootProps({
 		Name = `Tab{text}`,
-		Position = UDim2.new(0, x, 0, 8),
-		Size = UDim2.new(0, TAB_WIDTH - 4, 0, 28),
+		LayoutOrder = order,
+		Size = UDim2.new(0, 128, 0, 28),
 		-- BackgroundColor3 IS NOT SET HERE ANY MORE -- `tabRecipe.Bind`,
 		-- called on every one of these three buttons inside the `effect`
 		-- below (which runs once, immediately, before this script's first
@@ -240,9 +252,9 @@ local function tabButton(name: TabName, text: string, x: number): TextButton
 	})) :: TextButton
 end
 
-local libraryTabButton = tabButton("library", "Library", 8)
-local storeTabButton = tabButton("store", "Store", 8 + TAB_WIDTH)
-local accountTabButton = tabButton("account", "Account", 8 + TAB_WIDTH * 2)
+local libraryTabButton = tabButton("library", "Library", 1)
+local storeTabButton = tabButton("store", "Store", 2)
+local accountTabButton = tabButton("account", "Account", 3)
 
 -- CONTENT FRAMES, ALL THE SAME RECT, ONE VISIBLE AT A TIME -- toggling
 -- `Visible` rather than destroying and rebuilding a tab's tree every
