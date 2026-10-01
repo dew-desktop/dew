@@ -30,6 +30,7 @@ pub static SUPPORTS: &[&str] = &[
     "TextScaled",
     "TextWrapped",
     "UICorner",
+    "UIFlexItem",
     "UIGradient.Radial",
     "UIListLayout.Flex",
     "UIListLayout.IgnoresAnchorPoint",
@@ -38,6 +39,7 @@ pub static SUPPORTS: &[&str] = &[
     "UIListLayout.PaddingScale",
     "UIListLayout.SortOrder",
     "UIListLayout.Wraps",
+    "UISizeConstraint",
     "UIStroke",
     "Visible",
     "ZIndex",
@@ -1822,6 +1824,28 @@ mod tests {
             ("uilistlayout_horizontal_flex_space_around", (120.0, 20.0)),
             ("uilistlayout_horizontal_flex_space_between", (120.0, 20.0)),
             ("uilistlayout_horizontal_flex_space_evenly", (120.0, 20.0)),
+        ] {
+            assert_eq!(list_content_size(stem), expected, "{stem}");
+        }
+    }
+
+    /// A flexed or clamped child counts at the size it ended up, by the same
+    /// rule the engine showed for the list's own `Fill` above. These numbers
+    /// follow from that rule and the cases' verified rectangles; none was read
+    /// back in Studio itself.
+    #[test]
+    fn a_list_counts_flexed_and_clamped_children_at_their_final_size() {
+        for (stem, expected) in [
+            ("uiflexitem_grow_takes_the_free_space", (200.0, 20.0)),
+            ("uiflexitem_grow_stops_at_max_size", (100.0, 20.0)),
+            (
+                "uiflexitem_two_shrink_children_share_the_overflow",
+                (150.0, 20.0),
+            ),
+            (
+                "uisizeconstraint_clamped_size_advances_a_list",
+                (100.0, 40.0),
+            ),
         ] {
             assert_eq!(list_content_size(stem), expected, "{stem}");
         }

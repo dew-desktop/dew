@@ -29,13 +29,15 @@
 //! `UIListLayout` is placed in full: `FillDirection`, `SortOrder`, `Padding`
 //! (scale and offset), alignment on both axes, `Wraps`, `HorizontalFlex` and
 //! `VerticalFlex`, and `ItemLineAlignment`, and it reports
-//! `AbsoluteContentSize`. Each rule is held to an engine-verified case in
+//! `AbsoluteContentSize`. A `UIFlexItem` on a list's child grows or shrinks
+//! that child along the list, and a `UISizeConstraint` clamps any element's
+//! size, flexed or not. Each rule is held to an engine-verified case in
 //! `conformance/cases`, and the rules no case pins down say so where they are
 //! written.
 //!
-//! IT DOES NOT DO `UIFlexItem`, `UIGridLayout`, `UITableLayout`,
-//! `UIPageLayout`, or any of the constraints. They are skipped as modifiers, so a
-//! tree that uses one draws as though it were absent.
+//! IT DOES NOT DO `UIGridLayout`, `UITableLayout`, `UIPageLayout`,
+//! `UIAspectRatioConstraint` or `UITextSizeConstraint`. They are skipped as
+//! modifiers, so a tree that uses one draws as though it were absent.
 //!
 //! WHAT AN IMAGE HONOURS, STATED THE SAME WAY. `Image`, `ImageContent`,
 //! `ImageColor3`, `ImageTransparency`, `ImageRectOffset`, `ImageRectSize`, and
@@ -220,6 +222,61 @@ fn list_layout_of(dom: &Dom, id: usize) -> Option<usize> {
         .find(|&child| dom.class_of(child).as_deref() == Some("UIListLayout"))
 }
 
+/// The first child of `id` whose class is `class`, if any.
+fn modifier_of(dom: &Dom, id: usize, class: &str) -> Option<usize> {
+    dom.children(id)
+        .into_iter()
+        .find(|&child| dom.class_of(child).as_deref() == Some(class))
+}
+
+/// The bounds a `UISizeConstraint` child puts on a size, as
+/// ((min width, min height), (max width, max height)). Without one the bounds
+/// are 0 and infinity, which are also the constraint's own defaults
+/// (LAYOUT.md section 11).
+///
+/// A missing, negative or non-finite minimum reads as 0 and a missing or NaN
+/// maximum as infinity, so the default `MaxSize` of (inf, inf) arrives as
+/// itself. Only the first constraint counts; how the engine combines two is
+/// unverified.
+fn size_bounds(dom: &Dom, id: usize) -> ((f32, f32), (f32, f32)) {
+    let unbounded = ((0.0, 0.0), (f32::INFINITY, f32::INFINITY));
+    let Some(constraint) = modifier_of(dom, id, "UISizeConstraint") else {
+        return unbounded;
+    };
+    let read = |key: &str| match dom.styled_property(constraint, key) {
+        Some(Variant::Vector2(v)) => Some((v.x, v.y)),
+        _ => None,
+    };
+    let floor = |v: f32| if v.is_finite() && v > 0.0 { v } else { 0.0 };
+    let ceiling = |v: f32| {
+        if v.is_nan() {
+            f32::INFINITY
+        } else {
+            v.max(0.0)
+        }
+    };
+    let (min_w, min_h) = read("MinSize").unwrap_or((0.0, 0.0));
+    let (max_w, max_h) = read("MaxSize").unwrap_or((f32::INFINITY, f32::INFINITY));
+    (
+        (floor(min_w), floor(min_h)),
+        (ceiling(max_w), ceiling(max_h)),
+    )
+}
+
+/// `v` held between `min` and `max`.
+///
+/// THE MINIMUM WINS when the two cross, because it is applied last. What the
+/// engine does with a `MinSize` larger than its `MaxSize` is unverified.
+fn bounded(v: f32, min: f32, max: f32) -> f32 {
+    v.min(max).max(min)
+}
+
+/// A width and a height clamped by the element's `UISizeConstraint`.
+fn clamp_size(dom: &Dom, id: usize, w: f32, h: f32) -> (f32, f32) {
+    let ((min_w, min_h), (max_w, max_h)) = size_bounds(dom, id);
+    (bounded(w, min_w, max_w), bounded(h, min_h, max_h))
+}
+
 /// Resolve one element against the box its parent offers.
 ///
 /// THE COORDINATE MODEL, and it is `conformance/LAYOUT.md` section 1 rather than
@@ -231,6 +288,12 @@ fn list_layout_of(dom: &Dom, id: usize) -> Option<usize> {
 /// `laid_out` marks an element positioned by a layout container (`UIListLayout`).
 /// Its own `Position` is ignored per LAYOUT.md section 4, and so is its
 /// `AnchorPoint` on both axes (`uilistlayout_ignores_a_child_anchor_point`).
+///
+/// A `UISizeConstraint` clamps the size before the anchor reads it, at the
+/// element's own `Position` (`uisizeconstraint_min_size_grows_a_plain_child`,
+/// `uisizeconstraint_max_size_shrinks_a_plain_child`). That the anchor then
+/// multiplies the clamped size rather than the authored one follows the size
+/// first rule and is unverified for a constrained element.
 fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
     let (sxs, sxo, sys, syo) = udim2(dom, id, "Size");
     let (pxs, pxo, pys, pyo) = if laid_out {
@@ -244,8 +307,7 @@ fn solve_rect(dom: &Dom, id: usize, parent: Box2, laid_out: bool) -> Box2 {
         vector2(dom, id, "AnchorPoint")
     };
 
-    let w = sxs * parent.w + sxo;
-    let h = sys * parent.h + syo;
+    let (w, h) = clamp_size(dom, id, sxs * parent.w + sxo, sys * parent.h + syo);
     Box2 {
         x: parent.x + pxs * parent.w + pxo - anchor.x * w,
         y: parent.y + pys * parent.h + pyo - anchor.y * h,
@@ -731,6 +793,8 @@ fn grow(
                     } else {
                         sxo
                     };
+                    let ((min_w, _), (max_w, _)) = size_bounds(dom, item.id);
+                    let resolved = bounded(resolved, min_w, max_w);
                     right = right.max(r.x + resolved + got_x);
                     inherit_x.insert(d + 1, got_x);
                 } else {
@@ -748,6 +812,8 @@ fn grow(
                     } else {
                         syo
                     };
+                    let ((_, min_h), (_, max_h)) = size_bounds(dom, item.id);
+                    let resolved = bounded(resolved, min_h, max_h);
                     bottom = bottom.max(r.y + resolved + got_y);
                     inherit_y.insert(d + 1, got_y);
                 } else {
@@ -850,11 +916,15 @@ fn visit(
     }
 
     let mut rect = solve_rect(dom, id, parent_box, laid_out);
-    if let Some(w) = forced.0 {
-        rect.w = w.max(0.0);
-    }
-    if let Some(h) = forced.1 {
-        rect.h = h.max(0.0);
+    if forced.0.is_some() || forced.1.is_some() {
+        let (w, h) = clamp_size(
+            dom,
+            id,
+            forced.0.unwrap_or(rect.w),
+            forced.1.unwrap_or(rect.h),
+        );
+        rect.w = w;
+        rect.h = h;
     }
     let z = number(dom, id, "ZIndex").unwrap_or(1.0) as i32;
     let entry_idx = out.len();
@@ -1006,7 +1076,16 @@ fn visit(
         pad_b,
         offered,
     );
-    out[entry_idx].rect = new_rect;
+    // THE CONSTRAINT HAS THE LAST WORD over what AutomaticSize measured, so a
+    // `MaxSize` caps a growing element. No case pins the order of measuring and
+    // clamping; this is the simplest order that agrees with every case, and it
+    // is unverified.
+    let (clamped_w, clamped_h) = clamp_size(dom, id, new_rect.w, new_rect.h);
+    out[entry_idx].rect = Box2 {
+        w: clamped_w,
+        h: clamped_h,
+        ..new_rect
+    };
 
     let grew_w = out[entry_idx].rect.w > before_w;
     let grew_h = out[entry_idx].rect.h > before_h;
@@ -1171,6 +1250,8 @@ struct ListLayout {
     item_line: ItemLine,
     wraps: bool,
     by_name: bool,
+    /// Does any child carry a `UIFlexItem` that grows or shrinks it?
+    flexed: bool,
 }
 
 impl ListLayout {
@@ -1188,14 +1269,17 @@ impl ListLayout {
         };
         let (scale, offset) = udim(dom, layout_id, "Padding");
         let main_len = if horizontal { box_rect.w } else { box_rect.h };
-        let item_line = match enum_name(dom, layout_id, "ItemLineAlignment", "ItemLineAlignment") {
-            Some("Start") => ItemLine::At(Gather::Start),
-            Some("Center") => ItemLine::At(Gather::Center),
-            Some("End") => ItemLine::At(Gather::End),
-            Some("Stretch") => ItemLine::Stretch,
-            _ => ItemLine::Automatic,
-        };
+        let item_line = item_line_of(dom, layout_id);
+        let flexed = dom
+            .parent_of(layout_id)
+            .map(|parent| {
+                dom.children(parent)
+                    .into_iter()
+                    .any(|child| flexes(dom, child))
+            })
+            .unwrap_or(false);
         ListLayout {
+            flexed,
             horizontal,
             gap: scale * main_len + offset,
             main_gather,
@@ -1226,7 +1310,10 @@ impl ListLayout {
         } else {
             (grow_y, grow_x)
         };
-        let main = self.wraps || self.main_gather != Gather::Start || self.main_flex != Flex::None;
+        let main = self.wraps
+            || self.flexed
+            || self.main_gather != Gather::Start
+            || self.main_flex != Flex::None;
         let cross = self.cross_gather != Gather::Start || self.cross_flex != Flex::None;
         (grow_main && main) || (grow_cross && cross)
     }
@@ -1304,6 +1391,163 @@ fn distribute(sizes: &[f32], avail: f32, gap: f32, flex: Flex, gather: Gather) -
     }
 }
 
+/// What a `UIFlexItem` asks of the list its element sits in.
+#[derive(Clone, Copy)]
+struct FlexItem {
+    /// Weight in the line's free space. 0 takes none.
+    grow: f32,
+    /// Weight in the line's overflow, before it is multiplied by the basis.
+    /// 0 gives none back.
+    shrink: f32,
+    /// `Automatic` defers to the list's own `ItemLineAlignment`.
+    line: ItemLine,
+}
+
+/// The `UIFlexItem` on `id`, if it has one.
+///
+/// `Grow`, `Shrink` and `Fill` are fixed weights of 1 and 0, and `GrowRatio`
+/// and `ShrinkRatio` count only under `Custom`
+/// (`uiflexitem_grow_ratio_is_ignored_unless_custom`). `None`, the default,
+/// flexes nothing; its `ItemLineAlignment` still applies.
+fn flex_item_of(dom: &Dom, id: usize) -> Option<FlexItem> {
+    let item = modifier_of(dom, id, "UIFlexItem")?;
+    let ratio = |key: &str| number(dom, item, key).unwrap_or(0.0).max(0.0);
+    let (grow, shrink) = match enum_name(dom, item, "FlexMode", "UIFlexMode") {
+        Some("Grow") => (1.0, 0.0),
+        Some("Shrink") => (0.0, 1.0),
+        Some("Fill") => (1.0, 1.0),
+        Some("Custom") => (ratio("GrowRatio"), ratio("ShrinkRatio")),
+        _ => (0.0, 0.0),
+    };
+    Some(FlexItem {
+        grow,
+        shrink,
+        line: item_line_of(dom, item),
+    })
+}
+
+/// Does a `UIFlexItem` on `id` flex it at all?
+fn flexes(dom: &Dom, id: usize) -> bool {
+    flex_item_of(dom, id).is_some_and(|f| f.grow > 0.0 || f.shrink > 0.0)
+}
+
+/// `ItemLineAlignment` on a list or a flex item.
+fn item_line_of(dom: &Dom, id: usize) -> ItemLine {
+    match enum_name(dom, id, "ItemLineAlignment", "ItemLineAlignment") {
+        Some("Start") => ItemLine::At(Gather::Start),
+        Some("Center") => ItemLine::At(Gather::Center),
+        Some("End") => ItemLine::At(Gather::End),
+        Some("Stretch") => ItemLine::Stretch,
+        _ => ItemLine::Automatic,
+    }
+}
+
+/// One child's part in resolving a line's flex, along the main axis.
+struct Flexing {
+    basis: f32,
+    grow: f32,
+    shrink: f32,
+    min: f32,
+    max: f32,
+}
+
+/// The main-axis length of each member of a line once flex has shared out the
+/// line's free space or its overflow.
+///
+/// The free space is `avail` less the bases and the gaps between them. When
+/// it is positive, each member with a grow weight takes a share in proportion
+/// to that weight alone, whatever its size: two `Grow` children of 40 and 120
+/// in 200 become 60 and 140 (`uiflexitem_two_grow_children_split_equally`),
+/// and `GrowRatio` 1 and 2 split 120 as 40 and 80
+/// (`uiflexitem_custom_grow_ratio_weights_the_split`).
+///
+/// SHRINKING IS NOT AN EQUAL SHARE. When the free space is negative, each
+/// member gives back in proportion to its shrink weight TIMES ITS BASIS. Two
+/// cases pin that rule and a third agrees with it:
+/// `uiflexitem_custom_shrink_ratio_weights_the_overflow` (100 and 140 with
+/// `ShrinkRatio` 1 and 3 in 200 lose 40 split 100 to 420, leaving 1200/13 and
+/// 1400/13), `uiflexitem_two_shrink_children_share_the_overflow` (100 and 200
+/// in 150 become 50 and 100, where an equal share would give 25 and 125), and
+/// `uilistlayout_horizontal_flex_fill_shrinks_an_overflow`, where the list's
+/// own `Fill` shrinks 60, 90 and 150 in 240 to 48, 72 and 120.
+///
+/// A member that would cross its `UISizeConstraint` stops at the bound and the
+/// rest is shared again among the others, which is how a flexing sibling takes
+/// up what a bounded one left (`uisizeconstraint_max_size_hands_growth_to_a_sibling`,
+/// `uisizeconstraint_min_size_hands_shrink_to_a_sibling`). When several cross
+/// at once the loop is the CSS one: if the clamps add space overall the members
+/// held at their minimum are fixed, if they remove it those held at their
+/// maximum are, and the rest go round again. With one bound per case the cases
+/// cannot tell this from fixing every clamped member at once.
+///
+/// UNVERIFIED: weights summing to less than 1 still share all the free space,
+/// where CSS would hand out only that fraction of it.
+fn flex_line(members: &[Flexing], avail: f32, gap: f32) -> Vec<f32> {
+    let n = members.len();
+    let gaps = gap * n.saturating_sub(1) as f32;
+    let start: f32 = members.iter().map(|m| m.basis).sum::<f32>() + gaps;
+    let growing = avail > start;
+    let weight = |m: &Flexing| if growing { m.grow } else { m.shrink * m.basis };
+    let mut target: Vec<f32> = members.iter().map(|m| m.basis).collect();
+    let mut frozen: Vec<bool> = members
+        .iter()
+        .map(|m| avail == start || weight(m) <= 0.0)
+        .collect();
+
+    // Every pass fixes at least one member, so n passes always finish.
+    for _ in 0..n {
+        if frozen.iter().all(|&f| f) {
+            break;
+        }
+        let used: f32 = members
+            .iter()
+            .zip(&frozen)
+            .zip(&target)
+            .map(|((m, &f), &t)| if f { t } else { m.basis })
+            .sum::<f32>()
+            + gaps;
+        let free = avail - used;
+        let total: f32 = members
+            .iter()
+            .zip(&frozen)
+            .filter(|(_, &f)| !f)
+            .map(|(m, _)| weight(m))
+            .sum();
+        if total <= 0.0 {
+            break;
+        }
+        let mut violation = 0.0_f32;
+        let mut moved = vec![0.0_f32; n];
+        for (i, m) in members.iter().enumerate() {
+            if frozen[i] {
+                continue;
+            }
+            let wanted = m.basis + free * weight(m) / total;
+            let held = bounded(wanted, m.min, m.max);
+            target[i] = wanted;
+            moved[i] = held - wanted;
+            violation += moved[i];
+        }
+        for i in 0..n {
+            if frozen[i] {
+                continue;
+            }
+            let fix = if violation.abs() <= 0.001 {
+                true
+            } else if violation > 0.0 {
+                moved[i] > 0.0
+            } else {
+                moved[i] < 0.0
+            };
+            if fix {
+                target[i] += moved[i];
+                frozen[i] = true;
+            }
+        }
+    }
+    target
+}
+
 /// Lay out the children of `id` inside `box_rect`.
 ///
 /// `measuring` names the axes AutomaticSize is about to grow. On those axes a
@@ -1363,6 +1607,7 @@ struct Entry {
     id: usize,
     main: f32,
     cross: f32,
+    flex: Option<FlexItem>,
 }
 
 /// The size a child asks for before a list moves or flexes it: (width, height).
@@ -1466,6 +1711,7 @@ fn place_list(
                 id: child,
                 main,
                 cross,
+                flex: flex_item_of(dom, child),
             })
         })
         .collect();
@@ -1510,11 +1756,34 @@ fn place_list(
         })
         .collect();
     let across = distribute(&thickness, cross_len, list.gap, cross_flex, cross_gather);
-    let stretch = cross_flex == Flex::Fill || list.item_line == ItemLine::Stretch;
-    let within = match list.item_line {
-        ItemLine::At(gather) => gather,
-        // Automatic, and Stretch where a child is not stretched.
-        _ => list.cross_gather,
+
+    // FLEX ON THE MAIN AXIS, per line (`uiflexitem_grow_is_per_wrapped_line`).
+    // The list's `Fill` makes every child a `Fill` flex item, and a child's own
+    // `UIFlexItem` that flexes replaces that for the child alone: under the
+    // list's `Fill` a `Grow` child and its plain siblings all grow by one share
+    // (`uiflexitem_grow_under_horizontal_flex_fill`). Whether a `Grow` child
+    // there also shrinks with its siblings on an overflow is unverified; here it
+    // does not. While AutomaticSize measures the main axis nothing flexes, as
+    // the list's own flex does not.
+    let fills = main_flex == Flex::Fill;
+    let weights = |entry: &Entry| -> (f32, f32) {
+        if measuring_main {
+            return (0.0, 0.0);
+        }
+        match entry.flex {
+            Some(item) if item.grow > 0.0 || item.shrink > 0.0 => (item.grow, item.shrink),
+            _ if fills => (1.0, 1.0),
+            _ => (0.0, 0.0),
+        }
+    };
+    // Flex comes first and the list's `Space` value shares whatever it left,
+    // which after a `Grow` child is nothing
+    // (`uiflexitem_grow_beats_space_between`). After the list's own `Fill` the
+    // line packs from the start, as it always has.
+    let (spacing, spacing_gather) = if fills {
+        (Flex::None, Gather::Start)
+    } else {
+        (main_flex, main_gather)
     };
 
     let mut content_main = 0.0_f32;
@@ -1522,13 +1791,44 @@ fn place_list(
     for (line_index, line) in lines.iter().enumerate() {
         let (line_at, line_thickness) = across[line_index];
         let members = &entries[line.clone()];
-        let mains: Vec<f32> = members.iter().map(|e| e.main).collect();
-        let along = distribute(&mains, main_len, list.gap, main_flex, main_gather);
+        let flexing: Vec<Flexing> = members
+            .iter()
+            .map(|entry| {
+                let ((min_w, min_h), (max_w, max_h)) = size_bounds(dom, entry.id);
+                let (min, max) = if horizontal {
+                    (min_w, max_w)
+                } else {
+                    (min_h, max_h)
+                };
+                let (grow, shrink) = weights(entry);
+                Flexing {
+                    basis: entry.main,
+                    grow,
+                    shrink,
+                    min,
+                    max,
+                }
+            })
+            .collect();
+        let mains = flex_line(&flexing, main_len, list.gap);
+        let along = distribute(&mains, main_len, list.gap, spacing, spacing_gather);
 
         let mut line_main = 0.0_f32;
         let mut line_cross = 0.0_f32;
         for (entry, &(main_at, main_size)) in members.iter().zip(along.iter()) {
             let forced_main = ((main_size - entry.main).abs() > 0.001).then_some(main_size);
+            // A child's own `ItemLineAlignment` replaces the list's, and its
+            // `Automatic` defers to the list's.
+            let item_line = match entry.flex.map(|f| f.line) {
+                Some(ItemLine::Automatic) | None => list.item_line,
+                Some(own) => own,
+            };
+            let stretch = cross_flex == Flex::Fill || item_line == ItemLine::Stretch;
+            let within = match item_line {
+                ItemLine::At(gather) => gather,
+                // Automatic, and Stretch where a child is not stretched.
+                _ => list.cross_gather,
+            };
             let (cross_at, forced_cross) = if stretch {
                 (line_at, Some(line_thickness))
             } else {

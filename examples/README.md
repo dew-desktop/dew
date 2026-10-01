@@ -48,6 +48,18 @@ cargo run -- examples/widgets/flex-list-demo
 cargo run -- test examples/widgets/flex-list-demo
 ```
 
+`flex-item-demo` is a chat pane where each child decides its own share of a
+row: a `UIFlexItem` makes the message field take the spare width and lets the
+channel chip give width back, and a `UISizeConstraint` caps the sidebar and the
+message bubbles and stops the chip at a minimum. Its buttons narrow and widen
+the pane and change the field's `FlexMode` and Send's `GrowRatio`, and its test
+clicks them and checks each width against the engine's.
+
+```sh
+cargo run -- examples/widgets/flex-item-demo
+cargo run -- test examples/widgets/flex-item-demo
+```
+
 ## `aether/`
 
 Applets built with [Aether](https://github.com/project-aether-ui/aether), a UI
