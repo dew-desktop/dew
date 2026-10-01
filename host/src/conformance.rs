@@ -63,6 +63,8 @@ pub struct ExpectedNode {
     pub other_numbers: HashMap<String, f32>,
     pub other_strings: HashMap<String, String>,
     pub other_bools: HashMap<String, bool>,
+    /// Keys whose value is not a number, string or boolean; none is compared.
+    pub other_values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -70,10 +72,20 @@ pub struct Ratio {
     pub of: String,
     pub to: String,
     pub field: String,
+    /// The field read from `to`, parsed from `toField`. `None` means `field`.
+    pub to_field: Option<String>,
     pub expect: Option<f32>,
     pub tolerance: Option<f32>,
     pub min: Option<f32>,
+    pub max: Option<f32>,
     pub integral: Option<bool>,
+}
+
+impl Ratio {
+    /// The field read from the denominator node.
+    pub fn denominator_field(&self) -> &str {
+        self.to_field.as_deref().unwrap_or(&self.field)
+    }
 }
 
 /// A pixel probe at integer surface coordinates (x, y).
@@ -294,11 +306,22 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "case".to_string());
 
+    decode_case_source(lua, &source, &file_stem, &path.to_string_lossy())
+}
+
+/// Decode a case from its source text. `chunk_name` names it in errors.
+pub fn decode_case_source(
+    lua: &Lua,
+    source: &str,
+    file_stem: &str,
+    chunk_name: &str,
+) -> Result<Case, String> {
+    let file_stem = file_stem.to_string();
     let val: Value = lua
-        .load(&source)
-        .set_name(path.to_string_lossy().as_ref())
+        .load(source)
+        .set_name(chunk_name)
         .eval()
-        .map_err(|e| format!("syntax/eval error in {}: {e}", path.display()))?;
+        .map_err(|e| format!("syntax/eval error in {chunk_name}: {e}"))?;
 
     let table = match val {
         Value::Table(t) => t,
@@ -354,6 +377,7 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
             let mut other_numbers = HashMap::new();
             let mut other_strings = HashMap::new();
             let mut other_bools = HashMap::new();
+            let mut other_values = Vec::new();
             let mut x = None;
             let mut y = None;
             let mut w = None;
@@ -362,32 +386,22 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
             for (k, val) in item.pairs::<String, Value>().flatten() {
                 match k.as_str() {
                     "name" => {}
-                    "x" => {
-                        if let Value::Number(n) = val {
-                            x = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            x = Some(n as f32);
-                        }
-                    }
-                    "y" => {
-                        if let Value::Number(n) = val {
-                            y = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            y = Some(n as f32);
-                        }
-                    }
-                    "w" => {
-                        if let Value::Number(n) = val {
-                            w = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            w = Some(n as f32);
-                        }
-                    }
-                    "h" => {
-                        if let Value::Number(n) = val {
-                            h = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            h = Some(n as f32);
+                    "x" | "y" | "w" | "h" => {
+                        let n = match val {
+                            Value::Number(n) => n as f32,
+                            Value::Integer(n) => n as f32,
+                            other => {
+                                return Err(format!(
+                                    "expect entry '{node_name}': '{k}' must be a number, got {}",
+                                    other.type_name()
+                                ))
+                            }
+                        };
+                        match k.as_str() {
+                            "x" => x = Some(n),
+                            "y" => y = Some(n),
+                            "w" => w = Some(n),
+                            _ => h = Some(n),
                         }
                     }
                     _ => match val {
@@ -398,14 +412,12 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
                             other_numbers.insert(k, n as f32);
                         }
                         Value::String(s) => {
-                            if let Ok(s_str) = s.to_str() {
-                                other_strings.insert(k, s_str.to_string());
-                            }
+                            other_strings.insert(k, s.to_string_lossy());
                         }
                         Value::Boolean(b) => {
                             other_bools.insert(k, b);
                         }
-                        _ => {}
+                        _ => other_values.push(k),
                     },
                 }
             }
@@ -419,6 +431,7 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
                 other_numbers,
                 other_strings,
                 other_bools,
+                other_values,
             });
         }
     }
@@ -436,18 +449,24 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
             let field: String = item
                 .get("field")
                 .map_err(|e| format!("ratio entry missing 'field': {e}"))?;
-            let exp_val: Option<f32> = item.get::<f32>("expect").ok();
-            let tolerance: Option<f32> = item.get::<f32>("tolerance").ok();
-            let min: Option<f32> = item.get::<f32>("min").ok();
-            let integral: Option<bool> = item.get::<bool>("integral").ok();
+            // A key that is present with the wrong type is an error rather
+            // than absent, so a mistyped bound cannot drop out of the check.
+            let exp_val: Option<f32> = ratio_key(&item, "expect")?;
+            let tolerance: Option<f32> = ratio_key(&item, "tolerance")?;
+            let min: Option<f32> = ratio_key(&item, "min")?;
+            let max: Option<f32> = ratio_key(&item, "max")?;
+            let to_field: Option<String> = ratio_key(&item, "toField")?;
+            let integral: Option<bool> = ratio_key(&item, "integral")?;
 
             ratios.push(Ratio {
                 of,
                 to,
                 field,
+                to_field,
                 expect: exp_val,
                 tolerance,
                 min,
+                max,
                 integral,
             });
         }
@@ -515,6 +534,59 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
         pixels,
         golden,
         tree_val,
+    })
+}
+
+/// Reads an optional key of a ratio entry: absent is `None`, present with a
+/// value that does not convert to `T` is an error naming the key.
+fn ratio_key<T: FromLua>(item: &Table, key: &str) -> Result<Option<T>, String> {
+    match item.get::<Value>(key) {
+        Ok(Value::Nil) => Ok(None),
+        Ok(_) => item
+            .get::<T>(key)
+            .map(Some)
+            .map_err(|e| format!("ratio entry has an invalid '{key}': {e}")),
+        Err(e) => Err(format!("ratio entry has an invalid '{key}': {e}")),
+    }
+}
+
+/// Reads a ratio's field off a node. Every field a case may name is listed;
+/// one Dew does not compute yet is an error that says so, and an unknown one
+/// is an error too, so a ratio never compares a value nobody measured.
+fn read_field(node: &dew_runtime::Node, field: &str) -> Result<f32, String> {
+    match field {
+        "textHeight" => Ok(node.text_size),
+        "x" => Ok(node.rect.x),
+        "y" => Ok(node.rect.y),
+        "w" => Ok(node.rect.w),
+        "h" => Ok(node.rect.h),
+        "textBoundsX" | "textBoundsY" => Err(format!(
+            "'{field}' is not implemented: Dew does not compute TextBounds yet"
+        )),
+        _ => Err(format!("no measurable field '{field}'")),
+    }
+}
+
+/// Every key an expect entry may name besides `name`, `x`, `y`, `w` and `h`
+/// is checked here. A key this runner does not compare is a failure naming
+/// the key, so an entry never passes on an assertion nobody checked.
+fn unchecked_expect_key(exp: &ExpectedNode) -> Option<String> {
+    let mut keys: Vec<&str> = exp
+        .other_numbers
+        .keys()
+        .chain(exp.other_strings.keys())
+        .chain(exp.other_bools.keys())
+        .chain(exp.other_values.iter())
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    let key = keys.first()?;
+    Some(match *key {
+        "textFits" | "contentText" => format!(
+            "{}: '{key}' is not implemented: Dew does not compare it yet",
+            exp.name
+        ),
+        _ => format!("{}: this runner reads no expect field '{key}'", exp.name),
     })
 }
 
@@ -844,100 +916,75 @@ pub fn run_case_with_options(
                 return finalize_result(case, detail, Some(remediation));
             }
         }
+        if let Some(detail) = unchecked_expect_key(exp) {
+            return finalize_result(case, detail, None);
+        }
     }
 
     // 7. Evaluate ratios
     for r in &case.ratios {
-        let of_node = match by_name.get(&r.of) {
-            Some(n) => *n,
-            None => {
-                let detail = format!(
-                    "ratio needs '{}' and '{}'; one is missing from the display list",
-                    r.of, r.to
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        };
-        let to_node = match by_name.get(&r.to) {
-            Some(n) => *n,
-            None => {
-                let detail = format!(
-                    "ratio needs '{}' and '{}'; one is missing from the display list",
-                    r.of, r.to
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        };
+        let to_field = r.denominator_field();
+        let label = format!("ratio {}.{} / {}.{to_field}", r.of, r.field, r.to);
 
-        let read_field = |node: &dew_runtime::Node, field: &str| -> Option<f32> {
-            match field {
-                "textHeight" => Some(node.text_size),
-                "x" => Some(node.rect.x),
-                "y" => Some(node.rect.y),
-                "w" => Some(node.rect.w),
-                "h" => Some(node.rect.h),
-                _ => None,
+        // A ratio with no bound asserts nothing, so it cannot pass.
+        if r.integral != Some(true) && r.expect.is_none() && r.min.is_none() && r.max.is_none() {
+            let detail = format!("{label}: no expect, min, max or integral");
+            return finalize_result(case, detail, None);
+        }
+
+        let (of_node, to_node) = match (by_name.get(&r.of), by_name.get(&r.to)) {
+            (Some(of), Some(to)) => (*of, *to),
+            _ => {
+                let detail = format!(
+                    "ratio needs '{}' and '{}'; one is missing from the display list",
+                    r.of, r.to
+                );
+                let remediation = diagnose_remediation(case, &detail);
+                return finalize_result(case, detail, Some(remediation));
             }
         };
 
         let num = match read_field(of_node, &r.field) {
-            Some(v) => v,
-            None => {
-                let detail = format!("node '{}' has no measurable field '{}'", r.of, r.field);
-                return finalize_result(case, detail, None);
-            }
+            Ok(v) => v,
+            Err(e) => return finalize_result(case, format!("node '{}': {e}", r.of), None),
         };
-        let den = match read_field(to_node, &r.field) {
-            Some(v) => v,
-            None => {
-                let detail = format!("node '{}' has no measurable field '{}'", r.to, r.field);
-                return finalize_result(case, detail, None);
-            }
+        let den = match read_field(to_node, to_field) {
+            Ok(v) => v,
+            Err(e) => return finalize_result(case, format!("node '{}': {e}", r.to), None),
         };
 
         if den == 0.0 {
-            let detail = format!(
-                "ratio {}.{} / {}.{}: the denominator is zero",
-                r.of, r.field, r.to, r.field
-            );
+            let detail = format!("{label}: the denominator is zero");
             let remediation = diagnose_remediation(case, &detail);
             return finalize_result(case, detail, Some(remediation));
         }
 
         let actual = num / den;
 
-        if let Some(true) = r.integral {
+        let outside = if let Some(true) = r.integral {
             let nearest = (actual + 0.5).floor();
             let slack = r.tolerance.unwrap_or(0.02);
-            if nearest < 1.0 || (actual - nearest).abs() > slack {
-                let detail = format!(
-                    "ratio {}.{} / {}.{}: expected a whole multiple, got {:.4}",
-                    r.of, r.field, r.to, r.field, actual
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        } else if let Some(min_val) = r.min {
-            if actual < min_val {
-                let detail = format!(
-                    "ratio {}.{} / {}.{}: expected at least {:.3}, got {:.3}",
-                    r.of, r.field, r.to, r.field, min_val, actual
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        } else if let Some(exp_val) = r.expect {
+            (nearest < 1.0 || (actual - nearest).abs() > slack)
+                .then(|| format!("expected a whole multiple, got {actual:.4}"))
+        } else if r.min.is_some() || r.max.is_some() {
+            let within = r.min.is_none_or(|lo| actual >= lo) && r.max.is_none_or(|hi| actual <= hi);
+            let bound = match (r.min, r.max) {
+                (Some(lo), Some(hi)) => format!("between {lo:.3} and {hi:.3}"),
+                (Some(lo), None) => format!("at least {lo:.3}"),
+                (None, Some(hi)) => format!("at most {hi:.3}"),
+                (None, None) => unreachable!("one bound is set"),
+            };
+            (!within).then(|| format!("expected {bound}, got {actual:.3}"))
+        } else {
+            let exp_val = r.expect.expect("a ratio without a bound returned above");
             let slack = r.tolerance.unwrap_or(0.02);
-            if (actual - exp_val).abs() > slack {
-                let detail = format!(
-                    "ratio {}.{} / {}.{}: expected {:.3} +/- {:.3}, got {:.3}",
-                    r.of, r.field, r.to, r.field, exp_val, slack, actual
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
+            ((actual - exp_val).abs() > slack)
+                .then(|| format!("expected {exp_val:.3} +/- {slack:.3}, got {actual:.3}"))
+        };
+        if let Some(why) = outside {
+            let detail = format!("{label}: {why}");
+            let remediation = diagnose_remediation(case, &detail);
+            return finalize_result(case, detail, Some(remediation));
         }
     }
 
@@ -1946,6 +1993,108 @@ mod tests {
         let dir = find_cases_dir(None).expect("cases dir");
         let (_results, summary) = run_suite_pixel(&dir, None, false, false);
         assert_tally_matches_cases(&dir, &summary);
+    }
+
+    /// Decode and run a case written inline. Its tree is a 200 x 100 root
+    /// holding `Wide` (100 x 20) and `Square` (20 x 20), and a TextLabel
+    /// `Label`; `assertions` is the rest of the case table. The provenance is
+    /// `roblox`, so a disagreement is a failure rather than an open question.
+    fn run_inline(assertions: &str) -> CaseStatus {
+        let source = format!(
+            r#"return {{
+                name = "inline",
+                provenance = "roblox",
+                surface = {{ width = 200, height = 100 }},
+                tree = {{
+                    class = "Frame",
+                    name = "Root",
+                    props = {{ Size = {{ "UDim2", 1, 0, 1, 0 }} }},
+                    children = {{
+                        {{ class = "Frame", name = "Wide",
+                           props = {{ Size = {{ "UDim2", 0, 100, 0, 20 }} }} }},
+                        {{ class = "Frame", name = "Square",
+                           props = {{ Size = {{ "UDim2", 0, 20, 0, 20 }},
+                                      Position = {{ "UDim2", 0, 0, 0, 40 }} }} }},
+                        {{ class = "TextLabel", name = "Label",
+                           props = {{ Text = "label", TextSize = 20,
+                                      Size = {{ "UDim2", 0, 100, 0, 30 }},
+                                      Position = {{ "UDim2", 0, 0, 0, 60 }} }} }},
+                    }},
+                }},
+                {assertions}
+            }}"#
+        );
+        let lua = Lua::new();
+        let case = decode_case_source(&lua, &source, "inline", "inline").expect("case decodes");
+        run_case(&lua, &case).status
+    }
+
+    fn assert_fails_with(status: CaseStatus, needle: &str) {
+        match status {
+            CaseStatus::Fail { ref detail, .. } if detail.contains(needle) => {}
+            other => panic!("expected a failure mentioning {needle:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_max_only_ratio_is_enforced() {
+        // Wide.w / Square.w is 5.
+        let within =
+            run_inline(r#"ratios = { { of = "Wide", to = "Square", field = "w", max = 5.5 } },"#);
+        assert_eq!(within, CaseStatus::Pass);
+        let above =
+            run_inline(r#"ratios = { { of = "Wide", to = "Square", field = "w", max = 4 } },"#);
+        assert_fails_with(above, "at most 4.000");
+        // `min` and `max` together are both checked.
+        let between = run_inline(
+            r#"ratios = { { of = "Wide", to = "Square", field = "w", min = 1, max = 4 } },"#,
+        );
+        assert_fails_with(between, "between 1.000 and 4.000");
+    }
+
+    #[test]
+    fn to_field_reads_the_other_field() {
+        // Wide.w / Wide.h is 5; without `toField` the ratio would be w / w = 1.
+        let status = run_inline(
+            r#"ratios = { { of = "Wide", to = "Wide", field = "w", toField = "h", expect = 5 } },"#,
+        );
+        assert_eq!(status, CaseStatus::Pass);
+        let wrong = run_inline(
+            r#"ratios = { { of = "Wide", to = "Wide", field = "w", toField = "h", expect = 1 } },"#,
+        );
+        assert_fails_with(wrong, "ratio Wide.w / Wide.h");
+    }
+
+    #[test]
+    fn a_ratio_with_no_bound_fails() {
+        let status = run_inline(r#"ratios = { { of = "Wide", to = "Square", field = "w" } },"#);
+        assert_fails_with(status, "no expect, min, max or integral");
+    }
+
+    #[test]
+    fn an_unknown_expect_key_fails() {
+        let status = run_inline(r#"expect = { { name = "Wide", w = 100, colour = "red" } },"#);
+        assert_fails_with(status, "reads no expect field 'colour'");
+    }
+
+    #[test]
+    fn content_text_and_text_fits_fail_while_unimplemented() {
+        let content = run_inline(r#"expect = { { name = "Label", contentText = "label" } },"#);
+        assert_fails_with(content, "'contentText' is not implemented");
+        let fits = run_inline(r#"expect = { { name = "Label", textFits = true } },"#);
+        assert_fails_with(fits, "'textFits' is not implemented");
+    }
+
+    #[test]
+    fn text_bounds_fail_while_unimplemented() {
+        let status = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsX", toField = "w", max = 1 } },"#,
+        );
+        assert_fails_with(status, "'textBoundsX' is not implemented");
+        let unknown = run_inline(
+            r#"ratios = { { of = "Wide", to = "Square", field = "depth", expect = 1 } },"#,
+        );
+        assert_fails_with(unknown, "no measurable field 'depth'");
     }
 
     const TALLY_LUAU_ORACLE: &str = r#"--!strict
