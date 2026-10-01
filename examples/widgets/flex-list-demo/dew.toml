@@ -1,0 +1,13 @@
+# Flex list demo
+#
+# A tray of tag chips laid out by one UIListLayout, with buttons that change the
+# layout's Wraps, HorizontalFlex, VerticalFlex, alignment and ItemLineAlignment
+# while it runs.
+
+id = "flex-list-demo"
+name = "Flex list demo"
+description = "Tag chips in a UIListLayout, with live controls for Wraps, flex and alignment"
+
+# A SURFACE AND NOTHING ELSE. Pointer input reaches a TextButton's Activated
+# without a grant of its own.
+permissions = ["widget"]
