@@ -28,6 +28,25 @@ licence. `cargo tree` and the `pesde.toml` manifests list them. The rendering,
 runtime and window crates in `crates/` are this project's own work and are covered
 by `LICENSE`.
 
+### Luau packages built into dew
+
+The bundled dashboard and quick panel are built into the `dew` executable
+together with the Luau packages they require, as `pesde install` places them in
+each applet's `roblox_packages/`. Dew writes them to disk unmodified beside the
+applet that requires them. They are not covered by `LICENSE`. Each is under the
+MIT License. Its full text is a file in the package (`vide/LICENSE.md`,
+`aether/LICENSE`), so it is embedded and written with the code it covers.
+
+| Package | Bundled with | Copyright | Licence |
+| :--- | :--- | :--- | :--- |
+| vide, installed from the `es9-dev/vide` fork | dashboard, quick panel | Copyright (c) 2022 centau | MIT License |
+| aether | dashboard | Copyright (c) 2026 es9 | MIT License |
+| virtual | dashboard | Copyright (c) 2026 es9 | MIT License |
+
+`virtual` is a package from the aether repository, installed as an aether
+dependency. Its manifest declares the MIT License and it carries no licence
+file of its own; the aether repository's `LICENSE` covers it.
+
 ## Fonts
 
 The font files in `host/fonts/` are not covered by `LICENSE`. Each stays under

@@ -769,6 +769,29 @@ jobs:
             exit 1
           }
 
+      # Pinned to the same pesde as the `build` job, installed the same way.
+      - name: Install pesde
+        shell: pwsh
+        run: |
+          # PWSH, NOT BASH. A bash step writing $HOME/.pesde-bin into
+          # GITHUB_PATH writes a POSIX path, which later pwsh steps cannot
+          # resolve. pesde installed correctly and was still "not
+          # recognized" one step later.
+          $url = "https://github.com/pesde-pkg/pesde/releases/download/v0.7.3%2Bregistry.0.2.3/pesde-0.7.3-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile pesde.zip
+          Expand-Archive -Path pesde.zip -DestinationPath "$env:RUNNER_TEMP/pesde" -Force
+          "$env:RUNNER_TEMP/pesde" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # THE BUNDLED APPLETS ARE BUILT INTO dew.exe WITH THEIR PACKAGES, and
+      # `roblox_packages/` is gitignored, so it is installed before the build.
+      # `host/build.rs` fails the build when it was not.
+      - name: Install the bundled applets' packages
+        shell: bash
+        run: |
+          for d in dashboard quickpanel; do
+            (cd "$d" && pesde install)
+          done
+
       - name: Build dew.exe in release profile
         run: cargo build --manifest-path host/Cargo.toml --release --bin dew
 
