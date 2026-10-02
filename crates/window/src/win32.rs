@@ -582,6 +582,16 @@ impl Window {
             // took, every time, on every open.
             let _ = ShowWindow(hwnd, SW_SHOW);
 
+            // SHOWN EVEN WHEN THE PROCESS WAS STARTED HIDDEN. Windows applies
+            // the launcher's `STARTUPINFO` show state to a process's first
+            // `ShowWindow`, so a hidden launch (a scheduled task, a hidden
+            // `Start-Process`) creates this window invisible. That first call
+            // consumed it, and a second one is honoured. A minimized launch
+            // leaves the window visible and is kept as asked.
+            if !IsWindowVisible(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_SHOW);
+            }
+
             Ok(Window {
                 hwnd,
                 width,
