@@ -102,6 +102,13 @@ pub fn resolve(dom: &Dom, id: usize) -> BTreeMap<String, Variant> {
         .collect()
 }
 
+// How many times this thread has resolved an instance's cascade, for a test
+// to count what one render pass costs.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static RESOLVES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// [`resolve`], with the winning `StyleRule`'s own id kept beside each
 /// value -- what [`transition::advance`](super::transition::advance) needs
 /// to look up whether the rule that JUST won a property also declared a
@@ -109,6 +116,8 @@ pub fn resolve(dom: &Dom, id: usize) -> BTreeMap<String, Variant> {
 /// function with the rule id dropped, not a separate walk -- one cascade
 /// pass answers both questions.
 pub fn resolve_full(dom: &Dom, id: usize) -> BTreeMap<String, (Variant, usize)> {
+    #[cfg(test)]
+    RESOLVES.with(|count| count.set(count.get() + 1));
     let mut candidates = Vec::new();
     for (distance, sheet) in applicable_style_sheets(dom, id) {
         let mut order = 0usize;
@@ -426,23 +435,40 @@ fn gather_rule_candidates(
 /// a real gap if a script ever needs to react to an auto-spawned modifier
 /// child specifically, not something this sprint's own examples needed.
 pub fn apply_modifiers(dom: &mut Dom, root: usize) {
+    // EVERY `::Modifier` RULE IN THE ARENA, parsed once. The walk below can
+    // only act on one of these, so an arena without any (most of them) skips
+    // the walk, and one with some does not parse every rule per instance.
+    let modifier_rules: std::collections::HashMap<
+        usize,
+        (style::Selector, Option<String>, String),
+    > = dom
+        .slots
+        .iter()
+        .enumerate()
+        .filter(|(_, slot)| slot.as_ref().is_some_and(|node| node.class == "StyleRule"))
+        .filter_map(|(rule, _)| match directives_of(dom, rule)? {
+            (selector, query, Some(modifier)) => Some((rule, (selector, query, modifier))),
+            _ => None,
+        })
+        .collect();
+    if modifier_rules.is_empty() {
+        return;
+    }
     let mut to_create: Vec<(usize, String)> = Vec::new();
     let mut stack = vec![root];
     while let Some(id) = stack.pop() {
         for (_, sheet) in applicable_style_sheets(dom, id) {
             for rule in dom.children(sheet) {
-                if dom.class_of(rule).as_deref() != Some("StyleRule") {
-                    continue;
-                }
-                let Some((selector, query, Some(modifier_class))) = directives_of(dom, rule) else {
+                let Some((selector, query, modifier_class)) = modifier_rules.get(&rule) else {
                     continue;
                 };
-                if let Some(name) = &query {
+                let modifier_class = modifier_class.clone();
+                if let Some(name) = query {
                     if !query_holds(dom, sheet, name) {
                         continue;
                     }
                 }
-                if !style::matches(dom, id, &selector) {
+                if !style::matches(dom, id, selector) {
                     continue;
                 }
                 let already = dom
@@ -638,7 +664,83 @@ fn priority_of(dom: &Dom, rule: usize) -> f64 {
     }
 }
 
+/// [`resolve`]'s answer for each instance, kept for the length of one render
+/// pass.
+///
+/// A PASS ASKS THE SAME QUESTION MANY TIMES. Layout reads a dozen properties
+/// of every element, measures an AutomaticSize child before placing it, and
+/// solves the tree more than once, and each read an element did not set
+/// itself used to resolve the whole cascade again against every rule in
+/// reach. Open, the memo answers each instance's cascade once.
+///
+/// CLOSED OUTSIDE A PASS, AND EMPTIED BY ANY WRITE. [`Dom::open_style_memo`]
+/// opens it and the same caller closes it; nothing resolved in one pass is
+/// seen by the next. Inside a pass, every write that could change a match,
+/// a winner or a token (a node through `node_mut`, an insert or destroy, a
+/// tag, a rule's property table, a link, a derive, the viewport) calls
+/// [`StyleMemo::forget`], so a write made while it is open is never answered
+/// from before it.
+///
+/// A `RefCell` because a pass reads the tree through `&Dom`. The tree is
+/// only ever reached through its `Mutex`, so one pass at a time touches it.
+#[derive(Default)]
+pub struct StyleMemo(
+    std::cell::RefCell<Option<std::collections::HashMap<usize, BTreeMap<String, Variant>>>>,
+);
+
+impl StyleMemo {
+    /// Drop everything resolved so far, leaving the memo open if it was.
+    pub fn forget(&mut self) {
+        if let Some(resolved) = self.0.get_mut() {
+            resolved.clear();
+        }
+    }
+}
+
 impl Dom {
+    /// Starts memoising the cascade for one render pass. Answers whether
+    /// this call opened it, so a pass nested in another (a hit test inside
+    /// a frame) leaves closing to the outer one: hand the answer back to
+    /// [`Dom::close_style_memo`].
+    pub fn open_style_memo(&self) -> bool {
+        let mut memo = self.style_memo.0.borrow_mut();
+        if memo.is_some() {
+            return false;
+        }
+        *memo = Some(std::collections::HashMap::new());
+        true
+    }
+
+    /// Ends the pass [`Dom::open_style_memo`] started, if `opened` says
+    /// that call was the one that started it.
+    pub fn close_style_memo(&self, opened: bool) {
+        if opened {
+            *self.style_memo.0.borrow_mut() = None;
+        }
+    }
+
+    /// What the cascade resolves `key` to on `id`, from the memo when one is
+    /// open, resolving `id` into it on a miss.
+    fn cascaded(&self, id: usize, key: &str) -> Option<Variant> {
+        {
+            let memo = self.style_memo.0.borrow();
+            match memo.as_ref() {
+                None => return resolve(self, id).remove(key),
+                Some(resolved) => {
+                    if let Some(map) = resolved.get(&id) {
+                        return map.get(key).cloned();
+                    }
+                }
+            }
+        }
+        let map = resolve(self, id);
+        let value = map.get(key).cloned();
+        if let Some(resolved) = self.style_memo.0.borrow_mut().as_mut() {
+            resolved.insert(id, map);
+        }
+        value
+    }
+
     /// `property`, with a matching `StyleRule` filling the gap between `id`'s
     /// own explicit value and its engine default. The render path's own
     /// read -- see this module's own doc comment for why `Index` does not
@@ -654,7 +756,7 @@ impl Dom {
         if let Some(animating) = transition::current(self, id, key, self.now()) {
             return Some(animating);
         }
-        if let Some(styled) = resolve(self, id).remove(key) {
+        if let Some(styled) = self.cascaded(id, key) {
             return Some(styled);
         }
         self.property(id, key)
@@ -1801,6 +1903,198 @@ mod tests {
         assert_eq!(
             guard.styled_property(target, "BackgroundTransparency"),
             Some(Variant::Float64(0.7))
+        );
+    }
+
+    // THE MEMO, OPEN WHILE THE TREE CHANGES. A render pass does not change
+    // the cascade's inputs, but nothing stops a caller doing so while one is
+    // open, and an answer from before the change must not survive it.
+
+    /// A `Frame` named `Card` under `root`, reached by one `#Card` rule
+    /// setting `BackgroundTransparency` to 0.25 from a `StyleSheet` on `root`.
+    fn memo_scene() -> (SharedDom, usize, usize, usize, usize) {
+        let dom = SharedDom::default();
+        let (root, target, sheet) = {
+            let mut guard = dom.lock().expect("dom");
+            let root = guard.insert("Frame".to_string(), "Root".to_string());
+            let target = guard.insert("Frame".to_string(), "Card".to_string());
+            let sheet = guard.insert("StyleSheet".to_string(), "StyleSheet".to_string());
+            (root, target, sheet)
+        };
+        parent(&dom, target, root);
+        parent(&dom, sheet, root);
+        let card_rule = rule(
+            &dom,
+            sheet,
+            "#Card",
+            0.0,
+            &[("BackgroundTransparency", Variant::Float64(0.25))],
+        );
+        (dom, root, target, sheet, card_rule)
+    }
+
+    const KEY: &str = "BackgroundTransparency";
+
+    /// What a `Frame` reads for [`KEY`] with no rule reaching it.
+    fn unstyled() -> Option<Variant> {
+        crate::datamodel::default_for("Frame", KEY)
+    }
+
+    /// Opens the memo, reads `target` once so its answer is memoised, applies
+    /// `change`, and answers what `target` reads with the memo still open.
+    fn read_across(
+        dom: &SharedDom,
+        target: usize,
+        change: impl FnOnce(&mut Dom),
+    ) -> Option<Variant> {
+        let mut guard = dom.lock().expect("dom");
+        let opened = guard.open_style_memo();
+        assert!(opened);
+        assert_eq!(
+            guard.styled_property(target, KEY),
+            Some(Variant::Float64(0.25))
+        );
+        change(&mut guard);
+        let after = guard.styled_property(target, KEY);
+        guard.close_style_memo(opened);
+        after
+    }
+
+    #[test]
+    fn the_memo_answers_what_a_fresh_resolve_answers() {
+        let (dom, _, target, _, _) = memo_scene();
+        let guard = dom.lock().expect("dom");
+        let opened = guard.open_style_memo();
+        let first = guard.styled_property(target, KEY);
+        let second = guard.styled_property(target, KEY);
+        guard.close_style_memo(opened);
+        assert_eq!(first, Some(Variant::Float64(0.25)));
+        assert_eq!(second, first);
+        assert_eq!(guard.styled_property(target, KEY), first);
+    }
+
+    #[test]
+    fn a_rename_inside_an_open_memo_is_seen() {
+        let (dom, _, target, _, _) = memo_scene();
+        let after = read_across(&dom, target, |dom| {
+            dom.node_mut(target).expect("target").name = "Other".to_string();
+        });
+        assert_eq!(after, unstyled());
+    }
+
+    #[test]
+    fn a_rule_property_change_inside_an_open_memo_is_seen() {
+        let (dom, _, target, _, card_rule) = memo_scene();
+        let after = read_across(&dom, target, |dom| {
+            dom.set_style_property(card_rule, KEY, Some(Variant::Float64(0.5)));
+        });
+        assert_eq!(after, Some(Variant::Float64(0.5)));
+    }
+
+    #[test]
+    fn a_rule_selector_change_inside_an_open_memo_is_seen() {
+        let (dom, _, target, _, card_rule) = memo_scene();
+        let after = read_across(&dom, target, |dom| {
+            dom.node_mut(card_rule).expect("rule").props.insert(
+                "Selector".to_string(),
+                Variant::String(".Accent".to_string()),
+            );
+        });
+        assert_eq!(after, unstyled());
+    }
+
+    #[test]
+    fn a_tag_inside_an_open_memo_is_seen() {
+        let (dom, _, target, sheet, _) = memo_scene();
+        rule(
+            &dom,
+            sheet,
+            ".Accent",
+            5.0,
+            &[(KEY, Variant::Float64(0.75))],
+        );
+        let after = read_across(&dom, target, |dom| {
+            assert!(dom.add_tag(target, "Accent"));
+        });
+        assert_eq!(after, Some(Variant::Float64(0.75)));
+    }
+
+    #[test]
+    fn a_reparent_inside_an_open_memo_is_seen() {
+        let (dom, _, target, _, _) = memo_scene();
+        let elsewhere = dom
+            .lock()
+            .expect("dom")
+            .insert("Frame".to_string(), "Elsewhere".to_string());
+        let after = read_across(&dom, target, |dom| {
+            dom.unparent(target);
+            dom.node_mut(target).expect("target").parent = Some(elsewhere);
+            dom.node_mut(elsewhere)
+                .expect("elsewhere")
+                .children
+                .push(target);
+        });
+        assert_eq!(after, unstyled());
+    }
+
+    #[test]
+    fn a_token_change_inside_an_open_memo_is_seen() {
+        let (dom, _, target, sheet, card_rule) = memo_scene();
+        {
+            let mut guard = dom.lock().expect("dom");
+            guard.set_attribute(sheet, "Fade", Some(Variant::Float64(0.25)));
+            guard.set_style_property(card_rule, KEY, Some(Variant::String("$Fade".to_string())));
+        }
+        let after = read_across(&dom, target, |dom| {
+            dom.set_attribute(sheet, "Fade", Some(Variant::Float64(0.9)));
+        });
+        assert_eq!(after, Some(Variant::Float64(0.9)));
+    }
+
+    #[test]
+    fn a_viewport_change_inside_an_open_memo_reaches_a_query() {
+        let (dom, _, target, _, card_rule) = memo_scene();
+        {
+            let mut guard = dom.lock().expect("dom");
+            guard.set_viewport(400, 300);
+            guard.node_mut(card_rule).expect("rule").props.insert(
+                "Selector".to_string(),
+                Variant::String("@ViewportDisplaySizeSmall #Card".to_string()),
+            );
+        }
+        let after = read_across(&dom, target, |dom| {
+            dom.set_viewport(1600, 900);
+        });
+        assert_eq!(after, unstyled());
+    }
+
+    #[test]
+    fn a_destroyed_sheet_inside_an_open_memo_stops_styling() {
+        let (dom, _, target, sheet, _) = memo_scene();
+        let after = read_across(&dom, target, |dom| dom.destroy(sheet));
+        assert_eq!(after, unstyled());
+    }
+
+    #[test]
+    fn a_nested_pass_leaves_closing_to_the_outer_one() {
+        let (dom, _, target, _, card_rule) = memo_scene();
+        let mut guard = dom.lock().expect("dom");
+        let outer = guard.open_style_memo();
+        let inner = guard.open_style_memo();
+        assert!(outer);
+        assert!(!inner);
+        assert_eq!(
+            guard.styled_property(target, KEY),
+            Some(Variant::Float64(0.25))
+        );
+        guard.close_style_memo(inner);
+        assert!(guard.style_memo.0.borrow().is_some(), "still open");
+        guard.close_style_memo(outer);
+        assert!(guard.style_memo.0.borrow().is_none(), "closed");
+        guard.set_style_property(card_rule, KEY, Some(Variant::Float64(0.5)));
+        assert_eq!(
+            guard.styled_property(target, KEY),
+            Some(Variant::Float64(0.5))
         );
     }
 }

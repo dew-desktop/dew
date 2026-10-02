@@ -2219,6 +2219,7 @@ fn paint_rank(dom: &Dom, root: usize) -> HashMap<usize, usize> {
 /// `root` itself is the surface and is not placed; its children are laid out
 /// against the box the surface offers, which is how a `ScreenGui` behaves.
 pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Placed> {
+    let opened = dom.open_style_memo();
     let surface = Box2 {
         x: 0.0,
         y: 0.0,
@@ -2226,6 +2227,14 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
         h: height,
     };
     let solved = solve_layout(dom, root, surface);
+    let placed = paint_order(dom, root, solved);
+    dom.close_style_memo(opened);
+    placed
+}
+
+/// A solve's elements in paint order, back to front, without the ones that
+/// have no area to paint.
+fn paint_order(dom: &Dom, root: usize, solved: Vec<SolvedItem>) -> Vec<Placed> {
     let rank = paint_rank(dom, root);
     let mut collected: Vec<(usize, Placed)> = solved
         .into_iter()
@@ -2418,14 +2427,19 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
 
 /// Build the display list for the subtree under `root`.
 pub fn frame(dom: &mut Dom, root: usize, width: f32, height: f32) -> Frame {
-    frame_with(dom, root, width, height, HashMap::new())
+    let opened = dom.open_style_memo();
+    let placed = display_list(dom, root, width, height);
+    let frame = frame_with(dom, placed, width, height, HashMap::new());
+    dom.close_style_memo(opened);
+    frame
 }
 
-/// [`frame`], reusing text layouts `commit_geometry` already made, by
-/// instance id and the rect each was made for.
+/// [`frame`], from a display list already placed, reusing text layouts
+/// `commit_geometry` already made, by instance id and the rect each was made
+/// for.
 fn frame_with(
     dom: &mut Dom,
-    root: usize,
+    placed: Vec<Placed>,
     width: f32,
     height: f32,
     mut texts: HashMap<usize, (Box2, TextLayout)>,
@@ -2436,9 +2450,8 @@ fn frame_with(
     //
     // THE PLACEMENT PASS IS COLLECTED BEFORE THE NODES ARE BUILT, which it was
     // anyway, and now has to be: building a node may resolve an image and so
-    // needs the DOM mutably, while `display_list` reads it. One pass then the
-    // other keeps both borrows to themselves without a second walk.
-    let placed = display_list(dom, root, width, height);
+    // needs the DOM mutably, while placing reads it. One pass then the other
+    // keeps both borrows to themselves without a second walk.
     let nodes = placed
         .iter()
         .enumerate()
@@ -2471,8 +2484,10 @@ pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
     commit(dom, root, width, height);
 }
 
-/// [`commit_geometry`], handing back the text layouts it made so a frame
-/// built straight after does not make them again.
+/// [`commit_geometry`], handing back the text layouts it made and the solve
+/// it made them from, so a frame built straight after makes neither again.
+/// Nothing written here is read by layout, so that frame would solve the
+/// same tree to the same answer.
 ///
 /// `TextBounds`, `TextFits` and `ContentText` are written here beside
 /// `AbsoluteSize`, for the same reason and through the same door: read-only to
@@ -2483,7 +2498,8 @@ fn commit(
     root: usize,
     width: f32,
     height: f32,
-) -> HashMap<usize, (Box2, TextLayout)> {
+) -> (HashMap<usize, (Box2, TextLayout)>, Vec<SolvedItem>) {
+    let opened = dom.open_style_memo();
     let surface = Box2 {
         x: 0.0,
         y: 0.0,
@@ -2514,7 +2530,7 @@ fn commit(
             texts.insert(item.id, (item.rect, laid));
         }
     }
-    for item in solved.items {
+    for item in &solved.items {
         dom.set_internal(
             item.id,
             "AbsolutePosition",
@@ -2545,14 +2561,21 @@ fn commit(
         dom.set_internal(*id, "TextFits", Variant::Bool(laid.fits));
         dom.set_internal(*id, "ContentText", Variant::String(content));
     }
-    texts
+    dom.close_style_memo(opened);
+    (texts, solved.items)
 }
 
 /// Render whatever is under `root` in a shared DOM.
 pub fn frame_of(dom: &SharedDom, root: usize, width: f32, height: f32) -> Frame {
     let mut guard = dom.lock().expect("dom");
-    let texts = commit(&mut guard, root, width, height);
-    frame_with(&mut guard, root, width, height, texts)
+    // ONE SOLVE AND ONE MEMO FOR BOTH HALVES: geometry is committed between
+    // them, and nothing it writes changes what layout or the cascade reads.
+    let opened = guard.open_style_memo();
+    let (texts, solved) = commit(&mut guard, root, width, height);
+    let placed = paint_order(&guard, root, solved);
+    let f = frame_with(&mut guard, placed, width, height, texts);
+    guard.close_style_memo(opened);
+    f
 }
 
 #[cfg(test)]
@@ -4538,5 +4561,395 @@ mod text_parity {
     #[test]
     fn builder_sans_ink_is_within_a_pixel_of_the_engine() {
         check("BuilderSans");
+    }
+}
+
+/// A render pass resolves each instance's cascade once and keeps the answer
+/// until the pass ends. These change one input of the cascade between two
+/// frames, through the same calls a guest makes, and check the second frame
+/// paints the new answer rather than the first frame's.
+#[cfg(test)]
+mod cascade_between_frames {
+    use super::*;
+    use crate::datamodel::{install, install_vocabulary, SharedDom};
+    use mlua::prelude::*;
+
+    /// A sheet with one rule styling `#Card`, a `Card` frame it reaches, and
+    /// a second frame holding no sheet for a reparent to move `Card` under.
+    fn scene() -> (Lua, SharedDom, usize) {
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        lua.load(
+            r##"
+            styled = Instance.new("Frame")
+            styled.Name = "Styled"
+            styled.Size = UDim2.fromOffset(100, 50)
+            styled.Parent = root
+
+            sheet = Instance.new("StyleSheet")
+            sheet:SetAttribute("CardColor", Color3.fromRGB(10, 20, 30))
+            sheet.Parent = styled
+
+            rule = Instance.new("StyleRule")
+            rule.Selector = "#Card"
+            rule:SetProperty("BackgroundColor3", "$CardColor")
+            rule.Parent = sheet
+
+            plain = Instance.new("Frame")
+            plain.Name = "Plain"
+            plain.Position = UDim2.fromOffset(0, 50)
+            plain.Size = UDim2.fromOffset(100, 50)
+            plain.BackgroundColor3 = Color3.fromRGB(1, 1, 1)
+            plain.Parent = root
+
+            card = Instance.new("Frame")
+            card.Name = "Card"
+            card.Size = UDim2.fromOffset(20, 20)
+            card.Parent = styled
+            "##,
+        )
+        .exec()
+        .expect("guest");
+        (lua, dom, root)
+    }
+
+    /// The fill the frame painted for the node named `name`.
+    fn fill(dom: &SharedDom, root: usize, name: &str) -> Option<Rgb> {
+        frame_of(dom, root, 100.0, 100.0)
+            .nodes
+            .into_iter()
+            .find(|node| node.name == name)
+            .expect("painted")
+            .fill
+    }
+
+    fn run(lua: &Lua, src: &str) {
+        lua.load(src).exec().expect("guest");
+    }
+
+    /// The colour a fresh `Frame` paints with no rule reaching it.
+    fn unstyled() -> Option<Rgb> {
+        let (lua, dom, root) = scene();
+        run(&lua, "rule.Selector = '#Nothing'");
+        fill(&dom, root, "Card")
+    }
+
+    #[test]
+    fn the_scene_starts_styled_by_its_rule() {
+        let (_lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        assert_ne!(unstyled(), Some(Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn renaming_the_instance_stops_a_name_selector_matching() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(&lua, "card.Name = 'Other'");
+        assert_eq!(fill(&dom, root, "Other"), unstyled());
+    }
+
+    #[test]
+    fn a_rules_new_property_value_is_painted() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(
+            &lua,
+            "rule:SetProperty('BackgroundColor3', Color3.fromRGB(200, 100, 50))",
+        );
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(200, 100, 50)));
+    }
+
+    #[test]
+    fn a_rules_new_selector_is_matched() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(&lua, "rule.Selector = '.Accent'");
+        assert_eq!(fill(&dom, root, "Card"), unstyled());
+    }
+
+    #[test]
+    fn a_new_rule_is_applied() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(
+            &lua,
+            r##"
+            local stronger = Instance.new("StyleRule")
+            stronger.Selector = "Frame"
+            stronger.Priority = 5
+            stronger:SetProperty("BackgroundColor3", Color3.fromRGB(0, 128, 0))
+            stronger.Parent = sheet
+            "##,
+        );
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(0, 128, 0)));
+    }
+
+    #[test]
+    fn adding_and_removing_a_tag_is_matched() {
+        let (lua, dom, root) = scene();
+        run(&lua, "rule.Selector = '.Accent'");
+        assert_eq!(fill(&dom, root, "Card"), unstyled());
+        run(
+            &lua,
+            "services:GetService('CollectionService'):AddTag(card, 'Accent')",
+        );
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(
+            &lua,
+            "services:GetService('CollectionService'):RemoveTag(card, 'Accent')",
+        );
+        assert_eq!(fill(&dom, root, "Card"), unstyled());
+    }
+
+    #[test]
+    fn a_new_parent_outside_the_sheet_is_not_styled() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(&lua, "card.Parent = plain");
+        assert_eq!(fill(&dom, root, "Card"), unstyled());
+        run(&lua, "card.Parent = styled");
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn a_new_token_value_is_painted() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(
+            &lua,
+            "sheet:SetAttribute('CardColor', Color3.fromRGB(40, 50, 60))",
+        );
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(40, 50, 60)));
+    }
+
+    #[test]
+    fn a_new_gui_state_is_matched() {
+        let (lua, dom, root) = scene();
+        run(&lua, "rule.Selector = ':Hover'");
+        assert_eq!(fill(&dom, root, "Card"), unstyled());
+        run(&lua, "card:SetGuiState(Enum.GuiState.Hover)");
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+    }
+
+    #[test]
+    fn an_explicit_value_set_after_a_frame_wins() {
+        let (lua, dom, root) = scene();
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(10, 20, 30)));
+        run(&lua, "card.BackgroundColor3 = Color3.fromRGB(7, 7, 7)");
+        assert_eq!(fill(&dom, root, "Card"), Some(Rgb(7, 7, 7)));
+    }
+
+    /// A hit test is its own pass, nested in nothing, and must read the tree
+    /// as it is now: a rule that hides an element takes it out of the list.
+    #[test]
+    fn a_display_list_after_a_change_reads_the_change() {
+        let (lua, dom, root) = scene();
+        let card_id = |list: &[Placed], dom: &SharedDom| {
+            let guard = dom.lock().expect("dom");
+            list.iter()
+                .any(|p| guard.name_of(p.id).as_deref() == Some("Card"))
+        };
+        let before = display_list(&dom.lock().expect("dom"), root, 100.0, 100.0);
+        assert!(card_id(&before, &dom));
+        run(&lua, "rule:SetProperty('Visible', false)");
+        let after = display_list(&dom.lock().expect("dom"), root, 100.0, 100.0);
+        assert!(!card_id(&after, &dom));
+    }
+}
+
+/// The cost of one render pass over a styled list of rows, shaped like a
+/// settings or library window: a sheet of rules most elements match none
+/// of, rows that size themselves, buttons that size themselves inside them,
+/// and an auto-sized scroller holding it all.
+#[cfg(test)]
+mod styled_list_cost {
+    use super::*;
+    use crate::datamodel::{install, install_vocabulary, SharedDom};
+    use mlua::prelude::*;
+
+    const ROWS: usize = 24;
+
+    fn scene() -> (Lua, SharedDom, usize) {
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        lua.globals().set("ROWS", ROWS).expect("rows");
+        lua.load(
+            r##"
+            local CollectionService = services:GetService("CollectionService")
+            local window = Instance.new("Frame")
+            window.Size = UDim2.fromOffset(720, 560)
+            window.Parent = root
+
+            local sheet = Instance.new("StyleSheet")
+            sheet:SetAttribute("Surface", Color3.fromRGB(30, 32, 40))
+            sheet.Parent = window
+            local function rule(selector, props)
+                local r = Instance.new("StyleRule")
+                r.Selector = selector
+                r:SetProperties(props)
+                r.Parent = sheet
+            end
+            rule(".Row", { BackgroundColor3 = "$Surface", BorderSizePixel = 0 })
+            rule(".Button", { BackgroundColor3 = Color3.fromRGB(60, 90, 200), TextSize = 13 })
+            rule("TextLabel", { TextColor3 = Color3.fromRGB(230, 230, 230), BackgroundTransparency = 1 })
+            rule("TextButton", { TextColor3 = Color3.new(1, 1, 1), AutoButtonColor = false })
+            rule("#Name", { TextSize = 15, TextTransparency = 0 })
+            rule("#Detail", { TextSize = 13, TextTransparency = 0.2 })
+            rule("#Description", { TextWrapped = true, TextSize = 13 })
+            for i = 1, 30 do
+                rule("#Unused" .. i, { BackgroundTransparency = 0.5 })
+            end
+
+            local scroller = Instance.new("ScrollingFrame")
+            scroller.Size = UDim2.fromScale(1, 1)
+            scroller.CanvasSize = UDim2.new()
+            scroller.AutomaticCanvasSize = Enum.AutomaticSize.Y
+            scroller.Parent = window
+            local list = Instance.new("UIListLayout")
+            list.Padding = UDim.new(0, 6)
+            list.Parent = scroller
+
+            for i = 1, ROWS do
+                local row = Instance.new("Frame")
+                row.Name = "Row" .. i
+                row.Size = UDim2.fromScale(1, 0)
+                row.AutomaticSize = Enum.AutomaticSize.Y
+                CollectionService:AddTag(row, "Row")
+                row.Parent = scroller
+                local rows = Instance.new("UIListLayout")
+                rows.Parent = row
+
+                local head = Instance.new("Frame")
+                head.Size = UDim2.new(1, 0, 0, 0)
+                head.AutomaticSize = Enum.AutomaticSize.Y
+                head.BackgroundTransparency = 1
+                head.Parent = row
+                local line = Instance.new("UIListLayout")
+                line.FillDirection = Enum.FillDirection.Horizontal
+                line.Wraps = true
+                line.Parent = head
+
+                local text = Instance.new("Frame")
+                text.Size = UDim2.fromOffset(300, 0)
+                text.AutomaticSize = Enum.AutomaticSize.Y
+                text.BackgroundTransparency = 1
+                text.Parent = head
+                Instance.new("UIListLayout").Parent = text
+                for _, name in { "Name", "Detail" } do
+                    local label = Instance.new("TextLabel")
+                    label.Name = name
+                    label.Text = name .. " of row " .. i
+                    label.Size = UDim2.new(1, 0, 0, 20)
+                    label.Parent = text
+                end
+
+                local actions = Instance.new("Frame")
+                actions.AutomaticSize = Enum.AutomaticSize.XY
+                actions.BackgroundTransparency = 1
+                actions.Parent = head
+                local buttons = Instance.new("UIListLayout")
+                buttons.FillDirection = Enum.FillDirection.Horizontal
+                buttons.Padding = UDim.new(0, 6)
+                buttons.Parent = actions
+                for _, label in { "Disable", "Uninstall" } do
+                    local button = Instance.new("TextButton")
+                    button.Text = label
+                    button.AutomaticSize = Enum.AutomaticSize.XY
+                    CollectionService:AddTag(button, "Button")
+                    button.Parent = actions
+                    local pad = Instance.new("UIPadding")
+                    pad.PaddingLeft = UDim.new(0, 10)
+                    pad.PaddingRight = UDim.new(0, 10)
+                    pad.Parent = button
+                end
+
+                local description = Instance.new("TextLabel")
+                description.Name = "Description"
+                description.Text = "A description long enough that a narrow window wraps it onto a second line"
+                description.Size = UDim2.fromScale(1, 0)
+                description.AutomaticSize = Enum.AutomaticSize.Y
+                description.Parent = row
+            end
+            "##,
+        )
+        .exec()
+        .expect("guest");
+        (lua, dom, root)
+    }
+
+    fn instances(dom: &SharedDom, root: usize) -> usize {
+        let guard = dom.lock().expect("dom");
+        let mut stack = vec![root];
+        let mut count = 0;
+        while let Some(id) = stack.pop() {
+            count += 1;
+            stack.extend(guard.children(id));
+        }
+        count
+    }
+
+    /// Each instance's cascade is resolved at most once in a frame, however
+    /// many times layout reads it, measures it or solves it again.
+    #[test]
+    fn a_frame_resolves_each_instance_at_most_once() {
+        let (_lua, dom, root) = scene();
+        let total = instances(&dom, root);
+        crate::datamodel::cascade::RESOLVES.with(|count| count.set(0));
+        let frame = frame_of(&dom, root, 720.0, 560.0);
+        let resolves = crate::datamodel::cascade::RESOLVES.with(|count| count.get());
+        assert!(frame.nodes.len() > ROWS * 6, "{} nodes", frame.nodes.len());
+        assert!(
+            resolves <= total,
+            "{resolves} cascade resolves for {total} instances in one frame"
+        );
+    }
+
+    /// `cargo test --release -p dew-host styled_list_cost -- --ignored --nocapture`
+    #[test]
+    #[ignore = "a timing, not an assertion: run it to measure a frame"]
+    fn time_a_frame() {
+        let (_lua, dom, root) = scene();
+        let mut times: Vec<std::time::Duration> = (0..21)
+            .map(|_| {
+                dom.lock().expect("dom").touch();
+                let start = std::time::Instant::now();
+                let _ = frame_of(&dom, root, 720.0, 560.0);
+                start.elapsed()
+            })
+            .collect();
+        times.sort();
+        println!(
+            "{} instances, {} rows: median frame {:?} (min {:?}, max {:?})",
+            instances(&dom, root),
+            ROWS,
+            times[times.len() / 2],
+            times[0],
+            times[times.len() - 1]
+        );
     }
 }
