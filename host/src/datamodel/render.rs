@@ -1775,6 +1775,40 @@ fn basis_of(dom: &Dom, child: usize, box_rect: Box2, depth: usize) -> Option<(f3
     scratch.items.first().map(|item| (item.rect.w, item.rect.h))
 }
 
+/// The cross size of a child a list's flex gave `main` along the main axis,
+/// measured the way the list will place it: with that length forced.
+fn cross_at_main(
+    dom: &Dom,
+    child: usize,
+    box_rect: Box2,
+    depth: usize,
+    horizontal: bool,
+    main: f32,
+) -> Option<f32> {
+    let forced = if horizontal {
+        (Some(main), None)
+    } else {
+        (None, Some(main))
+    };
+    let mut scratch = Solved::default();
+    visit(
+        dom,
+        child,
+        box_rect,
+        None,
+        0.0,
+        depth,
+        true,
+        box_rect,
+        forced,
+        &mut scratch,
+    );
+    scratch
+        .items
+        .first()
+        .map(|item| if horizontal { item.rect.h } else { item.rect.w })
+}
+
 #[allow(clippy::too_many_arguments)]
 fn place_list(
     dom: &Dom,
@@ -1854,21 +1888,6 @@ fn place_list(
         lines.push(0..entries.len());
     }
 
-    // ACROSS: a line is as thick as its thickest child, not the box
-    // (`uilistlayout_item_line_alignment_stretch`), and the lines share the
-    // cross axis by the cross flex and alignment
-    // (`uilistlayout_wraps_with_bottom_alignment`,
-    // `uilistlayout_horizontal_flex_fill_on_a_vertical_list`).
-    let thickness: Vec<f32> = lines
-        .iter()
-        .map(|line| {
-            entries[line.clone()]
-                .iter()
-                .fold(0.0_f32, |m, e| m.max(e.cross))
-        })
-        .collect();
-    let across = distribute(&thickness, cross_len, list.gap, cross_flex, cross_gather);
-
     // FLEX ON THE MAIN AXIS, per line (`uiflexitem_grow_is_per_wrapped_line`).
     // The list's `Fill` makes every child a `Fill` flex item, and a child's own
     // `UIFlexItem` that flexes replaces that for the child alone: under the
@@ -1898,36 +1917,83 @@ fn place_list(
         (main_flex, main_gather)
     };
 
+    let alongs: Vec<Vec<(f32, f32)>> = lines
+        .iter()
+        .map(|line| {
+            let flexing: Vec<Flexing> = entries[line.clone()]
+                .iter()
+                .map(|entry| {
+                    let ((min_w, min_h), (max_w, max_h)) = size_bounds(dom, entry.id);
+                    let (min, max) = if horizontal {
+                        (min_w, max_w)
+                    } else {
+                        (min_h, max_h)
+                    };
+                    let (grow, shrink) = weights(entry);
+                    Flexing {
+                        basis: entry.main,
+                        grow,
+                        shrink,
+                        min,
+                        max,
+                    }
+                })
+                .collect();
+            let mains = flex_line(&flexing, main_len, list.gap);
+            distribute(&mains, main_len, list.gap, spacing, spacing_gather)
+        })
+        .collect();
+
+    // A CHILD FLEX RESIZED IS MEASURED AGAIN AT ITS NEW LENGTH when
+    // AutomaticSize sizes its cross axis: its basis was measured at its own
+    // length, and a column that wraps text or tiles is shorter once it has
+    // grown. The engine sizes and aligns the line on the second answer. Only
+    // such a child pays for the extra measure.
+    let crosses: Vec<Vec<f32>> = lines
+        .iter()
+        .zip(&alongs)
+        .map(|(line, along)| {
+            entries[line.clone()]
+                .iter()
+                .zip(along)
+                .map(|(entry, &(_, main_size))| {
+                    let resized = (main_size - entry.main).abs() > 0.001;
+                    let (auto_x, auto_y) = automatic_axes(dom, entry.id);
+                    let auto_cross = if horizontal { auto_y } else { auto_x };
+                    if resized && auto_cross {
+                        cross_at_main(dom, entry.id, box_rect, depth + 1, horizontal, main_size)
+                            .unwrap_or(entry.cross)
+                    } else {
+                        entry.cross
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    // ACROSS: a line is as thick as its thickest child, not the box
+    // (`uilistlayout_item_line_alignment_stretch`), and the lines share the
+    // cross axis by the cross flex and alignment
+    // (`uilistlayout_wraps_with_bottom_alignment`,
+    // `uilistlayout_horizontal_flex_fill_on_a_vertical_list`).
+    let thickness: Vec<f32> = crosses
+        .iter()
+        .map(|line| line.iter().fold(0.0_f32, |m, &c| m.max(c)))
+        .collect();
+    let across = distribute(&thickness, cross_len, list.gap, cross_flex, cross_gather);
+
     let mut content_main = 0.0_f32;
     let mut content_cross = 0.0_f32;
     for (line_index, line) in lines.iter().enumerate() {
         let (line_at, line_thickness) = across[line_index];
         let members = &entries[line.clone()];
-        let flexing: Vec<Flexing> = members
-            .iter()
-            .map(|entry| {
-                let ((min_w, min_h), (max_w, max_h)) = size_bounds(dom, entry.id);
-                let (min, max) = if horizontal {
-                    (min_w, max_w)
-                } else {
-                    (min_h, max_h)
-                };
-                let (grow, shrink) = weights(entry);
-                Flexing {
-                    basis: entry.main,
-                    grow,
-                    shrink,
-                    min,
-                    max,
-                }
-            })
-            .collect();
-        let mains = flex_line(&flexing, main_len, list.gap);
-        let along = distribute(&mains, main_len, list.gap, spacing, spacing_gather);
+        let along = &alongs[line_index];
 
         let mut line_main = 0.0_f32;
         let mut line_cross = 0.0_f32;
-        for (entry, &(main_at, main_size)) in members.iter().zip(along.iter()) {
+        for ((entry, &(main_at, main_size)), &cross) in
+            members.iter().zip(along.iter()).zip(&crosses[line_index])
+        {
             let forced_main = ((main_size - entry.main).abs() > 0.001).then_some(main_size);
             // A child's own `ItemLineAlignment` replaces the list's, and its
             // `Automatic` defers to the list's.
@@ -1944,7 +2010,7 @@ fn place_list(
             let (cross_at, forced_cross) = if stretch {
                 (line_at, Some(line_thickness))
             } else {
-                (line_at + within.offset(line_thickness - entry.cross), None)
+                (line_at + within.offset(line_thickness - cross), None)
             };
             let (x, y, forced) = if horizontal {
                 (main_at, cross_at, (forced_main, forced_cross))
@@ -2766,6 +2832,120 @@ mod tests {
             .expect("the row is in the display list");
         // 200 wide panel, 100 wide row, centred -> x = 50.
         assert_eq!(row.rect.x, 50.0, "row was not centred");
+    }
+
+    /// A list measures a flex grown AutomaticSize child across the main axis
+    /// at the length it grew to, and sizes and aligns its line on that.
+    ///
+    /// `Text` holds six tiles in a wrapping list, so it is 60 thick at its
+    /// minimum length of 120 and thinner once grown. The horizontal numbers
+    /// are the engine's (`uilistlayout_wraps_measures_a_grown_child_at_its_grown_width`
+    /// and `uilistlayout_wraps_centres_a_line_on_its_grown_child`); the
+    /// vertical list is the same layout turned on its side.
+    #[test]
+    fn a_grown_automatic_child_is_measured_at_its_grown_length() {
+        let build = |vertical: bool, wraps: bool, align: &str, length: f32| {
+            let (fill, tile, icon, actions, size, auto, align_prop) = if vertical {
+                (
+                    "Vertical",
+                    "fromOffset(20, 50)",
+                    "fromOffset(40, 40)",
+                    "fromOffset(28, 150)",
+                    format!("UDim2.fromOffset(0, {length})"),
+                    "X",
+                    format!("HorizontalAlignment = Enum.HorizontalAlignment.{align}"),
+                )
+            } else {
+                (
+                    "Horizontal",
+                    "fromOffset(50, 20)",
+                    "fromOffset(40, 40)",
+                    "fromOffset(150, 28)",
+                    format!("UDim2.fromOffset({length}, 0)"),
+                    "Y",
+                    format!("VerticalAlignment = Enum.VerticalAlignment.{align}"),
+                )
+            };
+            let min = if vertical { "0, 120" } else { "120, 0" };
+            let f = render(
+                &format!(
+                    r#"
+                local function list(p, wraps, gap)
+                    local l = Instance.new("UIListLayout")
+                    l.FillDirection = Enum.FillDirection.{fill}
+                    l.SortOrder = Enum.SortOrder.LayoutOrder
+                    l.Padding = UDim.new(0, gap)
+                    l.Wraps = wraps
+                    l.Parent = p
+                    return l
+                end
+                local function frame(p, name, order, size)
+                    local f = Instance.new("Frame")
+                    f.Name = name
+                    f.LayoutOrder = order
+                    f.Size = size
+                    f.Parent = p
+                    return f
+                end
+                local panel = frame(root, "Panel", 0, {size})
+                panel.AutomaticSize = Enum.AutomaticSize.{auto}
+                list(panel, {wraps}, 10).{align_prop}
+                frame(panel, "Icon", 1, UDim2.{icon})
+                local text = frame(panel, "Text", 2, UDim2.fromOffset(0, 0))
+                text.AutomaticSize = Enum.AutomaticSize.{auto}
+                local item = Instance.new("UIFlexItem")
+                item.FlexMode = Enum.UIFlexMode.Grow
+                item.Parent = text
+                local c = Instance.new("UISizeConstraint")
+                c.MinSize = Vector2.new({min})
+                c.Parent = text
+                list(text, true, 0)
+                for i = 1, 6 do
+                    frame(text, "T" .. i, i, UDim2.{tile})
+                end
+                frame(panel, "Actions", 3, UDim2.{actions})
+            "#
+                ),
+                1000.0,
+                1000.0,
+            );
+            let rect = |name: &str| {
+                let n = f
+                    .nodes
+                    .iter()
+                    .find(|n| n.name == name)
+                    .unwrap_or_else(|| panic!("{name} is drawn"));
+                // Along the list's own axes: (main, cross, main size, cross size).
+                if vertical {
+                    (n.rect.y, n.rect.x, n.rect.h, n.rect.w)
+                } else {
+                    (n.rect.x, n.rect.y, n.rect.w, n.rect.h)
+                }
+            };
+            (rect("Panel").3, rect("Text"), rect("Actions"))
+        };
+
+        for vertical in [false, true] {
+            // Actions wraps; Text grows to 150 and is 40 thick, not 60.
+            for align in ["Top", "Center"] {
+                let align = if vertical && align == "Top" {
+                    "Left"
+                } else {
+                    align
+                };
+                let (panel, text, actions) = build(vertical, true, align, 200.0);
+                assert_eq!(panel, 78.0, "{vertical} {align}");
+                assert_eq!(text, (50.0, 0.0, 150.0, 40.0), "{vertical} {align}");
+                assert_eq!(actions, (0.0, 50.0, 150.0, 28.0), "{vertical} {align}");
+            }
+            // One line, centred on the Icon: Text is 20 thick once grown.
+            for wraps in [true, false] {
+                let (panel, text, actions) = build(vertical, wraps, "Center", 600.0);
+                assert_eq!(panel, 40.0, "{vertical} {wraps}");
+                assert_eq!(text, (50.0, 10.0, 390.0, 20.0), "{vertical} {wraps}");
+                assert_eq!(actions, (450.0, 6.0, 150.0, 28.0), "{vertical} {wraps}");
+            }
+        }
     }
 
     #[test]
