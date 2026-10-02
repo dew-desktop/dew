@@ -380,13 +380,14 @@ jobs:
           # `dashboard/` ONE LEVEL SHALLOWER, on purpose -- it is the bundled
           # dashboard applet (milestone 23), not an example, so it lives at
           # the repo root rather than under `examples/`. Same install, same
-          # redirect check, just not the same glob depth.
+          # redirect check, just not the same glob depth. `quickpanel/` is
+          # the other bundled applet and sits beside it for the same reason.
           #
           # ONE LEVEL DEEPER ALSO COVERED: `examples/host/widget-behaviors/`
           # is a container of several small applets (draggable, snap-to-edges,
           # ...), not an applet itself, so its own examples sit one glob
           # level below where `examples/*/*/pesde.toml` alone would find them.
-          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml; do
+          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml quickpanel/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
@@ -444,6 +445,13 @@ jobs:
       # is why there is no glob here for a shell to decline to expand.
       - name: Run every command the CLI documents
         run: lune run scripts/smoke.luau --no-build
+
+      # THE QUICK PANEL'S OWN SUITE. Smoke mounts only `examples/`, and a
+      # bundled applet cannot mount from a checkout at all (its host-only
+      # permission is refused outside the bundled directory), so its
+      # `.test.luau` against a fake library is what exercises it here.
+      - name: Run the quick panel's tests
+        run: cargo run --quiet --manifest-path host/Cargo.toml --bin dew -- test quickpanel
 
       # FMT AND CLIPPY HERE RATHER THAN IN A JOB OF THEIR OWN.
       #
@@ -605,13 +613,14 @@ jobs:
           # `dashboard/` ONE LEVEL SHALLOWER, on purpose -- it is the bundled
           # dashboard applet (milestone 23), not an example, so it lives at
           # the repo root rather than under `examples/`. Same install, same
-          # redirect check, just not the same glob depth.
+          # redirect check, just not the same glob depth. `quickpanel/` is
+          # the other bundled applet and sits beside it for the same reason.
           #
           # ONE LEVEL DEEPER ALSO COVERED: `examples/host/widget-behaviors/`
           # is a container of several small applets (draggable, snap-to-edges,
           # ...), not an applet itself, so its own examples sit one glob
           # level below where `examples/*/*/pesde.toml` alone would find them.
-          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml; do
+          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml quickpanel/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)

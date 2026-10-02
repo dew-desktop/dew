@@ -1,0 +1,17 @@
+name = "dew/quickpanel"
+version = "0.0.1"
+
+# The same vide pin as `dashboard/pesde.toml`. Both applets are bundled with
+# the host and load side by side, so they agree on one copy.
+[target]
+environment = "roblox"
+lib = "quickpanel.luau"
+
+[dependencies]
+vide = { repo = "es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"

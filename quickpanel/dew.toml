@@ -1,0 +1,4 @@
+id = "quickpanel"
+name = "Dew Quick Panel"
+description = "Your installed applets at a glance, each with a switch to turn it on or off."
+permissions = ["widget", "library"]
