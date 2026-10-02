@@ -930,7 +930,13 @@ fn grow(
     let class = dom.class_of(node).unwrap_or_default();
     if draws_text(&class) {
         let text_content = text_for(dom, node, &class).unwrap_or_default();
+        let text_content = if boolean(dom, node, "RichText") == Some(true) {
+            dew_runtime::text::strip_markup(&text_content)
+        } else {
+            text_content
+        };
         let text_size = number(dom, node, "TextSize").unwrap_or(14.0);
+        let line_height = number(dom, node, "LineHeight").unwrap_or(1.0);
         let wrapped = boolean(dom, node, "TextWrapped").unwrap_or(false);
         let wrap_width = if wrapped {
             if entry_rect.w > 0.0 {
@@ -943,8 +949,9 @@ fn grow(
         } else {
             None
         };
-        let measured = face_of(dom, node)
-            .and_then(|face| text::measure(&face, &text_content, text_size, wrap_width));
+        let measured = face_of(dom, node).and_then(|face| {
+            text::measure_spaced(&face, &text_content, text_size, wrap_width, line_height)
+        });
         if let Some((tw, th)) = measured {
             if grow_x {
                 let needed_w = tw + pad_l + pad_r;
@@ -2255,6 +2262,11 @@ fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
     if content.w <= 0.0 || content.h <= 0.0 {
         return authored_size;
     }
+    let text_content = if boolean(dom, id, "RichText") == Some(true) {
+        dew_runtime::text::strip_markup(&text_content)
+    } else {
+        text_content
+    };
     let wrapped = boolean(dom, id, "TextWrapped").unwrap_or(false);
     face_of(dom, id)
         .and_then(|face| scaled_size(&face, &text_content, content.w, content.h, wrapped))
@@ -2271,7 +2283,18 @@ fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
 fn face_of(dom: &Dom, id: usize) -> Option<Face<dew_raster::Font>> {
     match dom.styled_property(id, "FontFace") {
         Some(Variant::Font(font)) => crate::services::face_for(&font),
-        _ => crate::services::default_face(),
+        _ => match dom.styled_property(id, "Font") {
+            Some(Variant::Enum(raw)) => {
+                let item = super::enums::item_by_value("Font", raw.to_u32())?;
+                let font = crate::fonts::from_enum(item.name)?;
+                crate::services::face_for(&font)
+            }
+            Some(Variant::String(s)) => {
+                let font = crate::fonts::from_enum(&s)?;
+                crate::services::face_for(&font)
+            }
+            _ => crate::services::default_face(),
+        },
     }
 }
 
@@ -2286,8 +2309,15 @@ fn text_layout_of(dom: &Dom, id: usize, class: &str, rect: Box2) -> Option<TextL
         return None;
     }
     let face = face_of(dom, id)?;
-    let text = text_for(dom, id, class).unwrap_or_default();
+    let raw_text = text_for(dom, id, class).unwrap_or_default();
+    let text = if boolean(dom, id, "RichText") == Some(true) {
+        dew_runtime::text::strip_markup(&raw_text)
+    } else {
+        raw_text
+    };
     let content = content_box(dom, id, rect);
+    let truncate = enum_name(dom, id, "TextTruncate", "TextTruncate") == Some("AtEnd");
+    let line_height = number(dom, id, "LineHeight").unwrap_or(1.0);
     lay_out(
         &face,
         &Block {
@@ -2302,8 +2332,8 @@ fn text_layout_of(dom: &Dom, id: usize, class: &str, rect: Box2) -> Option<TextL
             wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
             align_x: align(dom, id, "TextXAlignment", "TextXAlignment").unwrap_or(Align::Center),
             align_y: align(dom, id, "TextYAlignment", "TextYAlignment").unwrap_or(Align::Center),
-            truncate: false,
-            line_height: 1.0,
+            truncate,
+            line_height,
         },
     )
 }
@@ -2376,6 +2406,11 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
                 .clamp(0.0, 1.0),
         text_wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
         text_layout: laid,
+        text_stroke_colour: colour(dom, id, "TextStrokeColor3"),
+        text_stroke_alpha: 1.0
+            - number(dom, id, "TextStrokeTransparency")
+                .unwrap_or(1.0)
+                .clamp(0.0, 1.0),
         image,
         blend_mode: blend_mode_of(dom, id),
     }

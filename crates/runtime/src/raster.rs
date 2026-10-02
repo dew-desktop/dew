@@ -244,9 +244,38 @@ impl Painter for RasterPainter {
             node.text_colour.unwrap_or(Rgb(255, 255, 255)),
             node.text_alpha,
         );
+        let stroke_colour = if node.text_stroke_alpha > 0.0 {
+            Some(rgba(
+                node.text_stroke_colour.unwrap_or(Rgb(0, 0, 0)),
+                node.text_stroke_alpha,
+            ))
+        } else {
+            None
+        };
         for line in &layout.lines {
             if line.text.is_empty() {
                 continue;
+            }
+            if let Some(sc) = stroke_colour {
+                for &(dx, dy) in &[
+                    (-1.0, 0.0),
+                    (1.0, 0.0),
+                    (0.0, -1.0),
+                    (0.0, 1.0),
+                    (-1.0, -1.0),
+                    (-1.0, 1.0),
+                    (1.0, -1.0),
+                    (1.0, 1.0),
+                ] {
+                    self.canvas.fill_text(
+                        font,
+                        layout.glyph_px,
+                        line.x + dx,
+                        line.y + dy,
+                        sc,
+                        &line.text,
+                    );
+                }
             }
             // `fill_text` takes the TOP-LEFT and converts to a baseline itself;
             // `Line` already holds that top-left.

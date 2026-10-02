@@ -263,14 +263,31 @@ pub fn measure<F: Advance>(
     text_size: f32,
     wrap_width: Option<f32>,
 ) -> Option<(f32, f32)> {
+    measure_spaced(face, text, text_size, wrap_width, 1.0)
+}
+
+/// [`measure`], with line spacing given by `line_height_mul`.
+pub fn measure_spaced<F: Advance>(
+    face: &Face<F>,
+    text: &str,
+    text_size: f32,
+    wrap_width: Option<f32>,
+    line_height_mul: f32,
+) -> Option<(f32, f32)> {
     let lines = break_lines(&face.font, text, face.glyph_px(text_size), wrap_width)?;
     let width = lines.iter().fold(0.0_f32, |w, (_, lw)| w.max(*lw));
-    Some((width, lines.len() as f32 * face.effective_em(text_size)))
+    let base_h = face.effective_em(text_size);
+    let height = if lines.is_empty() {
+        0.0
+    } else {
+        base_h + (lines.len() - 1) as f32 * (base_h * line_height_mul)
+    };
+    Some((width, height))
 }
 
 /// Lay a label's text out in its content box.
 pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> {
-    let line_height = face.effective_em(block.text_size);
+    let base_line_h = face.effective_em(block.text_size);
     let glyph_px = face.glyph_px(block.text_size);
     let content = block.content;
     let all = break_lines(
@@ -283,45 +300,87 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
     // WRAPPED LINES THAT DO NOT FIT ARE DROPPED WHOLE, not clipped and not
     // left to overflow. The first line always stays: a label shorter than its
     // own line still shows it.
-    let visible = if block.wrap && line_height > 0.0 {
-        let room = ((content.h + SLACK) / line_height).floor().max(1.0) as usize;
-        all.len().min(room)
+    let step = base_line_h * block.line_height;
+    let visible = if block.wrap && base_line_h > 0.0 {
+        if content.h + SLACK < base_line_h {
+            1
+        } else if step > 0.0 {
+            let extra = ((content.h + SLACK - base_line_h) / step).floor() as usize;
+            all.len().min(1 + extra)
+        } else {
+            all.len()
+        }
     } else {
         all.len()
     };
 
-    let block_h = visible as f32 * line_height;
+    let block_h = if visible == 0 {
+        0.0
+    } else {
+        base_line_h + (visible - 1) as f32 * step
+    };
     let top = match block.align_y {
         Align::Start => content.y,
         Align::Center => content.y + (content.h - block_h) / 2.0,
         Align::End => content.y + content.h - block_h,
     };
 
+    let mut truncated_any = false;
     let lines: Vec<Line> = all
         .iter()
         .take(visible)
         .enumerate()
-        .map(|(i, (text, width))| Line {
-            text: text.clone(),
-            x: match block.align_x {
-                Align::Start => content.x,
-                Align::Center => content.x + (content.w - width) / 2.0,
-                Align::End => content.x + content.w - width,
-            },
-            y: face.glyph_top(top + i as f32 * line_height, line_height, glyph_px),
-            width: *width,
+        .map(|(i, (text, width))| {
+            let mut line_text = text.clone();
+            let mut line_width = *width;
+            if block.truncate && line_width > content.w + SLACK && content.w > 0.0 {
+                if let Some(ellipsis_w) = face.font.advance(glyph_px, "...") {
+                    if ellipsis_w <= content.w + SLACK {
+                        let target_w = (content.w - ellipsis_w).max(0.0);
+                        let mut prefix = String::new();
+                        let mut prefix_w = 0.0;
+                        for ch in line_text.chars() {
+                            let candidate = format!("{prefix}{ch}");
+                            if let Some(w) = face.font.advance(glyph_px, &candidate) {
+                                if w <= target_w + SLACK {
+                                    prefix = candidate;
+                                    prefix_w = w;
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                        line_text = format!("{prefix}...");
+                        line_width = prefix_w + ellipsis_w;
+                        truncated_any = true;
+                    }
+                }
+            }
+            Line {
+                text: line_text,
+                x: match block.align_x {
+                    Align::Start => content.x,
+                    Align::Center => content.x + (content.w - line_width) / 2.0,
+                    Align::End => content.x + content.w - line_width,
+                },
+                y: face.glyph_top(top + i as f32 * step, base_line_h, glyph_px),
+                width: line_width,
+            }
         })
         .collect();
 
     let drawn_w = lines.iter().fold(0.0_f32, |w, line| w.max(line.width));
     let widest = all.iter().fold(0.0_f32, |w, (_, lw)| w.max(*lw));
-    let fits = visible == all.len() && widest <= content.w + SLACK && block_h <= content.h + SLACK;
+    let fits = !truncated_any
+        && visible == all.len()
+        && widest <= content.w + SLACK
+        && block_h <= content.h + SLACK;
 
     Some(TextLayout {
         face: face.font.raster_id(),
         text_size: block.text_size,
         glyph_px,
-        line_height,
+        line_height: base_line_h,
         lines,
         bounds: (drawn_w, block_h),
         fits,
