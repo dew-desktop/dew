@@ -244,10 +244,24 @@ end
 -- STATE
 --------------------------------------------------------------------------
 
-local entries = vide.source(library.List() :: { Entry })
+-- THE PANEL IS LEFT OUT OF ITS OWN LIST. Its own switch would close the
+-- panel mid-call, and the dashboard is where it is turned off.
+local SELF = "quickpanel"
+
+local function others(): { Entry }
+	local kept = {}
+	for _, entry in library.List() :: { Entry } do
+		if entry.id ~= SELF then
+			table.insert(kept, entry)
+		end
+	end
+	return kept
+end
+
+local entries = vide.source(others())
 
 local function refresh()
-	entries(library.List() :: { Entry })
+	entries(others())
 end
 
 -- The switch follows `running`, not `enabled`: off always starts the
