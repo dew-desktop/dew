@@ -256,6 +256,11 @@ fn progress(active: &ActiveTransition, now: f64) -> f32 {
 
 /// The value an active transition on `key` currently shows, at `now`.
 pub fn current(dom: &Dom, id: usize, key: &str, now: f64) -> Option<Variant> {
+    // Every property read in a render pass comes through here first, so the
+    // common answer is found before a key is built to look it up.
+    if dom.active_transitions.is_empty() {
+        return None;
+    }
     let active = dom.active_transitions.get(&(id, key.to_string()))?;
     let t = progress(active, now);
     Some(lerp(&active.from, &active.to, t).unwrap_or_else(|| active.to.clone()))
@@ -268,7 +273,14 @@ pub fn current(dom: &Dom, id: usize, key: &str, now: f64) -> Option<Variant> {
 /// render loop's own per-frame driver, the same shape `apply_modifiers`
 /// and `refresh_style_queries` already are.
 pub fn advance(dom: &mut Dom, root: usize, now: f64) {
-    let mut stack = vec![root];
+    // NO RULE DECLARES A TRANSITION, NOTHING CAN START ONE: every change
+    // below needs `get_style_transition` to answer, so the walk, which
+    // resolves the cascade of every instance, is skipped outright.
+    let mut stack = if dom.style_transitions.is_empty() {
+        Vec::new()
+    } else {
+        vec![root]
+    };
     let mut changes: Vec<(usize, String, Variant, TweenInfoValue)> = Vec::new();
     while let Some(id) = stack.pop() {
         for (name, (value, rule)) in cascade::resolve_full(dom, id) {

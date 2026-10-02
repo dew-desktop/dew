@@ -204,6 +204,10 @@ pub struct Dom {
     /// transition (milestone 29 part C4) times itself against. Set from
     /// `main.rs`'s own render loop, the same way `viewport` is.
     now: f64,
+    /// What the cascade resolved for each instance during one render pass,
+    /// or `None` outside one. See `cascade::StyleMemo` for when it is open
+    /// and what empties it.
+    style_memo: cascade::StyleMemo,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -231,6 +235,7 @@ impl Default for Dom {
             selected_object: None,
             viewport: (0, 0),
             now: 0.0,
+            style_memo: cascade::StyleMemo::default(),
         }
     }
 }
@@ -249,6 +254,7 @@ impl Dom {
             connections: Vec::new(),
         }));
         self.dirty = true;
+        self.style_memo.forget();
         self.slots.len() - 1
     }
 
@@ -256,7 +262,11 @@ impl Dom {
         self.slots.get(id).and_then(|s| s.as_ref())
     }
 
+    /// THE ONE DOOR FOR WRITING A NODE, so it is also where a resolved
+    /// cascade is forgotten: whatever is about to change (a property, a name,
+    /// a parent, an attribute) may change what a selector matches.
     fn node_mut(&mut self, id: usize) -> Option<&mut Node> {
+        self.style_memo.forget();
         self.slots.get_mut(id).and_then(|s| s.as_mut())
     }
 
@@ -382,6 +392,7 @@ impl Dom {
             // what the cascade resolves for `id` -- the same reason any
             // other property write below marks the tree dirty.
             self.dirty = true;
+            self.style_memo.forget();
         }
         added
     }
@@ -404,6 +415,7 @@ impl Dom {
                 }
             }
             self.dirty = true;
+            self.style_memo.forget();
         }
         removed
     }
@@ -478,6 +490,7 @@ impl Dom {
         }
         if changed {
             self.dirty = true;
+            self.style_memo.forget();
         }
     }
 
@@ -522,6 +535,7 @@ impl Dom {
     }
 
     fn set_style_link(&mut self, id: usize, target: Option<usize>) {
+        self.style_memo.forget();
         match target {
             Some(target) => {
                 self.style_links.insert(id, target);
@@ -541,6 +555,7 @@ impl Dom {
     }
 
     fn set_style_derive(&mut self, id: usize, target: Option<usize>) {
+        self.style_memo.forget();
         match target {
             Some(target) => {
                 self.style_derives.insert(id, target);
@@ -645,6 +660,7 @@ impl Dom {
     /// Something changed; the next frame has to be drawn.
     pub fn touch(&mut self) {
         self.dirty = true;
+        self.style_memo.forget();
     }
 
     /// Is a repaint owed, and clear the debt.
@@ -665,8 +681,12 @@ impl Dom {
     /// Set from `main.rs`'s own render loop, which already knows the
     /// window's size every frame -- does NOT mark the tree dirty on its
     /// own, since a resize already reaches `Dom` through whatever path
-    /// changed `width`/`height` in the first place.
+    /// changed `width`/`height` in the first place. A new size does forget
+    /// the resolved cascade, because a `StyleQuery` gate reads it.
     pub fn set_viewport(&mut self, width: u32, height: u32) {
+        if self.viewport != (width, height) {
+            self.style_memo.forget();
+        }
         self.viewport = (width, height);
     }
 
@@ -738,6 +758,7 @@ impl Dom {
             stack.extend(node.children);
         }
         self.dirty = true;
+        self.style_memo.forget();
     }
 
     /// Write a property the HOST computed, bypassing the guest's rules.
@@ -746,8 +767,13 @@ impl Dom {
     /// by whatever laid out the tree. Going through the assignment path would
     /// refuse them, correctly, so the host writes them here instead -- the one
     /// door, named so it is greppable, rather than making the public path lenient.
+    ///
+    /// IT LEAVES THE RESOLVED CASCADE ALONE, which is why it skips `node_mut`.
+    /// What arrives here is output a render pass computed (geometry, text
+    /// metrics, `IsActive`), none of which a selector, token or query reads,
+    /// and a pass writes it between the two solves that share one cascade.
     pub fn set_internal(&mut self, id: usize, key: &str, value: Variant) {
-        if let Some(node) = self.node_mut(id) {
+        if let Some(node) = self.slots.get_mut(id).and_then(|s| s.as_mut()) {
             node.props.insert(key.to_string(), value);
         }
     }
