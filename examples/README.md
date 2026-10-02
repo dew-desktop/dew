@@ -211,7 +211,7 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | `host/widget-behaviors/snap-to-edges` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `widgets/flex-item-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 68 |
 | `widgets/flex-list-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 57 |
-| `widgets/grid-layout-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.Color` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 80 |
+| `widgets/grid-layout-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.ApplyStrokeMode`, `UIStroke.Color` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 80 |
 | `widgets/nameplate` | Dew-only | `desktop.Widget` (mount), `desktop.Clipboard`, `desktop.Storage`, `desktop.Time` | `ImageLabel.ScaleType` (in part), `UICorner.CornerRadius` (in part), `UIStroke.Color` (in part) | 13 |
 
 Read in part, in the renderer's own words:

@@ -194,6 +194,7 @@ local function tile(order: number, app: { name: string, glyph: string, colour: C
 
 	local outline = Instance.new("UIStroke")
 	outline.Name = "Outline"
+	outline.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	outline.Color = Color3.fromRGB(120, 170, 255)
 	outline.Thickness = 2
 	outline.Transparency = 1
