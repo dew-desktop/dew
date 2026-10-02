@@ -67,7 +67,7 @@ use dew_runtime::frame::{
     Align, AlphaStop, BlendMode, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale,
     Stop, Stroke,
 };
-use dew_runtime::text::{lay_out, scaled_size, Block, TextLayout};
+use dew_runtime::text::{self, lay_out, scaled_size, Block, Face, TextLayout};
 use rbx_types::{Variant, Vector2};
 use std::collections::HashMap;
 
@@ -932,23 +932,20 @@ fn grow(
         let text_content = text_for(dom, node, &class).unwrap_or_default();
         let text_size = number(dom, node, "TextSize").unwrap_or(14.0);
         let wrapped = boolean(dom, node, "TextWrapped").unwrap_or(false);
-        let measured = if wrapped {
-            let avail_w = if entry_rect.w > 0.0 {
-                (entry_rect.w - pad_l - pad_r).max(0.0)
+        let wrap_width = if wrapped {
+            if entry_rect.w > 0.0 {
+                Some((entry_rect.w - pad_l - pad_r).max(0.0))
             } else if offered.w > 0.0 {
-                (offered.w - pad_l - pad_r).max(0.0)
+                Some((offered.w - pad_l - pad_r).max(0.0))
             } else {
-                0.0
-            };
-            if avail_w > 0.0 {
-                crate::services::measure_wrapped(&text_content, text_size, avail_w)
-            } else {
-                crate::services::measure(&text_content, text_size)
+                None
             }
         } else {
-            crate::services::measure(&text_content, text_size)
+            None
         };
-        if let Ok((tw, th)) = measured {
+        let measured = face_of(dom, node)
+            .and_then(|face| text::measure(&face, &text_content, text_size, wrap_width));
+        if let Some((tw, th)) = measured {
             if grow_x {
                 let needed_w = tw + pad_l + pad_r;
                 entry_rect.w = entry_rect.w.max(needed_w);
@@ -2259,9 +2256,23 @@ fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
         return authored_size;
     }
     let wrapped = boolean(dom, id, "TextWrapped").unwrap_or(false);
-    crate::services::default_face()
+    face_of(dom, id)
         .and_then(|face| scaled_size(&face, &text_content, content.w, content.h, wrapped))
         .unwrap_or(authored_size)
+}
+
+/// The face a text element is measured and drawn in: its `FontFace`, resolved.
+///
+/// ONE ANSWER FOR EVERY TEXT PATH. AutomaticSize, TextScaled, the layout that
+/// `TextBounds` reports and the lines the painter draws all ask here, so a
+/// label cannot be measured in one face and drawn in another. Assigning the
+/// legacy `Font` sets `FontFace` (see the property path in `datamodel`), so
+/// this reads only `FontFace`.
+fn face_of(dom: &Dom, id: usize) -> Option<Face<dew_raster::Font>> {
+    match dom.styled_property(id, "FontFace") {
+        Some(Variant::Font(font)) => crate::services::face_for(&font),
+        _ => crate::services::default_face(),
+    }
 }
 
 /// Lay out the text of one placed element: the line model, given this
@@ -2274,7 +2285,7 @@ fn text_layout_of(dom: &Dom, id: usize, class: &str, rect: Box2) -> Option<TextL
     if !draws_text(class) {
         return None;
     }
-    let face = crate::services::default_face()?;
+    let face = face_of(dom, id)?;
     let text = text_for(dom, id, class).unwrap_or_default();
     let content = content_box(dom, id, rect);
     lay_out(
@@ -3723,7 +3734,7 @@ mod text_paint {
     /// Luau state (to read members back), the frame, and the painted pixels as
     /// one brightness byte each.
     fn draw(src: &str) -> Option<(Lua, Frame, Vec<u8>)> {
-        let font = crate::services::face()?;
+        let face = crate::services::default_face()?;
         let lua = Lua::new();
         let dom = SharedDom::default();
         install(&lua, &dom).expect("install");
@@ -3743,7 +3754,7 @@ mod text_paint {
 
         let mut painter = RasterPainter::new(W, H, dew_raster::Backend::VelloCpu)
             .expect("surface")
-            .with_font(font);
+            .with_face(face);
         painter.paint_frame(&frame, Some(Rgb(0, 0, 0)));
         let bgra = painter.canvas_mut().bgra().expect("pixels");
         let ink = bgra.chunks(4).map(|p| p[0].max(p[1]).max(p[2])).collect();
@@ -3919,5 +3930,543 @@ mod text_paint {
             let content: String = lua.load("return label.ContentText").eval().expect("read");
             assert_eq!(content, want);
         }
+    }
+
+    /// A label nothing has given a face draws in the engine's default,
+    /// LegacyArial, which is Arimo at one and a half times the TextSize.
+    #[test]
+    fn the_default_face_is_arimo_at_one_and_a_half() {
+        let lua = Lua::new();
+        install(&lua, &SharedDom::default()).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let family: String = lua
+            .load(r#"return Instance.new("TextLabel").FontFace.Family"#)
+            .eval()
+            .expect("default FontFace");
+        assert_eq!(family, crate::services::default_font().family);
+
+        let Some(resolved) = crate::fonts::resolve_font(&crate::services::default_font()) else {
+            return;
+        };
+        assert_eq!(resolved.path.file_name().unwrap(), "Arimo-Regular.ttf");
+        assert_eq!(resolved.em_scale, 1.5);
+
+        let unset = draw(&label(
+            r#"t.Text = "Hamburgefonts" t.Size = UDim2.fromOffset(200, 64)"#,
+        ));
+        let set = draw(&label(
+            r#"t.Text = "Hamburgefonts" t.Size = UDim2.fromOffset(200, 64)
+            t.FontFace = Font.new("rbxasset://fonts/families/LegacyArial.json")"#,
+        ));
+        let (Some((_, _, unset)), Some((_, _, set))) = (unset, set) else {
+            return;
+        };
+        assert!(unset == set, "the default face is not LegacyArial");
+    }
+
+    /// Assigning the legacy `Font` sets `FontFace`, and the label draws in it.
+    /// A modern face draws narrower than the default, so the face really
+    /// changed.
+    #[test]
+    fn the_legacy_font_draws_in_the_face_it_names() {
+        let props = |face: &str| {
+            format!(
+                r#"t.Text = "Hamburgefonts"
+                t.TextSize = 20
+                t.AutomaticSize = Enum.AutomaticSize.XY
+                {face}"#
+            )
+        };
+        let Some((lua, by_enum, by_enum_ink)) =
+            draw(&label(&props("t.Font = Enum.Font.SourceSans")))
+        else {
+            return;
+        };
+        let family: String = lua
+            .load("return label.FontFace.Family")
+            .eval()
+            .expect("FontFace");
+        assert_eq!(family, "rbxasset://fonts/families/SourceSansPro.json");
+
+        let (_, by_face, by_face_ink) = draw(&label(&props(
+            r#"t.FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json")"#,
+        )))
+        .expect("a face");
+        let (_, default, _) = draw(&label(&props(""))).expect("a face");
+        let width = |frame: &Frame| {
+            frame
+                .nodes
+                .iter()
+                .find(|n| n.name == "Label")
+                .expect("label")
+                .rect
+                .w
+        };
+        assert!(by_enum_ink == by_face_ink);
+        assert_eq!(width(&by_enum), width(&by_face));
+        assert!(width(&by_face) < width(&default) * 0.7);
+    }
+}
+
+#[cfg(test)]
+mod text_parity {
+    //! Painted text against the engine's own pixels.
+    //!
+    //! Each row is a label the engine drew in Studio at display scale 1.000, white
+    //! on black, 200 x 64, with the ink it drew measured relative to the label's
+    //! box: left, right, top and bottom edges of every pixel brighter than 110 in
+    //! any channel. Dew draws the same label through the real renderer and painter
+    //! and is measured the same way. Every edge must be within a pixel.
+    //!
+    //! BUILDER SANS IS ONLY CHECKED WHERE IT CAN BE DRAWN. Dew may not ship it, so
+    //! its rows run only when the face resolves from a local Studio install and are
+    //! skipped, not failed, everywhere else.
+
+    use super::frame_of;
+    use crate::datamodel::{install, install_vocabulary, SharedDom};
+    use crate::fonts::{self, Source};
+    use dew_runtime::frame::Rgb;
+    use dew_runtime::{Painter, RasterPainter};
+    use mlua::prelude::*;
+
+    /// The label's box, placed `MARGIN` in from the surface's corner so ink that
+    /// strays outside it is still seen.
+    const MARGIN: u32 = 8;
+    const BOX_W: u32 = 200;
+    const BOX_H: u32 = 64;
+
+    /// A pixel counts as ink when a channel is brighter than this, as in the
+    /// script that measured the engine's screenshots.
+    const INK: u8 = 110;
+
+    /// One engine measurement: family, TextSize, TextYAlignment, TextXAlignment,
+    /// text, UIPadding left and top, and the engine's ink edges (left, right, top,
+    /// bottom) relative to the label's box.
+    type Row = (
+        &'static str,
+        f32,
+        &'static str,
+        &'static str,
+        &'static str,
+        u32,
+        [f32; 4],
+    );
+
+    /// From the engine's screenshots of the text probe, pages 1 to 3. The engine
+    /// drew every one of these identically wrapped and unwrapped.
+    const ENGINE: &[Row] = &[
+        (
+            "LegacyArial",
+            14.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [2.0, 13.0, 3.0, 17.0],
+        ),
+        (
+            "LegacyArial",
+            14.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [2.0, 13.0, 25.0, 39.0],
+        ),
+        (
+            "LegacyArial",
+            14.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [2.0, 13.0, 46.0, 60.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [2.0, 18.0, 5.0, 24.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [2.0, 18.0, 22.0, 41.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [2.0, 18.0, 39.0, 58.0],
+        ),
+        (
+            "LegacyArial",
+            32.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [4.0, 28.0, 8.0, 39.0],
+        ),
+        (
+            "LegacyArial",
+            32.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [4.0, 28.0, 16.0, 47.0],
+        ),
+        (
+            "LegacyArial",
+            32.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [4.0, 28.0, 24.0, 55.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Center",
+            "Left",
+            "Hello",
+            0,
+            [2.0, 61.0, 21.0, 41.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Center",
+            "Center",
+            "Hello",
+            0,
+            [71.0, 130.0, 21.0, 41.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Center",
+            "Right",
+            "Hello",
+            0,
+            [140.0, 199.0, 21.0, 41.0],
+        ),
+        (
+            "LegacyArial",
+            20.0,
+            "Top",
+            "Left",
+            "H",
+            16,
+            [18.0, 34.0, 21.0, 40.0],
+        ),
+        (
+            "BuilderSans",
+            14.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [1.0, 7.0, 4.0, 12.0],
+        ),
+        (
+            "BuilderSans",
+            14.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [1.0, 7.0, 29.0, 37.0],
+        ),
+        (
+            "BuilderSans",
+            14.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [1.0, 7.0, 54.0, 62.0],
+        ),
+        (
+            "BuilderSans",
+            20.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [1.0, 10.0, 4.0, 16.0],
+        ),
+        (
+            "BuilderSans",
+            20.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [1.0, 10.0, 26.0, 38.0],
+        ),
+        (
+            "BuilderSans",
+            20.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [1.0, 10.0, 48.0, 60.0],
+        ),
+        (
+            "BuilderSans",
+            32.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [2.0, 16.0, 8.0, 26.0],
+        ),
+        (
+            "BuilderSans",
+            32.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [2.0, 16.0, 24.0, 42.0],
+        ),
+        (
+            "BuilderSans",
+            32.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [2.0, 16.0, 40.0, 58.0],
+        ),
+        (
+            "SourceSansPro",
+            14.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [1.0, 7.0, 4.0, 12.0],
+        ),
+        (
+            "SourceSansPro",
+            14.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [1.0, 7.0, 29.0, 37.0],
+        ),
+        (
+            "SourceSansPro",
+            14.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [1.0, 7.0, 54.0, 62.0],
+        ),
+        (
+            "SourceSansPro",
+            20.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [1.0, 10.0, 5.0, 16.0],
+        ),
+        (
+            "SourceSansPro",
+            20.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [1.0, 10.0, 27.0, 38.0],
+        ),
+        (
+            "SourceSansPro",
+            20.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [1.0, 10.0, 49.0, 60.0],
+        ),
+        (
+            "SourceSansPro",
+            32.0,
+            "Top",
+            "Left",
+            "H",
+            0,
+            [2.0, 15.0, 9.0, 26.0],
+        ),
+        (
+            "SourceSansPro",
+            32.0,
+            "Center",
+            "Left",
+            "H",
+            0,
+            [2.0, 15.0, 25.0, 42.0],
+        ),
+        (
+            "SourceSansPro",
+            32.0,
+            "Bottom",
+            "Left",
+            "H",
+            0,
+            [2.0, 15.0, 41.0, 58.0],
+        ),
+    ];
+
+    /// Draw one engine row's label, wrapped or not, and measure its ink relative
+    /// to the label's box. `None` when nothing was drawn.
+    fn ink_of(row: &Row, wrap: bool) -> Option<[f32; 4]> {
+        let (family, size, y, x, text, pad, _) = *row;
+        let (w, h) = (BOX_W + 2 * MARGIN, BOX_H + 2 * MARGIN);
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        let padding = if pad > 0 {
+            format!(
+                "local p = Instance.new(\"UIPadding\")
+                p.PaddingLeft = UDim.new(0, {pad})
+                p.PaddingTop = UDim.new(0, {pad})
+                p.Parent = t"
+            )
+        } else {
+            String::new()
+        };
+        lua.load(format!(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.Position = UDim2.fromOffset({MARGIN}, {MARGIN})
+            t.Size = UDim2.fromOffset({BOX_W}, {BOX_H})
+            t.BackgroundTransparency = 1
+            t.TextColor3 = Color3.new(1, 1, 1)
+            t.FontFace = Font.new("rbxasset://fonts/families/{family}.json")
+            t.Text = "{text}"
+            t.TextSize = {size}
+            t.TextXAlignment = Enum.TextXAlignment.{x}
+            t.TextYAlignment = Enum.TextYAlignment.{y}
+            t.TextWrapped = {wrap}
+            {padding}
+            t.Parent = root
+            "#
+        ))
+        .exec()
+        .expect("guest");
+        let frame = frame_of(&dom, root, w as f32, h as f32);
+        let mut painter = RasterPainter::new(w, h, dew_raster::Backend::VelloCpu).expect("surface");
+        painter.paint_frame(&frame, Some(Rgb(0, 0, 0)));
+        let bgra = painter.canvas_mut().bgra().expect("pixels");
+
+        let (mut l, mut t, mut r, mut b) = (u32::MAX, u32::MAX, 0, 0);
+        for (i, p) in bgra.chunks(4).enumerate() {
+            if p[0].max(p[1]).max(p[2]) > INK {
+                let (px, py) = (i as u32 % w, i as u32 / w);
+                l = l.min(px);
+                t = t.min(py);
+                r = r.max(px + 1);
+                b = b.max(py + 1);
+            }
+        }
+        (l != u32::MAX).then(|| {
+            let m = MARGIN as f32;
+            [l as f32 - m, r as f32 - m, t as f32 - m, b as f32 - m]
+        })
+    }
+
+    /// Whether a family can be drawn as itself here, and why not when it cannot.
+    fn drawable(family: &str) -> Result<(), String> {
+        let uri = format!("{}{family}.json", fonts::FAMILY_PREFIX);
+        match fonts::resolve(
+            &uri,
+            rbx_types::FontWeight::Regular,
+            rbx_types::FontStyle::Normal,
+        ) {
+            Some(face) if family != "BuilderSans" || face.source == Source::LocalStudio => Ok(()),
+            Some(face) => Err(format!("{family} resolves {:?}", face.source)),
+            None => Err(format!("{family} does not resolve")),
+        }
+    }
+
+    /// Every row of one family, wrapped and unwrapped, against the engine. Prints
+    /// each row, and fails listing every edge more than a pixel out.
+    fn check(family: &str) {
+        if let Err(why) = drawable(family) {
+            eprintln!("skipped: {why}");
+            return;
+        }
+        let mut misses = Vec::new();
+        for row in ENGINE.iter().filter(|row| row.0 == family) {
+            let engine = row.6;
+            for wrap in [false, true] {
+                let name = format!(
+                    "{family} {} {} {} {} pad {} {}",
+                    row.1,
+                    row.2,
+                    row.3,
+                    row.4,
+                    row.5,
+                    if wrap { "wrap" } else { "nowrap" }
+                );
+                let Some(dew) = ink_of(row, wrap) else {
+                    misses.push(format!("{name}: no ink"));
+                    continue;
+                };
+                eprintln!("{name:<48} dew {dew:?} engine {engine:?}");
+                for (edge, (d, e)) in ["L", "R", "T", "B"].iter().zip(dew.iter().zip(engine)) {
+                    if (d - e).abs() > 1.0 {
+                        misses.push(format!("{name}: {edge} {d} against the engine's {e}"));
+                    }
+                }
+            }
+        }
+        assert!(misses.is_empty(), "{}", misses.join("\n"));
+    }
+
+    #[test]
+    fn legacy_arial_ink_is_within_a_pixel_of_the_engine() {
+        check("LegacyArial");
+    }
+
+    #[test]
+    fn source_sans_pro_ink_is_within_a_pixel_of_the_engine() {
+        check("SourceSansPro");
+    }
+
+    /// Runs only where a Studio install provides the face.
+    #[test]
+    fn builder_sans_ink_is_within_a_pixel_of_the_engine() {
+        check("BuilderSans");
     }
 }

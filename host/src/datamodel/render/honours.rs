@@ -109,6 +109,14 @@ fn gui_object(class: &str, property: &str) -> Honour {
         match property {
             "Text" | "TextColor3" | "TextSize" | "TextTransparency" | "TextXAlignment"
             | "TextYAlignment" | "TextScaled" | "TextWrapped" => return Implemented,
+            // `face_of` resolves the face through `crate::fonts`. Assigning
+            // `Font` sets `FontFace`, so both reach the same face.
+            "FontFace" | "Font" => {
+                return Partial(
+                    "a family Dew ships, or finds in a local Studio install, is drawn in \
+                     its own face; any other is drawn in the nearest shipped face",
+                )
+            }
             "InputAction" => {
                 return Partial("drawn as its own name in text; no glyph for the bound input")
             }

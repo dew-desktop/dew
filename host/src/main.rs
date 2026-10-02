@@ -107,14 +107,14 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     // would silently vanish.
     let mut painter = RasterPainter::new(width, height, Backend::VelloCpu)
         .ok_or("could not create a drawing surface")?;
-    // THE FACE COMES FROM `services::face`, WHICH IS ALSO WHAT MEASURES. This
+    // THE FACE COMES FROM `services::default_face`, WHICH IS ALSO WHAT MEASURES. This
     // used to call `Font::load` here, and once a guest can ask "how wide is this
     // string" that is no longer merely wasteful -- `Font::load` hands back a fresh
     // id per call, so the painter and the measurement would have been two
     // registrations of the same file, and a measurement that does not describe the
     // pixels is worse than no measurement. One memo, one id, one face.
-    if let Some(font) = services::face() {
-        painter = painter.with_font(font);
+    if let Some(face) = services::default_face() {
+        painter = painter.with_face(face);
     }
     Ok(painter)
 }

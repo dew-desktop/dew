@@ -366,7 +366,7 @@ fn blend_mode_of(blend: u8) -> tiny_skia::BlendMode {
 /// with its own blend type (`Mix` combined with `Compose`) rather than
 /// tiny-skia's flat enum. `dew snapshot` and every example render THROUGH
 /// THIS BRANCH, not tiny-skia's -- vello_cpu is the only backend with text, so
-/// it is the one every real applet uses (`RasterPainter::with_font` requires
+/// it is the one every real applet uses (`RasterPainter::with_face` requires
 /// it). A blend implementation that only reached `blend_mode_of` above would
 /// compile, pass a tiny-skia-only unit test, and still paint every real
 /// applet identically regardless of `BlendingMode`.

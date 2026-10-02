@@ -33,12 +33,23 @@ pub trait Advance {
     /// font cannot answer. `None` is a failure, never a zero width: a zero
     /// width collapses whatever asked.
     fn advance(&self, px: f32, text: &str) -> Option<f32>;
+
+    /// The rasteriser's id for this font, which a [`TextLayout`] carries so the
+    /// painter draws in the face the lines were measured in. `None` for a font
+    /// that is not in the rasteriser's store.
+    fn raster_id(&self) -> Option<u32> {
+        None
+    }
 }
 
 #[cfg(feature = "raster")]
 impl Advance for dew_raster::Font {
     fn advance(&self, px: f32, text: &str) -> Option<f32> {
         self.width(px, text)
+    }
+
+    fn raster_id(&self) -> Option<u32> {
+        Some(self.id())
     }
 }
 
@@ -94,18 +105,24 @@ impl<F> Face<F> {
 
 #[cfg(feature = "raster")]
 impl Face<dew_raster::Font> {
-    /// The one face Dew draws with today, standing in for LegacyArial.
+    /// A face file drawn at `em_scale`, with its metrics read from the file.
     ///
-    /// Line boxes are the Legacy 1.5 em, as they are for the engine's default
-    /// face, and glyphs are drawn at TextSize, as this face always has been.
-    /// Font resolution replaces this per family.
-    pub fn stand_in(font: dew_raster::Font) -> Self {
+    /// THE GLYPHS FILL THE LINE BOX. The engine scales a face so that its
+    /// ascent plus descent is one effective em: Arimo's "Hamburgefonts" at
+    /// TextSize 20 is 123 px wide where drawing it 20 px to the em would make
+    /// it 137, and LegacyArial's is 1.5 times that, 184. So the glyph size
+    /// per effective em is one over the face's ascent plus descent, and a
+    /// legacy family differs from a modern one only in `em_scale`.
+    pub fn from_font(font: dew_raster::Font, em_scale: f32) -> Self {
+        let ascent = font.ascent(1.0);
+        let descent = font.descent(1.0);
+        let extent = ascent + descent;
         Face {
             font,
-            em_scale: LEGACY_EM_SCALE,
-            glyph_per_em: 1.0 / LEGACY_EM_SCALE,
-            ascent: font.ascent(1.0),
-            descent: font.descent(1.0),
+            em_scale,
+            glyph_per_em: if extent > 0.0 { 1.0 / extent } else { 1.0 },
+            ascent,
+            descent,
         }
     }
 }
@@ -142,6 +159,10 @@ pub struct Line {
 /// A laid-out label: what is drawn, and what `TextBounds` and `TextFits` say.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextLayout {
+    /// The rasteriser id of the face the lines were broken and measured in,
+    /// from [`Advance::raster_id`]. The painter draws in this face, not one
+    /// of its own.
+    pub face: Option<u32>,
     /// The TextSize this was laid out at, after TextScaled.
     pub text_size: f32,
     /// The size every line is drawn at.
@@ -297,6 +318,7 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
     let fits = visible == all.len() && widest <= content.w + SLACK && block_h <= content.h + SLACK;
 
     Some(TextLayout {
+        face: face.font.raster_id(),
         text_size: block.text_size,
         glyph_px,
         line_height,
@@ -515,14 +537,11 @@ mod tests {
     fn the_cap_centre_is_within_a_pixel_and_a_half_of_the_line_box_centre() {
         let content = rect(0.0, 0.0, 400.0, 200.0);
         for (name, legacy, ascent, descent, cap) in FACES {
-            // A Legacy family's glyphs are one effective em; a modern family's
-            // are scaled so that ascent plus descent fills the line.
-            let (em_scale, glyph_per_em) = if legacy {
-                (LEGACY_EM_SCALE, 1.0)
-            } else {
-                (1.0, 1.0 / (ascent + descent))
-            };
-            let f = face(em_scale, glyph_per_em, ascent, descent);
+            // Every family's glyphs are scaled so that ascent plus descent
+            // fills the line, as `Face::from_font` builds them; a Legacy
+            // family's line is 1.5 times taller.
+            let em_scale = if legacy { LEGACY_EM_SCALE } else { 1.0 };
+            let f = face(em_scale, 1.0 / (ascent + descent), ascent, descent);
             for size in [14.0, 20.0, 32.0, 48.0, 64.0] {
                 for y in [Align::Start, Align::Center, Align::End] {
                     let laid = lay_out(&f, &block("H", size, content, false, y)).unwrap();

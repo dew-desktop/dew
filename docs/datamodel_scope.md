@@ -22,7 +22,7 @@ without Aether**.
 excluded by decision, and 25 classes under `GuiObject` are in scope.
 
 Counted per class rather than by name, those properties make 471 (class,
-property) pairs. **239 of the 471 are rendered by Dew**, 12 of them
+property) pairs. **246 of the 471 are rendered by Dew**, 19 of them
 partially; see the two sections below.
 
 Of the 139 names, **36 are honoured by Aether's pipeline**.
@@ -47,13 +47,13 @@ Three different questions, asked of every property in scope for each class:
 
 | Class | In scope | Accepted by the host | Rendered by Dew | of which partial | Honoured by Aether's pipeline |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| `TextBox` | 45 | 45 | 20 | 0 | 20 |
-| `TextButton` | 42 | 42 | 20 | 0 | 20 |
+| `TextBox` | 45 | 45 | 22 | 2 | 20 |
+| `TextButton` | 42 | 42 | 22 | 2 | 20 |
 | `ImageButton` | 39 | 39 | 19 | 1 | 15 |
 | `ScrollingFrame` | 38 | 38 | 14 | 0 | 13 |
-| `TextLabel` | 38 | 38 | 20 | 0 | 20 |
+| `TextLabel` | 38 | 38 | 22 | 2 | 20 |
 | `ImageLabel` | 31 | 31 | 19 | 1 | 15 |
-| `InputActionLabel` | 30 | 30 | 19 | 1 | 20 |
+| `InputActionLabel` | 30 | 30 | 20 | 2 | 20 |
 | `GuiButton` | 24 | 24 | 12 | 0 | 12 |
 | `CanvasGroup` | 22 | 22 | 12 | 0 | 12 |
 | `Frame` | 21 | 21 | 12 | 0 | 12 |
@@ -81,12 +81,16 @@ the table above can be traced to the names behind it.
 ### `TextBox`
 
 - **Rendered:** `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `ClipsDescendants`, `LayoutOrder`, `Name`, `Parent`, `Position`, `Size`, `Text`, `TextColor3`, `TextScaled`, `TextSize`, `TextTransparency`, `TextWrapped`, `TextXAlignment`, `TextYAlignment`, `Visible`, `ZIndex`
-- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `ClearTextOnFocus`, `CursorPosition`, `Font`, `FontFace`, `InputSink`, `Interactable`, `LineHeight`, `MaxVisibleGraphemes`, `MultiLine`, `OpenTypeFeatures`, `PlaceholderColor3`, `PlaceholderText`, `RichText`, `Rotation`, `SelectionStart`, `SizeConstraint`, `TextDirection`, `TextEditable`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTruncate`
+- **Partial,** `Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- **Partial,** `FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `ClearTextOnFocus`, `CursorPosition`, `InputSink`, `Interactable`, `LineHeight`, `MaxVisibleGraphemes`, `MultiLine`, `OpenTypeFeatures`, `PlaceholderColor3`, `PlaceholderText`, `RichText`, `Rotation`, `SelectionStart`, `SizeConstraint`, `TextDirection`, `TextEditable`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTruncate`
 
 ### `TextButton`
 
 - **Rendered:** `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `ClipsDescendants`, `LayoutOrder`, `Name`, `Parent`, `Position`, `Size`, `Text`, `TextColor3`, `TextScaled`, `TextSize`, `TextTransparency`, `TextWrapped`, `TextXAlignment`, `TextYAlignment`, `Visible`, `ZIndex`
-- **Not rendered:** `Active`, `AutoButtonColor`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `Font`, `FontFace`, `InputSink`, `Interactable`, `LineHeight`, `MaxVisibleGraphemes`, `Modal`, `OpenTypeFeatures`, `RichText`, `Rotation`, `Selected`, `SizeConstraint`, `Style`, `TextDirection`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTruncate`
+- **Partial,** `Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- **Partial,** `FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- **Not rendered:** `Active`, `AutoButtonColor`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `InputSink`, `Interactable`, `LineHeight`, `MaxVisibleGraphemes`, `Modal`, `OpenTypeFeatures`, `RichText`, `Rotation`, `Selected`, `SizeConstraint`, `Style`, `TextDirection`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTruncate`
 
 ### `ImageButton`
 
@@ -102,7 +106,9 @@ the table above can be traced to the names behind it.
 ### `TextLabel`
 
 - **Rendered:** `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `ClipsDescendants`, `LayoutOrder`, `Name`, `Parent`, `Position`, `Size`, `Text`, `TextColor3`, `TextScaled`, `TextSize`, `TextTransparency`, `TextWrapped`, `TextXAlignment`, `TextYAlignment`, `Visible`, `ZIndex`
-- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `Font`, `FontFace`, `InputSink`, `Interactable`, `LineHeight`, `MaxVisibleGraphemes`, `OpenTypeFeatures`, `RichText`, `Rotation`, `SizeConstraint`, `TextDirection`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTruncate`
+- **Partial,** `Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- **Partial,** `FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `InputSink`, `Interactable`, `LineHeight`, `MaxVisibleGraphemes`, `OpenTypeFeatures`, `RichText`, `Rotation`, `SizeConstraint`, `TextDirection`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTruncate`
 
 ### `ImageLabel`
 
@@ -113,8 +119,9 @@ the table above can be traced to the names behind it.
 ### `InputActionLabel`
 
 - **Rendered:** `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `ClipsDescendants`, `LayoutOrder`, `Name`, `Parent`, `Position`, `Size`, `TextColor3`, `TextSize`, `TextTransparency`, `TextWrapped`, `TextXAlignment`, `TextYAlignment`, `Visible`, `ZIndex`
+- **Partial,** `FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
 - **Partial,** `InputAction`: drawn as its own name in text; no glyph for the bound input
-- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `FontFace`, `ImageColor3`, `ImageTransparency`, `InputSink`, `Interactable`, `Rotation`, `SizeConstraint`
+- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `ImageColor3`, `ImageTransparency`, `InputSink`, `Interactable`, `Rotation`, `SizeConstraint`
 
 ### `GuiButton`
 

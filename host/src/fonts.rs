@@ -360,8 +360,8 @@ pub fn studio_fonts_dir() -> Option<PathBuf> {
 
 // -- Writing the shipped faces out -----------------------------------------------
 
-/// Write the shipped faces into `dir`, skipping any already there at the
-/// right size, and return `dir`.
+/// Write the shipped faces into `dir`, skipping any already there with the
+/// same bytes, and return `dir`.
 ///
 /// Written to a temporary name and renamed, so a second process starting at
 /// the same moment never reads half a file.
@@ -369,8 +369,12 @@ pub fn write_shipped(dir: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     for (name, bytes) in SHIPPED_FACES {
         let target = dir.join(name);
-        let current = std::fs::metadata(&target).map(|m| m.len()).ok();
-        if current == Some(bytes.len() as u64) {
+        // THE BYTES, NOT THE SIZE. The folder is named by crate version, and two
+        // builds of one version can embed different files; a copy left by the
+        // other would be drawn while this build measured its own.
+        let same_size =
+            std::fs::metadata(&target).map(|m| m.len()).ok() == Some(bytes.len() as u64);
+        if same_size && std::fs::read(&target).is_ok_and(|current| current == *bytes) {
             continue;
         }
         let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));

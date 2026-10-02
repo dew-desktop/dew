@@ -15,6 +15,7 @@
 //! ```
 
 use dew_raster::{Backend, Canvas, Font};
+use dew_runtime::text::{Face, LEGACY_EM_SCALE};
 use dew_runtime::{Application, Capabilities, Painter, RasterPainter, Rgb};
 use std::path::PathBuf;
 
@@ -110,7 +111,7 @@ fn painted() -> RasterPainter {
     // label. Which is exactly the failure that looks like a layout bug.
     let mut painter = RasterPainter::new(WIDTH, HEIGHT, Backend::VelloCpu).expect("surface");
     if let Some(font) = system_font() {
-        painter = painter.with_font(font);
+        painter = painter.with_face(Face::from_font(font, LEGACY_EM_SCALE));
     }
     painter.paint_frame(&frame, Some(Rgb(0, 0, 0)));
     painter

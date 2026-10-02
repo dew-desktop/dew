@@ -489,8 +489,8 @@ pub fn paint_dom(
         Backend::VelloCpu,
     )
     .ok_or("failed to create raster painter")?;
-    if let Some(font) = crate::services::face() {
-        painter = painter.with_font(font);
+    if let Some(face) = crate::services::default_face() {
+        painter = painter.with_face(face);
     }
     painter.paint_frame(&frame, None);
 
@@ -546,8 +546,8 @@ pub fn render_scene(lua: &Lua, scene: &Scene, out: &Path) -> Result<(), String> 
         Backend::VelloCpu,
     )
     .ok_or("failed to create raster painter")?;
-    if let Some(font) = crate::services::face() {
-        painter = painter.with_font(font);
+    if let Some(face) = crate::services::default_face() {
+        painter = painter.with_face(face);
     }
     painter.paint_frame(&frame, None);
 

@@ -60,6 +60,19 @@ impl Font {
         (id != 0).then_some(Font(id))
     }
 
+    /// The id the store gave this font, for a caller that has to carry a font
+    /// through a type that cannot name this one.
+    pub fn id(self) -> u32 {
+        self.0
+    }
+
+    /// The font a previous [`Font::id`] named, or `None` when the store has no
+    /// font with that id. Checked rather than trusted, so an id that never
+    /// came from a load still cannot become a font.
+    pub fn from_id(id: u32) -> Option<Font> {
+        (id != 0 && ar_text_line_height(id, 1.0) >= 0.0).then_some(Font(id))
+    }
+
     /// Width of one run, in pixels. `None` when the font is unknown.
     pub fn width(self, size: f32, text: &str) -> Option<f32> {
         let w = ar_text_width(self.0, size, text.as_ptr(), text.len() as u32);

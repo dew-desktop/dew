@@ -59,42 +59,97 @@ use dew_raster::Font;
 use dew_runtime::text::{self, Face};
 use mlua::prelude::*;
 use mlua::WeakLua;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 // -- Text --------------------------------------------------------------------
 
-/// The face this host measures AND draws with, loaded once.
+/// Load a face file into the rasteriser, once per path.
 ///
-/// ONE FACE, ONE ID, and the memo is the point rather than a micro-optimisation.
-/// `Font::load` pushes the file into the rasteriser's process-wide store and
-/// hands back a fresh id every time it is called, so a measurement path that
-/// loaded its own would hold a second copy of a multi-megabyte file AND could
-/// measure in a face the painter is not drawing in. `main.rs` takes its painter
-/// font from here for that second reason: a measurement that does not describe
-/// the pixels is worse than no measurement at all.
-pub fn face() -> Option<Font> {
-    static FACE: OnceLock<Option<Font>> = OnceLock::new();
-    *FACE.get_or_init(|| {
-        let path = dew_runtime::font::system_font()?;
-        Font::load(&path.to_string_lossy(), 0)
-    })
+/// ONE LOAD PER FILE, AND THE MEMO IS THE POINT rather than a
+/// micro-optimisation. `Font::load` pushes the file into the rasteriser's
+/// process-wide store and hands back a fresh id every time it is called, so a
+/// path loaded twice is a multi-megabyte file held twice, and a measurement
+/// that loaded its own copy could measure in a face the painter is not drawing
+/// in. A failed load is remembered too, so a bad file is read once.
+fn load(path: &Path) -> Option<Font> {
+    static LOADED: OnceLock<Mutex<HashMap<PathBuf, Option<Font>>>> = OnceLock::new();
+    let mut loaded = LOADED.get_or_init(Default::default).lock().ok()?;
+    *loaded
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Font::load(&path.to_string_lossy(), 0))
 }
 
-/// The face every label is laid out and drawn in, as the line model takes it.
+/// The face a `Font` value draws in, as the line model takes it.
 ///
-/// ONE FACE, STANDING IN FOR THE ENGINE'S DEFAULT. A new text object's
-/// `FontFace` is LegacyArial, whose line box is 1.5 x TextSize, so this face
-/// gets the Legacy em scale and keeps drawing its glyphs at TextSize, as it
-/// always has. When faces resolve per family, each brings its own numbers and
-/// this stops being the only answer.
+/// Resolved by `fonts::resolve_font` to a face file and an em scale, and built
+/// from that file's own metrics. When nothing resolves, which means the
+/// shipped faces could not be written to disk, the system font stands in at
+/// the scale the family would have had.
 ///
-/// Memoised like [`face`]: every label asks for it on every frame, and its
-/// metrics are a lookup in the font file.
+/// Memoised per family, weight and style: every label asks on every frame,
+/// and resolving reads the disk.
+pub fn face_for(font: &rbx_types::Font) -> Option<Face<Font>> {
+    type Faces = HashMap<String, HashMap<(u16, bool), Option<Face<Font>>>>;
+    static FACES: OnceLock<Mutex<Faces>> = OnceLock::new();
+    let key = (
+        font.weight.as_u16(),
+        font.style == rbx_types::FontStyle::Italic,
+    );
+    let faces = FACES.get_or_init(Default::default);
+    if let Some(known) = faces
+        .lock()
+        .ok()?
+        .get(font.family.as_str())
+        .and_then(|by_face| by_face.get(&key))
+    {
+        return *known;
+    }
+    let face = match crate::fonts::resolve_font(font) {
+        Some(resolved) => load(&resolved.path).map(|f| Face::from_font(f, resolved.em_scale)),
+        None => {
+            let legacy = crate::fonts::family_stem(&font.family)
+                .is_some_and(|stem| stem.starts_with("Legacy"));
+            let em_scale = if legacy {
+                crate::fonts::LEGACY_EM_SCALE
+            } else {
+                1.0
+            };
+            dew_runtime::font::system_font()
+                .and_then(|path| load(&path))
+                .map(|f| Face::from_font(f, em_scale))
+        }
+    };
+    faces
+        .lock()
+        .ok()?
+        .entry(font.family.clone())
+        .or_default()
+        .insert(key, face);
+    face
+}
+
+/// The `FontFace` a new text object has: LegacyArial, Regular.
+pub fn default_font() -> rbx_types::Font {
+    rbx_types::Font::new(
+        &format!("{}LegacyArial.json", crate::fonts::FAMILY_PREFIX),
+        rbx_types::FontWeight::Regular,
+        rbx_types::FontStyle::Normal,
+    )
+}
+
+/// The face of a text object nothing has given a `FontFace`: Arimo, drawn at
+/// 1.5 x TextSize, as the engine draws LegacyArial. `desktop.Text.Measure`
+/// measures in it, and a painter draws a node with no layout of its own in it.
 pub fn default_face() -> Option<Face<Font>> {
-    static DEFAULT: OnceLock<Option<Face<Font>>> = OnceLock::new();
-    *DEFAULT.get_or_init(|| face().map(Face::stand_in))
+    face_for(&default_font())
+}
+
+/// The font file of [`default_face`].
+pub fn face() -> Option<Font> {
+    default_face().map(|face| face.font)
 }
 
 /// Measure a string in the face this host draws with.
@@ -116,7 +171,8 @@ pub fn default_face() -> Option<Face<Font>> {
 /// THE LINE MODEL ANSWERS, `dew_runtime::text::measure`, which is also what
 /// lays out and paints every label. A line is one effective em tall, 1.5 x
 /// TextSize in the default face (`LAYOUT.md` section 7), and the height is
-/// that times the number of lines.
+/// that times the number of lines. This measures in [`default_face`]; a label
+/// with a `FontFace` is measured in its own by the renderer.
 pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
     let face = default_face().ok_or("this host has no font, so it cannot measure text")?;
     text::measure(&face, text, size, None).ok_or_else(|| "the measuring face did not parse".into())
