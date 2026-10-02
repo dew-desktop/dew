@@ -980,6 +980,289 @@ pub mod tests {
         assert!(!result.get::<bool>("ok").expect("ok field"));
     }
 
+    /// This checkout's own folder for a bundled applet, the source
+    /// `bundled::ensure` copies from.
+    #[cfg(windows)]
+    fn checkout_dir(id: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("host/ has a parent")
+            .join(id)
+    }
+
+    /// Every file under `dir`, as paths relative to it.
+    #[cfg(windows)]
+    fn files_under(dir: &Path) -> Vec<PathBuf> {
+        let mut out = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(at) = stack.pop() {
+            for entry in std::fs::read_dir(&at).expect("read_dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    out.push(path.strip_prefix(dir).expect("under dir").to_path_buf());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    /// The `dew.Library` table a loaded applet was granted.
+    #[cfg(windows)]
+    fn library_table(loaded: &Applet) -> mlua::Table {
+        let dew: mlua::Table = loaded.vm.lua().globals().get("dew").expect("dew installed");
+        dew.get("Library").expect("Library installed")
+    }
+
+    #[cfg(windows)]
+    fn list_rows(library: &mlua::Table) -> Vec<mlua::Table> {
+        let list: mlua::Function = library.get("List").expect("List installed");
+        let rows: mlua::Table = list.call(()).expect("List call");
+        rows.sequence_values::<mlua::Table>()
+            .map(|row| row.expect("row"))
+            .collect()
+    }
+
+    /// THE QUICK PANEL SHIPS AS THE CHECKOUT HAS IT: after a sync, its
+    /// bundled copy holds exactly the checkout's files, byte for byte.
+    #[cfg(windows)]
+    #[test]
+    fn the_quick_panel_is_bundled_byte_for_byte() {
+        let _guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dest = crate::bundled::ensure("quickpanel").expect("bundle the quick panel");
+        assert!(
+            is_bundled(&dest),
+            "the copy must sit inside the bundled directory"
+        );
+
+        let source = checkout_dir("quickpanel");
+        let files = files_under(&source);
+        assert!(files.iter().any(|f| f == Path::new("dew.toml")));
+        assert_eq!(files, files_under(&dest), "the copy holds the same files");
+        for file in &files {
+            assert_eq!(
+                std::fs::read(source.join(file)).expect("source file"),
+                std::fs::read(dest.join(file)).expect("bundled file"),
+                "{} differs from the checkout",
+                file.display()
+            );
+        }
+    }
+
+    /// `dew.Library.List` SHOWS THE QUICK PANEL AND NOT THE DASHBOARD. The
+    /// panel's row is read from its bundled manifest, is marked `bundled`,
+    /// and is off until the user turns it on.
+    #[cfg(windows)]
+    #[test]
+    fn dew_library_lists_the_quick_panel_and_not_the_dashboard() {
+        let _guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        crate::bundled::ensure("quickpanel").expect("bundle the quick panel");
+        crate::bundled::ensure("dashboard").expect("bundle the dashboard");
+        let previous = crate::installed::enabled_bit("quickpanel");
+        crate::installed::restore_enabled_bit("quickpanel", None);
+
+        let manager = BundledFixture::new(
+            "library-lists-bundled",
+            "id = \"plain\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let rows = list_rows(&library_table(&loaded));
+        crate::installed::restore_enabled_bit("quickpanel", previous);
+
+        let ids: Vec<String> = rows.iter().map(|r| r.get("id").expect("id")).collect();
+        assert!(
+            !ids.iter().any(|id| id == "dashboard"),
+            "the dashboard is opened from the tray and must not be listed, got {ids:?}"
+        );
+        assert_eq!(
+            ids.iter().filter(|id| *id == "quickpanel").count(),
+            1,
+            "the quick panel is listed once, got {ids:?}"
+        );
+        let panel = rows
+            .iter()
+            .find(|r| r.get::<String>("id").expect("id") == "quickpanel")
+            .expect("listed");
+        assert_eq!(
+            panel.get::<String>("name").expect("name"),
+            "Dew Quick Panel"
+        );
+        assert!(!panel
+            .get::<String>("description")
+            .expect("description")
+            .is_empty());
+        assert!(panel.get::<bool>("bundled").expect("bundled"));
+        assert!(
+            !panel.get::<bool>("enabled").expect("enabled"),
+            "the quick panel is off until the user turns it on"
+        );
+        assert!(!panel.get::<bool>("running").expect("running"));
+    }
+
+    /// ENABLING THE QUICK PANEL STARTS IT FROM ITS BUNDLED COPY, WITH
+    /// `library` GRANTED. `SetEnabled` persists the bit and queues the
+    /// bundled directory. No coordinator drains the queue here, so this test
+    /// loads the queued directory itself, as the coordinator would, and
+    /// finds `dew.Library` installed before the panel's own code runs.
+    #[cfg(windows)]
+    #[test]
+    fn enabling_the_quick_panel_loads_its_bundled_copy_with_library() {
+        let _guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = crate::library::take_load_requests();
+        let dest = crate::bundled::ensure("quickpanel").expect("bundle the quick panel");
+        let previous = crate::installed::enabled_bit("quickpanel");
+
+        // The wait for a coordinator to confirm the load times out here, the
+        // same as for any applet in this hermetic setting.
+        let _ = crate::library::set_enabled("quickpanel", true);
+        let queued = crate::library::take_load_requests();
+        let persisted = crate::installed::enabled_bit("quickpanel");
+        crate::installed::restore_enabled_bit("quickpanel", previous);
+
+        assert_eq!(
+            persisted,
+            Some(true),
+            "the enabled bit persists like any applet's"
+        );
+        assert_eq!(queued, vec![dest], "SetEnabled queues the bundled copy");
+
+        let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+        let mut saw_library = false;
+        let loaded = load_observed(&queued[0], &Default::default(), &state, &mut |lua| {
+            let dew: Option<mlua::Table> = lua.globals().get("dew").ok();
+            saw_library = dew.is_some_and(|d| d.get::<mlua::Table>("Library").is_ok());
+        });
+        assert!(
+            saw_library,
+            "the bundled quick panel must be granted dew.Library"
+        );
+        if let Err(e) = loaded {
+            panic!("the bundled quick panel must load: {e}");
+        }
+    }
+
+    /// A BUNDLED APPLET CANNOT BE UNINSTALLED, only disabled. The refusal is
+    /// an ordinary `{ ok = false, error }` result naming what to do instead,
+    /// and the bundled copy is still on disk afterwards.
+    #[cfg(windows)]
+    #[test]
+    fn uninstalling_a_bundled_applet_is_refused() {
+        let _guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dest = crate::bundled::ensure("quickpanel").expect("bundle the quick panel");
+
+        let manager = BundledFixture::new(
+            "library-uninstall-bundled",
+            "id = \"plain\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let loaded = manager.load().expect("loads");
+        let uninstall: mlua::Function = library_table(&loaded)
+            .get("Uninstall")
+            .expect("Uninstall installed");
+        for id in ["quickpanel", "dashboard"] {
+            let result: mlua::Table = uninstall.call(id.to_string()).expect("Uninstall call");
+            assert!(
+                !result.get::<bool>("ok").expect("ok field"),
+                "{id} must not uninstall"
+            );
+            let error: String = result.get("error").expect("error field");
+            assert!(error.contains("disable it instead"), "got: {error}");
+        }
+        assert!(
+            crate::installed::uninstall("quickpanel").is_err(),
+            "`dew uninstall` refuses it too"
+        );
+        assert!(
+            dest.join("dew.toml").is_file(),
+            "the bundled copy is untouched"
+        );
+    }
+
+    /// `library` STAYS OUT OF REACH OF ANYTHING DEW DID NOT BUNDLE. The quick
+    /// panel's own folder in this checkout is refused, and so is an installed
+    /// applet asking for `library`. Nothing can be installed under a bundled
+    /// id, and a folder under `Applets/` with that name is never listed in
+    /// the bundled copy's place.
+    #[cfg(windows)]
+    #[test]
+    fn a_checkout_or_installed_applet_cannot_get_library() {
+        let _guard = GENERATION_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+
+        let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+        let err = match load(&checkout_dir("quickpanel"), &Default::default(), &state) {
+            Err(e) => e,
+            Ok(_) => panic!("the checkout's quick panel must not be granted library"),
+        };
+        assert!(
+            err.contains("library") && err.contains("bundled"),
+            "got: {err}"
+        );
+
+        let installed = InstalledFixture::new(
+            "wants-library",
+            "id = \"lib-wants-library\"\npermissions = [\"widget\", \"library\"]\n",
+            PLAIN,
+        );
+        let dir = crate::installed::list()
+            .into_iter()
+            .find(|e| e.id == installed.id)
+            .expect("installed")
+            .dir;
+        let state: Shared = Arc::new(Mutex::new(capabilities::HostState::default()));
+        let err = match load(&dir, &Default::default(), &state) {
+            Err(e) => e,
+            Ok(_) => panic!("an installed applet must not be granted library"),
+        };
+        assert!(err.contains("library"), "got: {err}");
+
+        let source = std::env::temp_dir().join("dew-library-test-impostor");
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).expect("impostor source");
+        std::fs::write(
+            source.join("dew.toml"),
+            "id = \"quickpanel\"\npermissions = [\"widget\", \"library\"]\n",
+        )
+        .expect("dew.toml");
+        std::fs::write(source.join("main.luau"), PLAIN).expect("entry");
+        let err = crate::installed::install(&source, true)
+            .expect_err("an applet must not install under a bundled id");
+        assert!(err.contains("ships with Dew"), "got: {err}");
+        let _ = std::fs::remove_dir_all(&source);
+
+        let bundled = crate::bundled::ensure("quickpanel").expect("bundle the quick panel");
+        let shadow = crate::installed::dew_dir()
+            .expect("dew dir")
+            .join("Applets")
+            .join("quickpanel");
+        let placed_by_test = !shadow.exists();
+        if placed_by_test {
+            std::fs::create_dir_all(&shadow).expect("shadow dir");
+            std::fs::write(shadow.join("dew.toml"), "id = \"quickpanel\"\n").expect("dew.toml");
+        }
+        let panels: Vec<_> = crate::installed::list()
+            .into_iter()
+            .filter(|e| e.id == "quickpanel")
+            .collect();
+        if placed_by_test {
+            let _ = std::fs::remove_dir_all(&shadow);
+        }
+        assert_eq!(panels.len(), 1, "one quick panel, never the shadow");
+        assert_eq!(panels[0].dir, bundled, "and it is the bundled copy");
+    }
+
     /// `dew.Library.OnChange` FIRES ON THE MODULE'S OWN ACTIONS (milestone 26
     /// sprint 2). `library::launch`/`uninstall`/`set_enabled` bump the
     /// generation `OnChange` watches directly, in-process, so this needs no

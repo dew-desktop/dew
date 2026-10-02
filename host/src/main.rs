@@ -22,6 +22,8 @@ use dew_host::datamodel;
 use dew_host::manifest;
 mod applets;
 #[cfg(windows)]
+mod bundled;
+#[cfg(windows)]
 mod coordinator;
 #[cfg(windows)]
 mod dashboard;

@@ -578,6 +578,10 @@ pub fn run(_mutex: MutexGuard, first_dir: PathBuf, stats: bool, bench: bool) -> 
 
     spawn_unload_server();
 
+    // DEW'S OWN LISTED APPLETS ARE SYNCED BEFORE ANYTHING LOADS, so an
+    // enabled quick panel starts from the copy this build ships.
+    crate::bundled::ensure_listed();
+
     // A TRAY THAT FAILS TO CREATE DOES NOT STOP THE SERVICE. `crate::run_applet`
     // used to make the same choice for the single-applet tray it created;
     // the coordinator's one tray inherits it.

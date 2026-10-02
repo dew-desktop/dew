@@ -84,7 +84,16 @@ design:SetAttribute("TabActiveColor", Color3.fromRGB(48, 66, 94))
 design:SetAttribute("TabInactiveColor", Color3.fromRGB(26, 29, 38))
 
 type Package = { ownerUserId: string, appletId: string, uploadedAt: string }
-type LibraryEntry = { id: string, name: string, description: string, enabled: boolean, running: boolean }
+type LibraryEntry = {
+	id: string,
+	name: string,
+	description: string,
+	enabled: boolean,
+	running: boolean,
+	-- Ships with Dew. The host refuses to uninstall it, so its row has no
+	-- Uninstall button.
+	bundled: boolean?,
+}
 type Session = { email: string, userId: string? }
 type Tone = "default" | "danger" | "success"
 
@@ -763,7 +772,7 @@ local function buildLibraryRow(entry: LibraryEntry, order: number)
 			entry.name,
 			entry.id,
 			if entry.description == "" then entry.id else entry.description,
-			{ NARROW, WIDE }
+			if entry.bundled then { NARROW } else { NARROW, WIDE }
 		)
 
 		-- Neither handler rebuilds the list: `library.OnChange` does, for
@@ -775,6 +784,10 @@ local function buildLibraryRow(entry: LibraryEntry, order: number)
 				if result.ok then `{if entry.running then "Disabled" else "Enabled"} '{entry.id}'` else result.error
 			)
 		end)
+
+		if entry.bundled then
+			return built.row
+		end
 
 		-- Uninstall asks first. The dialog is built in this row's scope, so
 		-- the row's teardown also tears down its machine.

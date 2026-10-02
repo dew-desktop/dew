@@ -118,6 +118,8 @@ pub struct Entry {
     pub description: String,
     pub enabled: bool,
     pub running: bool,
+    /// Ships with Dew: `Uninstall` refuses it, so a caller can hide the button.
+    pub bundled: bool,
 }
 
 /// Every installed applet, enabled or not, with its manifest read for
@@ -146,6 +148,7 @@ pub fn list() -> Vec<Entry> {
                 description,
                 enabled: entry.enabled,
                 running: is_running,
+                bundled: entry.bundled,
             }
         })
         .collect()
@@ -183,7 +186,13 @@ pub fn launch(id: &str) -> Result<(), String> {
 /// callers: the CLI is a different process and has no other way to reach
 /// `UNLOAD_QUEUE`, so this function cannot special-case "am I in the same
 /// process as the coordinator or not" and still be one function.
+///
+/// A BUNDLED APPLET IS REFUSED BEFORE ANYTHING ELSE, so a running one is not
+/// unloaded on the way to a refusal.
 pub fn uninstall(id: &str) -> Result<(), String> {
+    if crate::bundled::is_bundled_id(id) {
+        return Err(crate::bundled::uninstall_refusal(id));
+    }
     if crate::coordinator::query_running(id)? {
         crate::coordinator::request_unload(id)?;
         wait_until_running_is(id, false)

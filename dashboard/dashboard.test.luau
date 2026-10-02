@@ -45,7 +45,7 @@ local ScreenStack = require("./roblox_packages/aether").ScreenStack
 -- FAKES. In memory, built by this file alone.
 --------------------------------------------------------------------------
 
-type LibraryEntry = { id: string, name: string, description: string, enabled: boolean, running: boolean }
+type LibraryEntry = { id: string, name: string, description: string, enabled: boolean, running: boolean, bundled: boolean? }
 
 -- TWO ENTRIES, so the Cancel scenario and the Confirm scenario each open a
 -- dialog no other test has touched, and each dialog is told apart by the
@@ -388,6 +388,32 @@ local function testLibraryRefreshRebuildsFromList()
 	assert(find(find(root, "TabLibrary"), "Count").Text == tostring(#libraryEntries), "Refresh updates the count")
 end
 
+local function testABundledRowHasToggleButNoUninstall()
+	press(find(root, "TabLibrary"))
+	table.insert(libraryEntries, {
+		id = "bundled-applet",
+		name = "Bundled Applet",
+		description = "Ships with Dew",
+		enabled = false,
+		running = false,
+		bundled = true,
+	})
+	if libraryOnChange then
+		libraryOnChange()
+	end
+	local row = findRow("Bundled Applet")
+	assert(row ~= nil, "a bundled entry is listed like any other")
+	assert(find(row, "Toggle") ~= nil, "a bundled entry can be enabled and disabled")
+	assert(find(row, "Uninstall") == nil, "a bundled entry has no Uninstall button")
+	assert(findDialog("Bundled Applet") == nil, "a bundled entry builds no Uninstall dialog")
+
+	table.remove(libraryEntries, #libraryEntries)
+	if libraryOnChange then
+		libraryOnChange()
+	end
+	assert(findRow("Bundled Applet") == nil, "the entry is gone again for the tests that follow")
+end
+
 --------------------------------------------------------------------------
 -- STORE
 --------------------------------------------------------------------------
@@ -536,6 +562,7 @@ T.test("the filters show running and stopped rows", testTheFiltersShowRunningAnd
 T.test("Uninstall opens the dialog and Cancel does not uninstall", testUninstallOpensDialogAndCancelDoesNotUninstall, "math")
 T.test("Uninstall's Confirm calls the fake's Uninstall and removes the row", testUninstallConfirmCallsFakeUninstallAndRemovesTheRow, "math")
 T.test("Library's Refresh rebuilds the rows from List", testLibraryRefreshRebuildsFromList, "math")
+T.test("a bundled row can be toggled but not uninstalled", testABundledRowHasToggleButNoUninstall, "math")
 T.test("a Store row installs through the fake", testStoreRowInstallsThroughTheFake, "math")
 T.test("Store's Refresh discovers again", testStoreRefreshDiscoversAgain, "math")
 T.test("signed out shows the sign-in form", testSignedOutShowsTheSignInForm, "math")
