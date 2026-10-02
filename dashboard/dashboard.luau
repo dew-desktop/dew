@@ -15,11 +15,6 @@
 	Bundled with the host rather than installed like a marketplace package:
 	`dew.toml` asks for `discover`, `install`, `library` and `auth`, host
 	permissions no ordinary applet can be granted.
-
-	LAYOUT WORKAROUND marks the places that avoid two Dew layout behaviours
-	not yet checked against the engine: a horizontal list misplacing a
-	centred AutomaticSize Y child, and a wrapping list measuring a flex grown
-	AutomaticSize Y child at its minimum width.
 ]]
 
 local vide = require("./roblox_packages/vide")
@@ -456,17 +451,16 @@ local libraryTab = section("LibraryTab")
 local storeTab = section("StoreTab")
 local accountTab = section("AccountTab")
 
--- A section's title, a one line summary under it, and an optional button.
--- LAYOUT WORKAROUND: the title column has a fixed height rather than
--- AutomaticSize Y, so the Center alignment that lines the button up with it
--- is exact.
+-- A section's title, a one line summary under it, and an optional button
+-- centred beside them.
 local function header(parent: Instance, title: string): (Frame, TextLabel)
 	local h = frame(parent, "Header", 1, UDim2.fromScale(1, 0))
 	h.AutomaticSize = Enum.AutomaticSize.Y
 	pad(h, 16, 16, 16, 10)
 	local l = list(h, Enum.FillDirection.Horizontal, 10)
 	l.VerticalAlignment = Enum.VerticalAlignment.Center
-	local titles = frame(h, "Titles", 1, UDim2.fromOffset(0, 46))
+	local titles = frame(h, "Titles", 1, UDim2.fromOffset(0, 0))
+	titles.AutomaticSize = Enum.AutomaticSize.Y
 	grow(titles)
 	list(titles, Enum.FillDirection.Vertical, 4)
 	line(titles, "Title", 1, 22, BOLD, "primary", 26).Text = title
@@ -612,17 +606,12 @@ end)
 --------------------------------------------------------------------------
 -- ROWS, shared by Library and Store.
 --
--- The head line is icon, name block and buttons in one wrapping list, so a
--- narrow window moves the buttons onto their own line. The description sits
--- under it, indented to line up with the name.
+-- A row is icon, text block and buttons in one wrapping list, so a narrow
+-- window moves the buttons onto their own line under the description. The
+-- text block holds the name, the detail and the description, and grows to
+-- the width the buttons leave.
 --
--- LAYOUT WORKAROUND: every child of the head line has a fixed height and
--- the description lives outside it. A flex grown AutomaticSize Y column in a
--- wrapping list is measured at its minimum width, which leaves empty space
--- above buttons that wrapped. Once that is fixed, the description can join
--- the name block and wrapped buttons can sit under the description.
---
--- FLAT ON PURPOSE: only the row, the head line and the description size
+-- FLAT ON PURPOSE: only the row, the text block and the description size
 -- themselves (see `actionButton` for why that count matters).
 --------------------------------------------------------------------------
 
@@ -642,35 +631,30 @@ local function buildRow(
 	rowRecipe.Bind(row, {})
 	rowRecipe.Bind(corner(row), {})
 	pad(row, ROW_GAP)
-	list(row, Enum.FillDirection.Vertical, 8)
-
-	local head = frame(row, "Head", 1, UDim2.fromScale(1, 0))
-	head.AutomaticSize = Enum.AutomaticSize.Y
-	local l = list(head, Enum.FillDirection.Horizontal, ROW_GAP)
+	local l = list(row, Enum.FillDirection.Horizontal, ROW_GAP)
 	l.Wraps = true
 	l.VerticalAlignment = Enum.VerticalAlignment.Center
 
-	tile(head, "Icon", 1, ICON_SIZE, initials(title))
+	tile(row, "Icon", 1, ICON_SIZE, initials(title))
 
-	local text = frame(head, "Text", 2, UDim2.fromOffset(0, ICON_SIZE))
+	local text = frame(row, "Text", 2, UDim2.fromOffset(0, 0))
+	text.AutomaticSize = Enum.AutomaticSize.Y
 	grow(text)
 	atLeast(text, 120)
 	list(text, Enum.FillDirection.Vertical, 2)
 	line(text, "Name", 1, 15, BOLD, "primary", 19).Text = title
 	line(text, "Detail", 2, 13, MONO, "secondary", 15).Text = detail
+	local d = paragraph(text, "Description", 3, 13, "secondary")
+	d.Text = description
+	d.Visible = description ~= ""
 
 	-- As wide as its buttons, which are fixed, so it never measures them.
 	local width = 0
 	for i, w in buttonWidths do
 		width += w + if i > 1 then BUTTON_GAP else 0
 	end
-	local actions = frame(head, "Actions", 3, UDim2.fromOffset(width, BUTTON_HEIGHT))
+	local actions = frame(row, "Actions", 3, UDim2.fromOffset(width, BUTTON_HEIGHT))
 	list(actions, Enum.FillDirection.Horizontal, BUTTON_GAP)
-
-	local d = paragraph(row, "Description", 2, 13, "secondary")
-	d.Text = description
-	pad(d, ICON_SIZE + ROW_GAP, 0, 0, 0)
-	d.Visible = description ~= ""
 
 	return { row = row, actions = actions }
 end
