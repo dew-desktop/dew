@@ -3950,6 +3950,41 @@ mod text_paint {
         assert_eq!(content, "one two three four five six");
     }
 
+    /// TextTruncate AtEnd in the default face cuts the line to a prefix and
+    /// the single glyph U+2026, as the engine draws it: "A lon" and an
+    /// ellipsis in a 100 by 64 box at TextSize 20, with `TextBounds` within a
+    /// pixel of the engine's.
+    #[test]
+    fn truncation_ends_in_the_ellipsis_glyph() {
+        let Some((lua, frame, _)) = draw(&label(
+            r#"t.Text = "A long label that cannot fit"
+            t.TextSize = 20
+            t.Size = UDim2.fromOffset(100, 64)
+            t.TextTruncate = Enum.TextTruncate.AtEnd"#,
+        )) else {
+            return;
+        };
+        let node = frame
+            .nodes
+            .iter()
+            .find(|n| n.name == "Label")
+            .expect("label");
+        let laid = node.text_layout.as_ref().expect("laid out");
+        assert_eq!(laid.lines.len(), 1);
+        assert_eq!(laid.lines[0].text, "A lon\u{2026}");
+        let (x, y, fits, content): (f32, f32, bool, String) = lua
+            .load(
+                "return label.TextBounds.X, label.TextBounds.Y, label.TextFits, label.ContentText",
+            )
+            .eval()
+            .expect("members");
+        // The engine reads 89 by 30.
+        assert!((x - 89.0).abs() <= 1.0, "TextBounds.X {x}");
+        assert_eq!(y, 30.0);
+        assert!(!fits);
+        assert_eq!(content, "A long label that cannot fit");
+    }
+
     /// `ContentText` is the text without its markup when `RichText` is on, and
     /// the text as written when it is off.
     #[test]

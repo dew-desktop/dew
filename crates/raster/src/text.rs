@@ -124,6 +124,13 @@ impl FontStore {
         self.fonts.get(&id)
     }
 
+    /// Whether `ch` maps to a glyph of its own in the font, rather than to
+    /// `.notdef`. `None` when the font id is unknown or the file did not parse.
+    pub fn has_glyph(&self, id: u32, ch: char) -> Option<bool> {
+        let fr = self.get(id)?.font_ref()?;
+        Some(fr.charmap().map(ch).is_some_and(|gid| gid.to_u32() != 0))
+    }
+
     /// Lay one run out. THE SINGLE SOURCE for both painting and measurement.
     ///
     /// Returns `None` only when the font id is unknown or the file did not parse,

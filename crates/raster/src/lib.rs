@@ -159,6 +159,21 @@ pub extern "C" fn ar_text_descent(font: u32, size: f32) -> f32 {
     })
 }
 
+/// Whether the font maps a character to a glyph of its own: 1 when it does, 0
+/// when the character would draw as `.notdef`, negative when the font id is
+/// unknown or `ch` is not a character.
+#[no_mangle]
+pub extern "C" fn ar_text_has_glyph(font: u32, ch: u32) -> i32 {
+    let Some(ch) = char::from_u32(ch) else {
+        return -1;
+    };
+    with_fonts(|f| match f.has_glyph(font, ch) {
+        Some(true) => 1,
+        Some(false) => 0,
+        None => -1,
+    })
+}
+
 fn utf8<'a>(ptr: *const u8, len: u32) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
