@@ -205,6 +205,11 @@ T.test("a change made elsewhere reaches the panel", function()
 	settle()
 	assert(cardFor("Nameplate") ~= nil, "an applet installed elsewhere gets a card")
 
+	table.insert(entries, { id = "quickpanel", name = "Quick panel", description = "", enabled = true, running = true })
+	;(onChange :: () -> ())()
+	settle()
+	assert(cardFor("Quick panel") == nil, "the panel never lists itself")
+
 	table.clear(entries)
 	;(onChange :: () -> ())()
 	settle()
