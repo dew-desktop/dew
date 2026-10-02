@@ -1199,6 +1199,23 @@ fn zero_for(ty: VariantType) -> Option<Variant> {
     })
 }
 
+/// The `Font` a guest value stands for, when it is a `Font` or an
+/// `Enum.Font` item: the value itself, or the face the item names, the same
+/// face assigning it to a label's `Font` gives that label. `None` for anything
+/// else, a string included.
+pub fn font_of(value: &LuaValue) -> Option<rbx_types::Font> {
+    if let Some(font) = LuaFont::from_value(value) {
+        return Some(font);
+    }
+    let LuaValue::UserData(ud) = value else {
+        return None;
+    };
+    let item = ud.borrow::<LuaEnumItem>().ok()?;
+    (item.ty == "Font")
+        .then(|| crate::fonts::from_enum(item.name))
+        .flatten()
+}
+
 /// Turn a Lua value into an enum member of `ty`.
 ///
 /// ACCEPTS A NUMBER AS WELL AS AN `EnumItem`, because the engine does and a guest
