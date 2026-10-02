@@ -1,17 +1,25 @@
 --!strict
 --[[
-	The Dew dashboard -- Library, Store, and Account in one window
-	(milestone 25), grown from milestone 23's marketplace-only browser. The
-	Store tab below is that original browser, moved under a tab and
-	otherwise untouched; Library and Account are built on `dew.Library` and
-	`dew.Account` (ADR-017/ADR-018). Account's own sign-in form (milestone
-	26 sprint 3) is what finally lets this window replace `manage.rs`'s
-	Win32 one, rather than only reading state that window still had to
-	create.
+	The Dew dashboard: Library, Store and Account in one desktop window.
 
-	Bundled with the host rather than installed like a marketplace package
-	-- `dew.toml` asks for `discover`, `install`, `library` and `auth`,
-	`Capability::Host` permissions no ordinary applet can ever be granted.
+	A sidebar holds the navigation, a count per section and the signed in
+	account at its foot. The active section takes the rest of the width. Every
+	placement comes from a layout container (UIListLayout, UIFlexItem,
+	UISizeConstraint, UIPadding, AutomaticSize), never from a Position, so the
+	window can be resized freely: rows put their buttons under the text and
+	form lines put the field under its label when the window is narrow.
+
+	Text is handled on purpose everywhere. A name or an id is one line and
+	truncates; a description, a status or an error wraps and grows.
+
+	Bundled with the host rather than installed like a marketplace package:
+	`dew.toml` asks for `discover`, `install`, `library` and `auth`, host
+	permissions no ordinary applet can be granted.
+
+	LAYOUT WORKAROUND marks the places that avoid two Dew layout behaviours
+	not yet checked against the engine: a horizontal list misplacing a
+	centred AutomaticSize Y child, and a wrapping list measuring a flex grown
+	AutomaticSize Y child at its minimum width.
 ]]
 
 local vide = require("./roblox_packages/vide")
@@ -27,351 +35,111 @@ local marketplace = assert(dew.Marketplace, "dew.toml must grant `discover` and 
 local library = assert(dew.Library, "dew.toml must grant `library`")
 local account = assert(dew.Account, "dew.toml must grant `auth`")
 
--- TALLER BY EXACTLY THE TAB BAR'S OWN HEIGHT (see `TAB_BAR_HEIGHT` below),
--- so each tab's content frame keeps the 420x520 the Store tab's layout was
--- always built against, rather than that layout having to shrink to make
--- room for tabs above it.
-local root = window({ title = "Dew Dashboard", width = 420, height = 560 })
+-- 720 WIDE: the dashboard is the platform's full window. At this width a row
+-- is one line (icon, text, buttons) and the sidebar sits at its 200 cap. The
+-- window stays resizable, and the layout below holds from about 420 up.
+local root = window({ title = "Dew Dashboard", width = 720, height = 560 })
 
--- `dom.luau`'s own factory, parenting a new "Aether recipe" `StyleSheet`
--- under `root` immediately (see that file's header for why this can't wait
--- until a later sprint's first `recipe()` call). Constructed here, used by
--- no recipe yet -- sprints 3+ are what actually calls `recipe()` against it.
+-- `dom.luau` parents the recipe StyleSheet under `root` as soon as it exists,
+-- which the cascade needs before any `Bind` below resolves a token.
 local newDom = require("./dom")
 local dom = newDom(root)
 
--- THE DESIGN TOKEN SHEET (milestone 30 sprint 3): every color and radius
--- this file hard-codes today, extracted once into a plain `StyleSheet` of
--- named `Attribute`s -- the same shape `styled-pressable-recipe`'s own
--- `sunrise`/`dusk` sheets use (that example's own header: "still plain
--- StyleSheets carrying only Attributes -- that half of the hand-built
--- pattern was already correct"). `dom.New` is used rather than a bare
--- `Instance.new("StyleSheet")` because it already parents a StyleSheet
--- under `root` the instant it is created (see `dom.luau`'s own header for
--- why that parenting can't wait) -- this sheet gets the same treatment
--- rather than a second, hand-rolled parenting path.
---
--- EVERY VALUE BELOW IS A STRAIGHT COPY of this file's own existing
--- `Color3.fromRGB`/`UDim.new` literals, not a new palette -- picking new
--- values is explicitly left to the person (see milestone 30's own Open
--- Question 1), not decided by this sprint. NOTHING READS THESE YET: no
--- `recipe()` call exists anywhere in this file this sprint, so every
--- literal a token below replaces is still also written by hand at its own
--- call site -- migrating call sites onto `$TokenName` starts sprint 4 (the
--- tab bar).
+--------------------------------------------------------------------------
+-- DESIGN TOKENS. One StyleSheet of named attributes; every colour and
+-- radius below reaches an instance through a recipe that names a token.
+--------------------------------------------------------------------------
+
 local design = dom.New("StyleSheet")
 design.Name = "Design"
--- Dashboard body background (`body.BackgroundColor3`, line ~89 below).
+-- The window behind everything.
 design:SetAttribute("BackgroundColor", Color3.fromRGB(18, 20, 26))
--- Row background (Library/Store rows) and input background (email/password
--- TextBoxes) -- one recurring surface tone, not three separate ones.
+-- Rows, sections, text fields and inactive chips: one raised surface tone.
 design:SetAttribute("SurfaceColor", Color3.fromRGB(28, 31, 40))
--- Library/Store row `UICorner.CornerRadius` -- the only radius this file
--- ever sets.
+-- Rows and sections.
 design:SetAttribute("RowRadius", UDim.new(0, 8))
--- Primary text: every panel's own title, each row's own name label, and
--- (the same value, same role) the email/password TextBoxes' own input text.
+-- Buttons, fields and navigation items.
+design:SetAttribute("ControlRadius", UDim.new(0, 6))
+-- Titles, names and field text.
 design:SetAttribute("TextPrimary", Color3.fromRGB(233, 239, 249))
--- Secondary text: status/description labels, the Store row's `Meta` line,
--- the sign-in form's own field labels.
+-- Subtitles, descriptions, ids and field labels.
 design:SetAttribute("TextSecondary", Color3.fromRGB(146, 162, 188))
--- TextBox placeholder text (email/password).
+-- TextBox placeholder text.
 design:SetAttribute("TextPlaceholder", Color3.fromRGB(110, 122, 140))
--- "Default" tone button background: Library/Store Refresh, Toggle, Sign In.
+-- The default button tone, icon tiles and the active count pill.
 design:SetAttribute("AccentColor", Color3.fromRGB(38, 52, 74))
--- Text paired with AccentColor above, and also the active tab's own label
--- color (the tab label never actually changes color, only its background
--- does -- see the `effect` below).
+-- Text on AccentColor, status lines and the brand mark.
 design:SetAttribute("AccentText", Color3.fromRGB(206, 222, 246))
--- "Danger" tone button background: Uninstall, Sign Out.
+-- The danger button tone: Uninstall, Sign out.
 design:SetAttribute("DangerColor", Color3.fromRGB(90, 48, 48))
--- Text paired with DangerColor above.
 design:SetAttribute("DangerText", Color3.fromRGB(240, 214, 214))
--- "Success" tone button background: Install -- a third, genuinely distinct
--- tone from AccentColor (Toggle's own default look), not a duplicate of it.
+-- The success button tone: Install.
 design:SetAttribute("SuccessColor", Color3.fromRGB(48, 90, 64))
--- Text paired with SuccessColor above.
 design:SetAttribute("SuccessText", Color3.fromRGB(214, 240, 224))
--- The sign-in error label's own text color -- a distinct literal from
--- DangerText above (a button's own text vs. an error message's own), kept
--- as its own token rather than merged.
+-- Error messages, distinct from DangerText on a button.
 design:SetAttribute("ErrorText", Color3.fromRGB(224, 148, 148))
--- Active/inactive tab background.
+-- The active navigation item and filter chip, and field outlines.
 design:SetAttribute("TabActiveColor", Color3.fromRGB(48, 66, 94))
+-- The sidebar, and an inactive navigation item on it.
 design:SetAttribute("TabInactiveColor", Color3.fromRGB(26, 29, 38))
 
 type Package = { ownerUserId: string, appletId: string, uploadedAt: string }
 type LibraryEntry = { id: string, name: string, description: string, enabled: boolean, running: boolean }
-
--- `colour: Color3?` (milestone 30 sprint 7) -- `nil` leaves `TextColor3`
--- unset rather than writing a literal. THIS MATTERS, NOT COSMETIC:
--- `Dom::styled_property` (`cascade.rs`) reads an instance's own EXPLICIT
--- property first and only falls back to a matching `StyleRule` when nothing
--- was set directly -- an explicit `TextColor3` here would always beat a
--- recipe's own `Bind` for the same property, the same reason the tab bar's
--- own `BackgroundColor3` was removed from `tabButton` when sprint 4 gave it
--- a recipe. Every EXISTING call site still passes a real `Color3` and is
--- unaffected; only the Account panel's own labels (sprint 7) pass `nil` and
--- bind a `textRecipe` afterward instead.
-local function label(
-	parent: Instance,
-	name: string,
-	position: UDim2,
-	size: UDim2,
-	textSize: number,
-	colour: Color3?
-): TextLabel
-	local text = Instance.new("TextLabel")
-	text.Name = name
-	text.Position = position
-	text.Size = size
-	text.BackgroundTransparency = 1
-	text.TextSize = textSize
-	if colour then
-		text.TextColor3 = colour
-	end
-	text.TextXAlignment = Enum.TextXAlignment.Left
-	text.Parent = parent
-	return text
-end
-
-local function button(parent: Instance, name: string, position: UDim2, size: UDim2, text: string, bg: Color3, fg: Color3): TextButton
-	local b = Instance.new("TextButton")
-	b.Name = name
-	b.Position = position
-	b.Size = size
-	b.BackgroundColor3 = bg
-	b.TextColor3 = fg
-	b.TextSize = 12
-	b.Text = text
-	b.Parent = parent
-	return b
-end
-
-local body = Instance.new("Frame")
-body.Name = "Body"
-body.Size = UDim2.new(1, 0, 1, 0)
-body.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
-body.Parent = root
+type Session = { email: string, userId: string? }
+type Tone = "default" | "danger" | "success"
 
 --------------------------------------------------------------------------
--- THE TAB BAR, on `Aether.Tabs` as of milestone 54 sprint 1 (`Aether.Core.
--- createTabs` directly, before that) -- the hand-rolled `activeTab` source
--- and its effect are gone; `tabs.Active` is the same idea, backed by a
--- machine that also enforces exactly one active tab and answers a
--- Space/Return press or an arrow key while a tab button holds keyboard
--- selection, neither of which the hand-rolled version ever had. The effect
--- below is still the only thing that reacts to it, the same split the Store
--- tab's own `packages` source already uses.
+-- RECIPES. Each is bound to every instance that shows one of its
+-- properties: a button's Frame reads BackgroundColor3, its label reads
+-- TextColor3 and its UICorner reads CornerRadius, all from one rule.
+--
+-- KEPT TO FEW RULES ON PURPOSE. Each distinct selection is one StyleRule,
+-- and Dew resolves the cascade afresh for every property an element did not
+-- set, against every rule in the window, on every layout pass. So an element
+-- that wants a colour another recipe already resolves (the sidebar, the
+-- divider, an icon tile) binds that rule rather than adding one.
 --------------------------------------------------------------------------
 
-local TAB_BAR_HEIGHT = 40
-
-type TabName = "library" | "store" | "account"
-
--- THE TAB RECIPE (milestone 30 sprint 4) -- this dashboard's own first real
--- `recipe()` call. One variant dimension, `state`, resolving to the same two
--- tokens sprint 3 already put on `design` (`$TabActiveColor`/
--- `$TabInactiveColor`, themselves exact copies of the old
--- `ACTIVE_TAB_COLOR`/`INACTIVE_TAB_COLOR` literals this recipe replaces).
--- `SetThemeSource(design)` is called ONCE, EAGERLY, RIGHT HERE -- before the
--- `effect` below ever calls `Bind` -- because the shared `StyleDerive` that
--- call creates is what `$TabActiveColor`/`$TabInactiveColor` resolve
--- against; a `Bind` reaching the cascade before this line would resolve
--- both tokens to nothing (`createRecipe.luau`'s own header, THEMING
--- section).
+-- A sidebar navigation item, its label and its corner. The sidebar itself
+-- binds the inactive state for its background.
 local tabRecipe = Aether.Core.createRecipe({
-	base = { BackgroundColor3 = "$TabInactiveColor" },
+	base = { BackgroundColor3 = "$TabInactiveColor", TextColor3 = "$TextSecondary", CornerRadius = "$ControlRadius" },
 	variants = {
 		state = {
-			active = { BackgroundColor3 = "$TabActiveColor" },
+			active = { BackgroundColor3 = "$TabActiveColor", TextColor3 = "$TextPrimary" },
 			inactive = {},
 		},
 	},
 }, { Dom = dom, Component = "DashboardTab" })
+-- Called once, before any Bind: the shared StyleDerive it creates is what
+-- every recipe below resolves its tokens against.
 tabRecipe.SetThemeSource(design)
 
-local tabBar = Instance.new("Frame")
-tabBar.Name = "TabBar"
-tabBar.Position = UDim2.new(0, 0, 0, 0)
-tabBar.Size = UDim2.new(1, 0, 0, TAB_BAR_HEIGHT)
-tabBar.BackgroundTransparency = 1
-tabBar.Parent = body
+-- A Library filter chip, and the count pill beside a navigation item.
+local chipRecipe = Aether.Core.createRecipe({
+	variants = {
+		state = {
+			active = { BackgroundColor3 = "$TabActiveColor", TextColor3 = "$TextPrimary" },
+			inactive = { BackgroundColor3 = "$SurfaceColor", TextColor3 = "$TextSecondary" },
+		},
+	},
+}, { Dom = dom, Component = "DashboardChip" })
 
--- The tabs sit in one row, 8 in from the bar's top left corner and 4 apart.
--- Each button's `LayoutOrder` keeps them in declaration order, since the list
--- would otherwise sort them by Name.
-local tabBarPadding = Instance.new("UIPadding")
-tabBarPadding.PaddingLeft = UDim.new(0, 8)
-tabBarPadding.PaddingTop = UDim.new(0, 8)
-tabBarPadding.Parent = tabBar
+-- The window behind everything.
+local windowRecipe = Aether.Core.createRecipe({
+	base = { BackgroundColor3 = "$BackgroundColor" },
+}, { Dom = dom, Component = "DashboardWindow" })
 
-local tabBarLayout = Instance.new("UIListLayout")
-tabBarLayout.FillDirection = Enum.FillDirection.Horizontal
-tabBarLayout.SortOrder = Enum.SortOrder.LayoutOrder
-tabBarLayout.Padding = UDim.new(0, 4)
-tabBarLayout.Parent = tabBar
-
--- `Aether.Tabs` HARD-WIRES `PointerRouter`/`SelectionRouter` (milestone 54
--- sprint 1), so this dashboard no longer needs to name either. `Source` is
--- still handed over explicitly, though, and that is still load bearing:
--- left at Aether's own default, `tabs.Active` would change correctly but
--- the `effect` below would never re-run, since a vide source only notifies
--- the reactive graph that created it, and this dashboard vendors its own
--- vide rather than sharing Aether's. `Action` for the same reason -- the
--- bound props below are real `vide.action` values, and only THIS dashboard's
--- own `create` (via its own vide) can apply one to an element it makes.
-local tabs = Tabs({
-	Source = source,
-	Action = vide.action,
-	Tabs = { "library", "store", "account" } :: { TabName },
-	InitialActive = "library" :: TabName,
-})
-
--- BUILT WITH `create` (this dashboard's own, from its own vide package),
--- NOT `button()`, because `GetRootProps`'s bound actions are real
--- `vide.action` values now, not plain functions -- the manual
--- `ipairs`/`entry(b)` loop this replaced could not have called them
--- (`type(entry) == "function"` is false for one). `create` already knows how
--- to apply a `vide.action`, a plain property and a child in one pass, which
--- is what makes the loop unnecessary rather than merely hidden elsewhere.
-local function tabButton(name: TabName, text: string, order: number): TextButton
-	return create("TextButton")(tabs.GetTab(name).GetRootProps({
-		Name = `Tab{text}`,
-		LayoutOrder = order,
-		Size = UDim2.new(0, 128, 0, 28),
-		-- BackgroundColor3 IS NOT SET HERE ANY MORE -- `tabRecipe.Bind`,
-		-- called on every one of these three buttons inside the `effect`
-		-- below (which runs once, immediately, before this script's first
-		-- real paint), is what resolves it through the cascade now.
-		BackgroundTransparency = 0,
-		TextColor3 = Color3.fromRGB(206, 222, 246),
-		TextSize = 12,
-		Text = text,
-		Parent = tabBar,
-	})) :: TextButton
-end
-
-local libraryTabButton = tabButton("library", "Library", 1)
-local storeTabButton = tabButton("store", "Store", 2)
-local accountTabButton = tabButton("account", "Account", 3)
-
--- CONTENT FRAMES, ALL THE SAME RECT, ONE VISIBLE AT A TIME -- toggling
--- `Visible` rather than destroying and rebuilding a tab's tree every
--- switch, which would re-run `Discover()` on every visit to Store.
-local function contentFrame(name: string): Frame
-	local f = Instance.new("Frame")
-	f.Name = name
-	f.Position = UDim2.new(0, 0, 0, TAB_BAR_HEIGHT)
-	f.Size = UDim2.new(1, 0, 1, -TAB_BAR_HEIGHT)
-	f.BackgroundTransparency = 1
-	f.Parent = body
-	return f
-end
-
-local libraryTab = contentFrame("LibraryTab")
-local storeTab = contentFrame("StoreTab")
-local accountTab = contentFrame("AccountTab")
-
-vide.root(function()
-	effect(function()
-		local tab = tabs.Active()
-		libraryTab.Visible = tab == "library"
-		storeTab.Visible = tab == "store"
-		accountTab.Visible = tab == "account"
-
-		local highlight = function(b: TextButton, active: boolean)
-			tabRecipe.Bind(b, { state = if active then "active" else "inactive" })
-		end
-		highlight(libraryTabButton, tab == "library")
-		highlight(storeTabButton, tab == "store")
-		highlight(accountTabButton, tab == "account")
-	end)
-end)
-
---------------------------------------------------------------------------
--- LIBRARY: every installed applet, with a way to launch, uninstall, and
--- enable/disable it. `dew.Library`'s four calls are all synchronous (see
--- `capabilities.rs`), so there is nothing here to poll -- a call's result
--- is read the instant it returns, the same as any ordinary function.
---------------------------------------------------------------------------
-
-label(libraryTab, "Title", UDim2.new(0, 16, 0, 12), UDim2.new(1, -112, 0, 24), 18, Color3.fromRGB(233, 239, 249)).Text =
-	"Library"
-
-local libraryRefreshButton = button(
-	libraryTab,
-	"Refresh",
-	UDim2.new(1, -96, 0, 12),
-	UDim2.new(0, 80, 0, 24),
-	"Refresh",
-	Color3.fromRGB(38, 52, 74),
-	Color3.fromRGB(206, 222, 246)
-)
-
-local libraryStatus =
-	label(libraryTab, "Status", UDim2.new(0, 16, 0, 44), UDim2.new(1, -32, 0, 40), 12, Color3.fromRGB(146, 162, 188))
-libraryStatus.TextWrapped = true
-libraryStatus.TextYAlignment = Enum.TextYAlignment.Top
-
-local libraryList = Instance.new("ScrollingFrame")
-libraryList.Name = "List"
-libraryList.Position = UDim2.new(0, 16, 0, 92)
-libraryList.Size = UDim2.new(1, -32, 1, -108)
-libraryList.BackgroundTransparency = 1
-libraryList.CanvasSize = UDim2.new(1, 0, 0, 0)
-libraryList.AutomaticCanvasSize = Enum.AutomaticSize.Y
-libraryList.Parent = libraryTab
-
-local libraryListLayout = Instance.new("UIListLayout")
-libraryListLayout.Padding = UDim.new(0, 8)
-libraryListLayout.Parent = libraryList
-
-local LIBRARY_ROW_HEIGHT = 84
-
--- THE LIBRARY ROW RECIPE (milestone 30 sprint 5) -- `base`-only, no variants,
--- since every row looks the same: the same one-rule-two-instances pattern
--- `styled-pressable-recipe.luau`'s own `corner`/`button` binding already
--- proved (one resolved `StyleRule` carrying both `BackgroundColor3` and
--- `CornerRadius`, bound to a Frame and a UICorner with the SAME empty
--- selection, so both share the one generated tag -- safe because
--- `resolve_full` is not filtered against a target's own declared properties,
--- `cascade.rs` line 38). Resolves sprint 3's own `$SurfaceColor`/`$RowRadius`
--- tokens.
---
--- NO `SetThemeSource` CALL HERE, OR BELOW. `tabRecipe.SetThemeSource(design)`
--- above already created and pointed the one shared `StyleDerive` this `dom`
--- will ever have -- `createRecipe.luau`'s own `stateFor` is keyed by `Dom`
--- (line 189), and `setThemeSource`'s body (lines 202-212) always resolves
--- `stateFor(dom)` before touching `state.Derive`. Every recipe below shares
--- this same `dom` table, so it shares that same `DomState`, including the
--- derive tabRecipe already pointed at `design`. A second `SetThemeSource
--- (design)` call from either recipe below would only re-point the SAME
--- derive at the SAME sheet -- a harmless no-op, but not a call this file
--- needs to make twice.
-local libraryRowRecipe = Aether.Core.createRecipe({
+-- A Library or Store row, an Account section, the account card and the
+-- divider beside the sidebar.
+local rowRecipe = Aether.Core.createRecipe({
 	base = { BackgroundColor3 = "$SurfaceColor", CornerRadius = "$RowRadius" },
-}, { Dom = dom, Component = "LibraryRow" })
+}, { Dom = dom, Component = "DashboardRow" })
 
--- THE DASHBOARD BUTTON RECIPE (milestone 30 sprint 5, renamed from
--- `libraryButtonRecipe` in sprint 6 once Store's own Install button became
--- its second consumer -- `LibraryButton` undersold what this now covers).
--- One variant dimension, `tone` (`default`/`danger`/`success`), each
--- resolving BOTH `BackgroundColor3` (consumed by the `Aether.Pressable`
--- Frame) AND `TextColor3` (consumed by its own child `TextLabel`, since
--- `Pressable` returns a plain Frame with no `.Text` of its own -- confirmed
--- by reading `Pressable.luau` in full, and by `styled-pressable-recipe.luau`'s
--- own `SwapTheme` button, which parents a child `Aether.create("TextLabel")`
--- rather than setting a `.Text` property that does not exist). Same
--- one-rule-two-consumers trick as the row recipe above: the Frame reads
--- `BackgroundColor3` off the resolved rule, the label reads `TextColor3` off
--- the SAME rule, bound with the SAME selection.
---
--- `success` (Store's own Install button, sprint 6) is a genuinely third tone
--- neither `default` (Library's Toggle) nor `danger` (Library's Uninstall,
--- Account's Sign Out) covers -- resolving sprint 3's own `$SuccessColor`/
--- `$SuccessText` tokens, not a duplicate of either existing tone.
+-- A button, its label and its corner. Icon tiles and the brand mark use the
+-- default tone too.
 local buttonRecipe = Aether.Core.createRecipe({
+	base = { CornerRadius = "$ControlRadius" },
 	variants = {
 		tone = {
 			default = { BackgroundColor3 = "$AccentColor", TextColor3 = "$AccentText" },
@@ -381,604 +149,6 @@ local buttonRecipe = Aether.Core.createRecipe({
 	},
 }, { Dom = dom, Component = "DashboardButton" })
 
--- ONE VIDE ROOT PER ROW (milestone 30 sprint 5), TRACKED HERE SO A REBUILD
--- CAN TEAR IT DOWN FIRST. `Aether.Pressable` calls `vide.cleanup
--- (machine.Destroy)` internally (`Pressable.luau` line 97), which errors
--- ("cannot cleanup outside a stable or reactive scope") with no active vide
--- scope -- confirmed by reading vide's own `cleanup.luau` directly -- so
--- `buildLibraryRow` below wraps its own Pressable-creating work in
--- `vide.root`, the same shape `styled-pressable-recipe.luau`'s own header
--- names as load-bearing ("everything below runs inside one").
---
--- THAT SCOPE'S OWN DESTRUCTOR IS NOT CALLED AUTOMATICALLY when a row's plain
--- `Instance:Destroy()` runs below. Confirmed by reading `PointerRouter.luau`
--- in full: it has no `Destroying`/`AncestryChanged` listener of its own, and
--- vide's own cleanup registration is one-directional -- a scope tears down
--- its OWN registered callbacks when ITS OWN destructor runs; it does not
--- listen for a Roblox instance going away. Without this table mapping each
--- row Frame to its own scope destructor, every library refresh (every
--- Toggle/Uninstall click, every external `dew install`/`dew uninstall`, any
--- `library.OnChange` firing for any reason) would leak one stale
--- `PointerRouter` registration per button per row, forever.
-local libraryRowRoots: { [Frame]: () -> () } = {}
-
-local function clearLibraryRows()
-	for _, child in ipairs(libraryList:GetChildren()) do
-		if child:IsA("Frame") and child.Name == "Row" then
-			local destroyRowScope = libraryRowRoots[child]
-			if destroyRowScope then
-				-- TEAR DOWN THE SCOPE FIRST: this runs both buttons' own
-				-- `machine.Destroy` (each one unregisters that button from
-				-- `PointerRouter`) BEFORE the row instance itself is gone.
-				destroyRowScope()
-				libraryRowRoots[child] = nil
-			end
-			child:Destroy()
-		end
-	end
-end
-
--- FORWARD-DECLARED: `buildLibraryRow`'s own buttons call `rebuildLibraryRows`
--- to rebuild the list after each action, and `rebuildLibraryRows` calls
--- `buildLibraryRow` for each entry -- the two close over each other.
---
--- SEPARATE FROM `refreshLibrary` BELOW ON PURPOSE. A row's own action
--- already wrote its own result into `libraryStatus.Text` (`Enabled 'x'`,
--- an error, ...); rebuilding the row list must not then overwrite that
--- with the empty-store notice, which is `refreshLibrary`'s job for the
--- Refresh button and the initial load, neither of which has a result of
--- its own to preserve.
-local rebuildLibraryRows: () -> number
-
---[[
-	DESIGN NOTE, REVISIT IF THIS STOPS FEELING RIGHT: only Enable/Disable
-	and Uninstall are shown here -- there used to be a third "Launch"
-	button, removed after it turned out to just be confusing rather than
-	load-bearing.
-
-	`enabled` (persisted in `installed.json`, "load this automatically at
-	the next service start") and "is this actually running right now" are
-	genuinely two different axes -- `dew.Library.SetEnabled` did not always
-	touch the second one. It used to be a disk write ONLY: an applet could
-	be enabled and running, enabled and NOT running (closed by hand, or
-	before this session's own live-toggle fix, simply "not yet restarted"),
-	or disabled while still running until the next restart. "Launch" was
-	the one way to force it running right now without touching the
-	persisted bit, which is why it existed as its own button next to
-	Enable/Disable rather than folded into it.
-
-	Once `SetEnabled` started live-loading/unloading (so the two axes stay
-	in sync the instant you click), the only case Launch still covered on
-	its own was an applet still `enabled` but no longer running -- closed
-	by hand, or crashed -- where the toggle would read "Disable" (since
-	`enabled` says so) and clicking it would turn the thing OFF, not bring
-	it back. That is confusing on its face: two controls that mostly do the
-	same thing, and the one time they diverge, the more prominent one
-	(Enable/Disable) does the wrong thing.
-
-	THE FIX: `LibraryEntry.running` (from `dew.Library.List`, backed by
-	`coordinator::running_snapshot()`, not `installed.json`) is what this
-	toggle's label and action are keyed on now, not `entry.enabled`. Off
-	(not running) always reads "Enable" and always starts it; on (running)
-	always reads "Disable" and always stops it. `SetEnabled(id, true)` on
-	an enabled-but-stopped applet is exactly the old `Launch`'s job --
-	start it without changing a bit that was already correct -- so nothing
-	is lost, and the enabled-but-stopped case now shows the right label
-	instead of the wrong one.
-]]
-local function buildLibraryRow(entry: LibraryEntry)
-	-- WRAPPED IN `vide.root` (see `libraryRowRoots`'s own comment above for
-	-- why this is load-bearing, not decorative): everything inside,
-	-- including both `Aether.Pressable` calls, runs inside a real reactive
-	-- scope, and that scope's own destructor is handed back out as
-	-- `destroyRowScope` for `clearLibraryRows` to call before this row's
-	-- `Instance:Destroy()`.
-	local destroyRowScope, row = vide.root(function(): Frame
-		local row = Instance.new("Frame")
-		row.Name = "Row"
-		row.Size = UDim2.new(1, 0, 0, LIBRARY_ROW_HEIGHT)
-		row.Parent = libraryList
-
-		local corner = Instance.new("UICorner")
-		corner.Parent = row
-		-- SAME SELECTION ({}), SAME TAG, SAME RULE -- see `libraryRowRecipe`'s
-		-- own comment above.
-		libraryRowRecipe.Bind(row, {})
-		libraryRowRecipe.Bind(corner, {})
-
-		label(row, "Name", UDim2.new(0, 12, 0, 8), UDim2.new(1, -24, 0, 18), 14, Color3.fromRGB(233, 239, 249)).Text =
-			entry.name
-		local description = label(
-			row,
-			"Description",
-			UDim2.new(0, 12, 0, 28),
-			UDim2.new(1, -24, 0, 16),
-			11,
-			Color3.fromRGB(146, 162, 188)
-		)
-		description.Text = if entry.description == "" then entry.id else entry.description
-
-		-- NEITHER HANDLER REBUILDS THE ROW LIST ITSELF (milestone 26 sprint 2;
-		-- both used to call `rebuildLibraryRows()` here directly). `library.OnChange`
-		-- below does that now, for every change regardless of source -- these
-		-- two clicks are just one more source of one, the same as a terminal
-		-- running `dew install` is. Only the STATUS MESSAGE is this handler's
-		-- own to set, since `OnChange` has no way to know what a caller's own
-		-- action was trying to do.
-		--
-		-- CLICK HANDLING IS `OnActivated` NOW, NOT `.Activated:Connect` --
-		-- `Aether.Pressable` is a Frame, not a `TextButton`; it has no
-		-- `.Activated` signal of its own. Behavior is otherwise verbatim.
-		local toggleButton = Aether.Pressable({
-			Parent = row,
-			Name = "Toggle",
-			Position = UDim2.new(0, 12, 0, 52),
-			Size = UDim2.new(0, 100, 0, 24),
-			BackgroundTransparency = 0,
-			OnActivated = function()
-				local result = library.SetEnabled(entry.id, not entry.running)
-				libraryStatus.Text = if result.ok
-					then `{if entry.running then "Disabled" else "Enabled"} '{entry.id}'`
-					else result.error
-			end,
-		})
-		local toggleLabel = Instance.new("TextLabel")
-		toggleLabel.Name = "Label"
-		toggleLabel.Size = UDim2.fromScale(1, 1)
-		toggleLabel.BackgroundTransparency = 1
-		toggleLabel.TextSize = 12
-		toggleLabel.Text = if entry.running then "Disable" else "Enable"
-		toggleLabel.Parent = toggleButton
-		buttonRecipe.Bind(toggleButton, { tone = "default" })
-		buttonRecipe.Bind(toggleLabel, { tone = "default" })
-
-		-- THE ONE DELIBERATE BEHAVIOR CHANGE THIS MILESTONE MAKES (sprint 8):
-		-- Uninstall no longer removes anything itself -- it opens a real
-		-- confirmation `Aether.Dialog`, and the ACTUAL `library.Uninstall`
-		-- call moved into that dialog's own Confirm button below. This
-		-- `Dialog` is built here, inside `buildLibraryRow`'s own `vide.root`
-		-- (see that scope's own comment above) rather than needing any new
-		-- cleanup machinery: `libraryRowRoots`'s existing destructor already
-		-- tears down every machine THIS scope registers on rebuild, and
-		-- `Dialog.luau`'s own `cleanup(function() dialog.Destroy() ... end)`
-		-- (confirmed by reading the file directly) is exactly one more such
-		-- registration, torn down the same way, at the same time, as the two
-		-- `Aether.Pressable`s already are.
-		local uninstallDialog: any = nil
-		-- FORWARD-DECLARED, THE SAME REASON `uninstallDialog` ABOVE IS:
-		-- Confirm's own `OnActivated` (inside `Aether.Dialog`'s `Children`
-		-- closure, below) needs to reach this Frame to destroy it, but that
-		-- closure is DEFINED while `Aether.Dialog({...})` is still being
-		-- constructed -- before a `local uninstallDialogFrame = Aether.Dialog
-		-- ({...})` statement's own right-hand side has finished, the name it
-		-- introduces is not yet in scope for anything nested inside that
-		-- same expression (the same one-statement forward-reference gotcha
-		-- `rebuildLibraryRows`/`refreshAccount` are already forward-declared
-		-- above to avoid). Declaring it `nil` here first, then assigning
-		-- (not `local`-declaring) it below, makes it a real upvalue instead.
-		local uninstallDialogFrame: any = nil
-
-		local uninstallButton = Aether.Pressable({
-			Parent = row,
-			Name = "Uninstall",
-			Position = UDim2.new(0, 124, 0, 52),
-			Size = UDim2.new(0, 88, 0, 24),
-			BackgroundTransparency = 0,
-			-- OPENS THE CONFIRMATION DIALOG NOW, INSTEAD OF UNINSTALLING
-			-- DIRECTLY. `dialog.Open(trigger)` is handed this very button --
-			-- the same `dialogA.Open(openButtonRef)` shape
-			-- `examples/aether/dialog-demo/dialog-demo.luau` already
-			-- demonstrates -- so `createDialog`'s own focus trap has
-			-- something real to restore focus to on close.
-			OnActivated = function()
-				uninstallDialog.Open(uninstallButton)
-			end,
-		})
-		local uninstallLabel = Instance.new("TextLabel")
-		uninstallLabel.Name = "Label"
-		uninstallLabel.Size = UDim2.fromScale(1, 1)
-		uninstallLabel.BackgroundTransparency = 1
-		uninstallLabel.TextSize = 12
-		uninstallLabel.Text = "Uninstall"
-		uninstallLabel.Parent = uninstallButton
-		buttonRecipe.Bind(uninstallButton, { tone = "danger" })
-		buttonRecipe.Bind(uninstallLabel, { tone = "danger" })
-
-		-- THE CONFIRMATION DIALOG ITSELF. `Dialog`'s own default surface
-		-- chrome (`createDialog.luau`'s header, the Frame `Dialog.luau`
-		-- draws at line ~291) already carries a real `BackgroundColor3`,
-		-- corner, stroke, and close button -- confirmed by reading
-		-- `Dialog.luau` in full before writing this -- so nothing here
-		-- restyles the surface itself; only the Cancel/Confirm row below,
-		-- which this dashboard DOES own, goes through the existing
-		-- `buttonRecipe` tones the same way every other button in this file
-		-- already does.
-		--
-		-- `.Parent` IS SET EXPLICITLY, RIGHT AFTER, BECAUSE `Aether.Dialog`
-		-- NEVER DOES THIS ITSELF -- confirmed live, the hard way: an
-		-- earlier version of this sprint called `Aether.Dialog({...})` as a
-		-- bare statement here and the dialog opened (`ScreenStack`/
-		-- `createDialog`'s own logical state flipped correctly) with
-		-- NOTHING VISIBLE ON SCREEN. Reading `Dialog.luau`'s own body again
-		-- explains why: its root `create("Frame")(dialog.GetRootProps({
-		-- Name = ..., Size = ..., Position = ..., BackgroundTransparency =
-		-- 1, Visible = ..., ZIndex = ... }))` call builds that fixed
-		-- overrides table itself and never reads `props.Parent` (or any
-		-- other arbitrary key) back out of the `DialogProps` it was handed
-		-- -- the `[any]: any` in that type only satisfies the type checker,
-		-- it is not a real passthrough. `dialog-demo.luau`'s own usage
-		-- never hits this: it nests `Aether.Dialog({...})` calls directly
-		-- inside another `Aether.create("Frame")({ ..., Aether.Dialog({...})
-		-- })`'s own children array, which is how VIDE's `create` parents a
-		-- returned element in that example, a shape this row's plain
-		-- `Instance.new`-built tree does not use. Parented to `body` (the
-		-- whole window's own content frame, 420x560), not `row` (84px
-		-- tall): the dialog's own `Size = UDim2.fromScale(1, 1)` backdrop
-		-- must cover the entire window, the same area `dialog-demo.luau`'s
-		-- own root Frame covers, not just this one row's small rectangle.
-		uninstallDialogFrame = Aether.Dialog({
-			Id = `uninstall-{entry.id}`,
-			Name = "UninstallConfirm",
-			Title = "Uninstall applet?",
-			Size = UDim2.fromOffset(300, 160),
-			OutDialog = function(d: any)
-				uninstallDialog = d
-			end,
-
-			Children = function(dialog: any)
-				local content = Instance.new("Frame")
-				content.Name = "Content"
-				content.Size = UDim2.new(1, -32, 1, -80)
-				content.Position = UDim2.new(0, 16, 0, 48)
-				content.BackgroundTransparency = 1
-
-				-- A LITERAL COLOR, NOT `textRecipe.Bind` -- `textRecipe` (sprint
-				-- 7) is declared further down this file, in the Account
-				-- section, and is therefore not a legal upvalue here: Luau
-				-- resolves a local at the textual point of its own
-				-- declaration, and referencing it from this earlier function
-				-- would silently capture a global (nil) instead, the same
-				-- footgun this file's own `rebuildLibraryRows`/`refreshAccount`
-				-- comments already name for the identical reason. Matches the
-				-- row's own `Name`/`Description` labels immediately above,
-				-- which are the same kind of still-literal leftover sprint 5's
-				-- own report already flagged, not a fresh oversight introduced
-				-- here.
-				local message = label(content, "Message", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 40), 12, Color3.fromRGB(233, 239, 249))
-				message.Text = `This removes '{entry.name}' from this machine.`
-				message.TextWrapped = true
-
-				local cancelButton = Aether.Pressable({
-					Parent = content,
-					Name = "Cancel",
-					Position = UDim2.new(0, 0, 1, -28),
-					Size = UDim2.new(0, 88, 0, 24),
-					BackgroundTransparency = 0,
-					OnActivated = function()
-						dialog.Close()
-					end,
-				})
-				local cancelLabel = Instance.new("TextLabel")
-				cancelLabel.Name = "Label"
-				cancelLabel.Size = UDim2.fromScale(1, 1)
-				cancelLabel.BackgroundTransparency = 1
-				cancelLabel.TextSize = 12
-				cancelLabel.Text = "Cancel"
-				cancelLabel.Parent = cancelButton
-				buttonRecipe.Bind(cancelButton, { tone = "default" })
-				buttonRecipe.Bind(cancelLabel, { tone = "default" })
-
-				local confirmButton = Aether.Pressable({
-					Parent = content,
-					Name = "Confirm",
-					Position = UDim2.new(0, 96, 1, -28),
-					Size = UDim2.new(0, 88, 0, 24),
-					BackgroundTransparency = 0,
-					-- THE ACTUAL `library.Uninstall` CALL, MOVED HERE
-					-- VERBATIM from the old immediate `OnActivated` above --
-					-- same result handling, same `libraryStatus.Text`
-					-- wording.
-					--
-					-- `uninstallDialogFrame:Destroy()` IS EXPLICIT, NOT LEFT
-					-- TO `dialog.Close()`'S OWN EXIT FADE, FOUND LIVE TO BE
-					-- NECESSARY: `library.Uninstall` fires `library.OnChange`
-					-- SYNCHRONOUSLY (`onLibraryChanged`/`rebuildLibraryRows`
-					-- above), which calls this row's own `destroyRowScope()`
-					-- -- tearing down the `vide.root` this Dialog was built
-					-- inside -- as part of the SAME click handler that is
-					-- still running. `dialog.Close()` alone only flips
-					-- `ScreenStack`'s logical state and starts `Presence`'s
-					-- reactive fade-out effect; that effect needs a later
-					-- tick to actually flip the Frame's own `Visible` to
-					-- false, and this row's own scope is destroyed before
-					-- that tick ever runs. The Frame itself is undamaged by
-					-- that teardown -- it is parented to `body`, not to
-					-- `row`, exactly so the dialog can cover the whole
-					-- window (see this Dialog's own comment above) -- so
-					-- nothing else ever destroys it either, and it was found
-					-- live stuck on screen, fully opaque, forever. Destroying
-					-- it here, directly, the instant Confirm is pressed,
-					-- is honest about what is actually happening: this row
-					-- and its dialog are BOTH going away regardless, so an
-					-- immediate removal rather than a cosmetic fade that can
-					-- never complete is the correct behavior, not a
-					-- workaround. `dialog.Close()` still runs first, so
-					-- `ScreenStack`/`createDialog`'s own bookkeeping closes
-					-- cleanly while the scope is still alive, before the
-					-- destroy that follows.
-					OnActivated = function()
-						dialog.Close()
-						local result = library.Uninstall(entry.id)
-						libraryStatus.Text = if result.ok then `Uninstalled '{entry.id}'` else result.error
-						uninstallDialogFrame:Destroy()
-					end,
-				})
-				local confirmLabel = Instance.new("TextLabel")
-				confirmLabel.Name = "Label"
-				confirmLabel.Size = UDim2.fromScale(1, 1)
-				confirmLabel.BackgroundTransparency = 1
-				confirmLabel.TextSize = 12
-				confirmLabel.Text = "Uninstall"
-				confirmLabel.Parent = confirmButton
-				buttonRecipe.Bind(confirmButton, { tone = "danger" })
-				buttonRecipe.Bind(confirmLabel, { tone = "danger" })
-
-				return content
-			end,
-		})
-		uninstallDialogFrame.Parent = body
-
-		return row
-	end)
-	libraryRowRoots[row] = destroyRowScope
-end
-
-rebuildLibraryRows = function(): number
-	local entries = library.List() :: { LibraryEntry }
-	clearLibraryRows()
-	for _, entry in ipairs(entries) do
-		buildLibraryRow(entry)
-	end
-	return #entries
-end
-
-local function refreshLibrary()
-	local count = rebuildLibraryRows()
-	libraryStatus.Text = if count == 0 then "No applets installed yet -- see the Store tab" else ""
-end
-
--- THE ONE PLACE THE ROW LIST ACTUALLY GETS REBUILT, other than an explicit
--- Refresh click or the initial load below. Fires for a change from ANY
--- source: this dashboard's own Launch/Toggle/Uninstall, a crash, a plain
--- tray unload, or a separate `dew install`/`dew uninstall` run from a
--- terminal against this same running service (milestone 26) -- the point
--- of building it this way rather than re-polling on a timer.
---
--- NEVER TOUCHES `libraryStatus.Text` EXCEPT WHEN THE LIST IS EMPTY.
--- Clobbering it on every change would erase the result message a button's
--- own handler just set, one frame later -- the exact bug fixed earlier this
--- milestone for the manual-refresh case, reachable again here if this
--- called `refreshLibrary()` instead of `rebuildLibraryRows()` directly.
-local function onLibraryChanged()
-	local count = rebuildLibraryRows()
-	if count == 0 then
-		libraryStatus.Text = "No applets installed yet -- see the Store tab"
-	end
-end
-
-library.OnChange(onLibraryChanged)
-
-libraryRefreshButton.Activated:Connect(refreshLibrary)
-
---------------------------------------------------------------------------
--- STORE: milestone 23's marketplace browser, unchanged beyond parenting
--- into `storeTab` instead of `body` directly.
---------------------------------------------------------------------------
-
-label(storeTab, "Title", UDim2.new(0, 16, 0, 12), UDim2.new(1, -112, 0, 24), 18, Color3.fromRGB(233, 239, 249)).Text =
-	"Marketplace"
-
-local refreshButton = button(
-	storeTab,
-	"Refresh",
-	UDim2.new(1, -96, 0, 12),
-	UDim2.new(0, 80, 0, 24),
-	"Refresh",
-	Color3.fromRGB(38, 52, 74),
-	Color3.fromRGB(206, 222, 246)
-)
-
--- WRAPPED, AND GIVEN ROOM FOR MORE THAN ONE LINE: a network or auth error
--- (see `platform::describe_auth_error`) is a full sentence, not a label,
--- and an unwrapped one just runs off the edge of the window rather than
--- being clipped -- which reads as "blank" at a glance, not as an error.
-local status =
-	label(storeTab, "Status", UDim2.new(0, 16, 0, 44), UDim2.new(1, -32, 0, 40), 12, Color3.fromRGB(146, 162, 188))
-status.TextWrapped = true
-status.TextYAlignment = Enum.TextYAlignment.Top
-
-local list = Instance.new("ScrollingFrame")
-list.Name = "List"
-list.Position = UDim2.new(0, 16, 0, 92)
-list.Size = UDim2.new(1, -32, 1, -108)
-list.BackgroundTransparency = 1
--- A ROW IS SIZED AGAINST THE CANVAS, NOT THE FRAME'S OWN VISIBLE BOX --
--- `render.rs` lays every child out inside `CanvasSize`'s box, and that
--- defaults to zero on both axes. Without this, `UDim2.new(1, 0, 0, ...)`
--- on a row resolves its width against a zero-wide canvas: every row
--- exists, at zero width, which is indistinguishable from nothing at all.
--- Width tracks the frame itself; height grows to fit whatever the list
--- layout below actually lays out.
-list.CanvasSize = UDim2.new(1, 0, 0, 0)
-list.AutomaticCanvasSize = Enum.AutomaticSize.Y
-list.Parent = storeTab
-
-local listLayout = Instance.new("UIListLayout")
-listLayout.Padding = UDim.new(0, 8)
-listLayout.Parent = list
-
-local ROW_HEIGHT = 64
-
--- STATE FIRST, EVERYTHING ELSE AFTER. `buildRow` below closes over
--- `onInstalled`; declaring it after `buildRow` would make that a capture of
--- a global instead of this local, since a Luau chunk resolves an upvalue at
--- the point a function is DEFINED, not where it is called.
-local packages = source(nil :: { Package }?)
-
--- CALLBACKS, NOT AWAITING FLAGS (milestone 26; was a flag polled from
--- `desktop.Clock.OnFrame` through milestone 25 -- see `capabilities.rs` for
--- why that bookkeeping moved into the host). `Discover`/`Install` call these
--- back exactly once, themselves, the instant an answer lands; nothing here
--- polls for it any more.
-local function onDiscovered(discovered)
-	if discovered.ok then
-		packages(discovered.packages)
-		status.Text = if #discovered.packages == 0 then "No public packages yet" else ""
-	else
-		status.Text = discovered.error
-	end
-end
-
-local function onInstalled(installed)
-	status.Text = if installed.ok then `Installed '{installed.id}'` else installed.error
-	-- THE LIBRARY TAB IS WHAT SHOWS AN INSTALL'S RESULT, since a newly
-	-- installed applet is a Library entry, not a Store one -- refreshed
-	-- here too so switching tabs right after an install shows it without a
-	-- manual Refresh click.
-	if installed.ok then
-		refreshLibrary()
-	end
-end
-
-local function clearRows()
-	for _, child in ipairs(list:GetChildren()) do
-		if child:IsA("Frame") and child.Name == "Row" then
-			child:Destroy()
-		end
-	end
-end
-
--- STORE'S ROW REUSES `libraryRowRecipe` DIRECTLY (milestone 30 sprint 6,
--- resolving Open Question 2): the row Frame + UICorner here is structurally
--- identical to Library's own (same `$SurfaceColor`/`$RowRadius` tokens, same
--- one-rule-two-instances shape), and sprint 5's own report already named
--- this as shareable-as-built rather than needing a second, identical
--- recipe. `Meta`'s own `published {date}` line has no Library equivalent,
--- but that difference lives in a plain `TextLabel` below, never in the row
--- recipe itself, so it does not make sharing awkward.
---
--- NO PER-ROW `vide.root` HERE, UNLIKE `buildLibraryRow`. That machinery
--- exists there because `buildLibraryRow` is called with no wrapping
--- reactive scope at all -- `Aether.Pressable`'s own `vide.cleanup` call
--- would error otherwise (`graph.luau`'s own `assert_stable_scope`/`cleanup`
--- helper, confirmed by reading both directly). `buildRow` has no such gap:
--- it is only ever called from inside the `effect` below, which is itself a
--- live vide scope for the whole time its callback runs (`push_scope(node)`
--- brackets the call in `graph.luau`'s own `evaluate_node`) -- so the new
--- `Aether.Pressable`'s `vide.cleanup(machine.Destroy)` registers against
--- THAT effect node, not nothing. And on the effect's own next run (any
--- `packages()` change), `evaluate_node` calls `flush_cleanups(node)` before
--- invoking the callback again, which runs every `machine.Destroy` this
--- row's own Pressable registered on the PREVIOUS run, before `clearRows`
--- even destroys the row Instances. Adding `libraryRowRoots`-style tracking
--- here would duplicate a cleanup path vide's own effect re-run already
--- provides for free -- confirmed live by reading `graph.luau` in full, not
--- assumed from Library's own shape.
-local function buildRow(pkg: Package)
-	local row = Instance.new("Frame")
-	row.Name = "Row"
-	row.Size = UDim2.new(1, 0, 0, ROW_HEIGHT)
-	row.Parent = list
-
-	local corner = Instance.new("UICorner")
-	corner.Parent = row
-	-- SAME SELECTION ({}), SAME TAG, SAME RULE -- see `libraryRowRecipe`'s
-	-- own comment above.
-	libraryRowRecipe.Bind(row, {})
-	libraryRowRecipe.Bind(corner, {})
-
-	label(row, "Name", UDim2.new(0, 12, 0, 8), UDim2.new(1, -100, 0, 18), 14, Color3.fromRGB(233, 239, 249)).Text =
-		`@{pkg.ownerUserId}/{pkg.appletId}`
-	label(row, "Meta", UDim2.new(0, 12, 0, 30), UDim2.new(1, -100, 0, 16), 11, Color3.fromRGB(146, 162, 188)).Text =
-		`published {pkg.uploadedAt}`
-
-	-- CLICK HANDLING IS `OnActivated` NOW, NOT `.Activated:Connect` --
-	-- `Aether.Pressable` is a Frame, not a `TextButton`; it has no
-	-- `.Activated` signal of its own. Behavior is otherwise verbatim.
-	local install = Aether.Pressable({
-		Parent = row,
-		Name = "Install",
-		Position = UDim2.new(1, -84, 0.5, -12),
-		Size = UDim2.new(0, 72, 0, 24),
-		BackgroundTransparency = 0,
-		OnActivated = function()
-			status.Text = `Installing {pkg.appletId}...`
-			marketplace.Install(pkg.ownerUserId, pkg.appletId, onInstalled)
-		end,
-	})
-	local installLabel = Instance.new("TextLabel")
-	installLabel.Name = "Label"
-	installLabel.Size = UDim2.fromScale(1, 1)
-	installLabel.BackgroundTransparency = 1
-	installLabel.TextSize = 12
-	installLabel.Text = "Install"
-	installLabel.Parent = install
-	buttonRecipe.Bind(install, { tone = "success" })
-	buttonRecipe.Bind(installLabel, { tone = "success" })
-end
-
--- THE SOURCE IS THE ONLY STATE; THE EFFECT IS THE ONLY PLACE THAT REACTS,
--- the same split `widget-behaviors` already uses. `desktop.Clock.OnFrame`
--- below only senses and pushes; rebuilding the row list is this effect's
--- job alone.
-vide.root(function()
-	effect(function()
-		local current = packages()
-		clearRows()
-		if current == nil then
-			return
-		end
-		for _, pkg in ipairs(current) do
-			buildRow(pkg)
-		end
-	end)
-end)
-
-refreshButton.Activated:Connect(function()
-	status.Text = "Refreshing..."
-	marketplace.Discover(onDiscovered)
-end)
-
-status.Text = "Loading..."
-marketplace.Discover(onDiscovered)
-
---------------------------------------------------------------------------
--- ACCOUNT: who is signed in, a way to sign out, and -- new this milestone
--- -- a way to sign IN, without a terminal. `dew.Account.SignIn` is
--- trigger-with-callback (the same shape Sprint 1 gave `Discover`/`Install`),
--- since `platform::login` is a real network call.
---
--- KNOWN LIMITATION, WORTH REVISITING: the password field below is a plain
--- `TextBox`, not masked. This DataModel's own `TextBox` has no password/
--- masking property the way `manage.rs`'s native `ES_PASSWORD` Win32 field
--- did -- carrying that behavior over means intercepting every keystroke and
--- substituting a placeholder character while tracking the real value
--- separately, which is real work this sprint did not do. Flagged rather
--- than silently shipped.
---------------------------------------------------------------------------
-
--- THE TEXT RECIPE (milestone 30 sprint 7) -- every plain `TextLabel` in this
--- panel that still carried a literal `TextColor3` (Title, the signed-in
--- Status line, the sign-in form's own field labels, the error label).
--- `base`-less, four `tone`s, one property each -- there is no shared
--- property across tones the way `buttonRecipe`'s own `BackgroundColor3`/
--- `TextColor3` pair is shared, so a `base` table would have nothing to
--- hold. Library/Store's own row `Name`/`Description` labels are NOT
--- touched here -- they are still-literal leftovers sprint 5/6 left in
--- place (confirmed by reading both commits' own messages: neither names
--- the row labels at all, so this reads as an oversight of scope, not a
--- deliberate decision, and is flagged here for a later cleanup rather than
--- fixed in this sprint, which is Account's own).
 local textRecipe = Aether.Core.createRecipe({
 	variants = {
 		tone = {
@@ -990,217 +160,1012 @@ local textRecipe = Aether.Core.createRecipe({
 	},
 }, { Dom = dom, Component = "DashboardText" })
 
--- THE TEXT INPUT RECIPE (milestone 30 sprint 7) -- a plain `TextBox` tagged
--- and bound exactly like Library's own row `Frame`/`UICorner` (sprint 5),
--- NOT an `Aether.TextInput` swap (the implementation plan's own sprint 7
--- row names this explicitly: that file offers no capability this dashboard
--- needs beyond what a bare `TextBox` already has). `base`-only, no variants
--- -- both fields look identical.
---
--- `PlaceholderColor3` IS INCLUDED, INVESTIGATED FIRST, NOT ASSUMED SAFE:
--- `StyleRule:SetProperty` (`members.rs`, confirmed by reading it directly)
--- takes an arbitrary property NAME with no allowlist -- `coerce_variant_value`
--- only converts the Lua VALUE, and `cascade.rs`'s own `resolve_full` doc
--- says outright its map "is not filtered against the target's own declared
--- properties." Nothing in the cascade stops this token from resolving.
--- SEPARATELY, THOUGH: `render.rs`'s own paint path never reads
--- `PlaceholderColor3` or `PlaceholderText` at all (confirmed by reading
--- `node()`/`text_for()`/`colour()` in full -- `text_for` reads only the
--- `Text` property, filtered non-empty; there is no placeholder-text
--- rendering in this host today, a real, separate gap from the password-
--- masking one this file already names below). Binding the token here is
--- therefore correct and harmless -- it resolves through the cascade
--- exactly like `BackgroundColor3`/`TextColor3` do -- but produces no
--- visible difference from the literal it replaces, because neither one
--- ever painted anything to begin with. Kept as a real `$TextPlaceholder`
--- binding anyway, for the same reason `BackgroundColor3`/`TextColor3`
--- are: consistency with the token sheet, not because this specific
--- property is currently visible.
+-- A TextBox, its corner and its outline. Dew does not paint PlaceholderText
+-- yet, so `$TextPlaceholder` resolves but shows nothing until it does.
 local textInputRecipe = Aether.Core.createRecipe({
 	base = {
 		BackgroundColor3 = "$SurfaceColor",
 		TextColor3 = "$TextPrimary",
 		PlaceholderColor3 = "$TextPlaceholder",
+		CornerRadius = "$ControlRadius",
+		Color = "$TabActiveColor",
 	},
 }, { Dom = dom, Component = "DashboardTextInput" })
 
-local title = label(accountTab, "Title", UDim2.new(0, 16, 0, 12), UDim2.new(1, -32, 0, 24), 18, nil)
-title.Text = "Account"
-textRecipe.Bind(title, { tone = "primary" })
+--------------------------------------------------------------------------
+-- BUILDING BLOCKS. None takes a Position.
+--------------------------------------------------------------------------
 
--- SIGNED-IN STATE.
-local accountStatus = label(accountTab, "Status", UDim2.new(0, 16, 0, 52), UDim2.new(1, -32, 0, 24), 13, nil)
-accountStatus.TextWrapped = true
-textRecipe.Bind(accountStatus, { tone = "accent" })
+local function face(weight: Enum.FontWeight?): Font
+	return Font.new("rbxasset://fonts/families/Arimo.json", weight or Enum.FontWeight.Regular)
+end
+local REGULAR = face()
+local BOLD = face(Enum.FontWeight.Bold)
+local MONO = Font.new("rbxasset://fonts/families/RobotoMono.json")
 
--- FORWARD-DECLARED (same reason `rebuildLibraryRows` is, above): both
--- buttons below are built inside a `vide.root` whose own `OnActivated`
--- closures close over `refreshAccount`/`signInInFlight`/`signInLabel` --
--- declaring any of those AFTER the closures that reference them would
--- capture a global instead of this local, since a Luau chunk resolves an
--- upvalue at the point a function is DEFINED, not where it runs.
+local ICON_SIZE = 36
+local ROW_GAP = 12
+local BUTTON_HEIGHT = 30
+local BUTTON_GAP = 6
+local FIELD_HEIGHT = 34
+
+-- Button widths, each wide enough for its longest label at 13 px bold.
+local WIDE = 92 -- "Uninstall"
+local NARROW = 80 -- "Disable", "Enable", "Install", "Cancel", "Refresh", "Sign out"
+
+local function frame(parent: Instance, name: string, order: number, size: UDim2): Frame
+	local f = Instance.new("Frame")
+	f.Name = name
+	f.LayoutOrder = order
+	f.Size = size
+	f.BorderSizePixel = 0
+	f.BackgroundTransparency = 1
+	f.Parent = parent
+	return f
+end
+
+local function list(parent: Instance, direction: Enum.FillDirection, gap: number): UIListLayout
+	local layout = Instance.new("UIListLayout")
+	layout.FillDirection = direction
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, gap)
+	layout.Parent = parent
+	return layout
+end
+
+local function pad(parent: Instance, left: number, top: number?, right: number?, bottom: number?)
+	local p = Instance.new("UIPadding")
+	p.PaddingLeft = UDim.new(0, left)
+	p.PaddingTop = UDim.new(0, top or left)
+	p.PaddingRight = UDim.new(0, right or left)
+	p.PaddingBottom = UDim.new(0, bottom or top or left)
+	p.Parent = parent
+end
+
+local function grow(child: Instance)
+	local item = Instance.new("UIFlexItem")
+	item.FlexMode = Enum.UIFlexMode.Grow
+	item.Parent = child
+end
+
+local function atLeast(child: Instance, minWidth: number)
+	local c = Instance.new("UISizeConstraint")
+	c.MinSize = Vector2.new(minWidth, 0)
+	c.Parent = child
+end
+
+local function corner(parent: Instance, radius: UDim?): UICorner
+	local c = Instance.new("UICorner")
+	if radius then
+		c.CornerRadius = radius
+	end
+	c.Parent = parent
+	return c
+end
+
+-- One line of text, as tall as `height`, cut with an ellipsis when it does
+-- not fit.
+local function line(
+	parent: Instance,
+	name: string,
+	order: number,
+	size: number,
+	font: Font,
+	tone: string?,
+	height: number?
+): TextLabel
+	local t = Instance.new("TextLabel")
+	t.Name = name
+	t.LayoutOrder = order
+	t.BackgroundTransparency = 1
+	t.TextSize = size
+	t.FontFace = font
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.TextYAlignment = Enum.TextYAlignment.Center
+	t.TextTruncate = Enum.TextTruncate.AtEnd
+	t.Size = UDim2.new(1, 0, 0, height or math.ceil(size * 1.25))
+	t.Parent = parent
+	-- No tone leaves the colour to a recipe the caller binds instead.
+	if tone then
+		textRecipe.Bind(t, { tone = tone })
+	end
+	return t
+end
+
+-- Wrapped text that grows to however many lines it needs.
+local function paragraph(parent: Instance, name: string, order: number, size: number, tone: string): TextLabel
+	local t = Instance.new("TextLabel")
+	t.Name = name
+	t.LayoutOrder = order
+	t.BackgroundTransparency = 1
+	t.TextSize = size
+	t.FontFace = REGULAR
+	t.TextXAlignment = Enum.TextXAlignment.Left
+	t.TextYAlignment = Enum.TextYAlignment.Top
+	t.TextWrapped = true
+	t.Size = UDim2.fromScale(1, 0)
+	t.AutomaticSize = Enum.AutomaticSize.Y
+	t.Parent = parent
+	textRecipe.Bind(t, { tone = tone })
+	return t
+end
+
+-- A status line is hidden while empty, so it leaves no gap in its list.
+local function setMessage(label: TextLabel, message: string)
+	label.Text = message
+	label.Visible = message ~= ""
+end
+
+-- A button of a fixed width, its label centred. Needs an active vide scope:
+-- `Aether.Pressable` registers its own cleanup.
+--
+-- FIXED, NOT AutomaticSize X. Dew measures an AutomaticSize child of a list
+-- by laying out its whole subtree once more, so each nested AutomaticSize
+-- level multiplies the work. A button is the deepest thing in a row, and a
+-- row is repeated for every applet.
+local function actionButton(
+	parent: Instance,
+	name: string,
+	order: number,
+	text: string,
+	tone: Tone,
+	width: number,
+	onActivated: () -> ()
+): (Frame, TextLabel)
+	local b = Aether.Pressable({
+		Parent = parent,
+		Name = name,
+		LayoutOrder = order,
+		Size = UDim2.fromOffset(width, BUTTON_HEIGHT),
+		BackgroundTransparency = 0,
+		OnActivated = onActivated,
+	}) :: Frame
+	-- Pixels rather than scale, like the button: a scrolling list lays its
+	-- rows out twice when anything inside them is sized by scale Y.
+	local label = Instance.new("TextLabel")
+	label.Name = "Label"
+	label.Size = UDim2.fromOffset(width, BUTTON_HEIGHT)
+	label.BackgroundTransparency = 1
+	label.FontFace = BOLD
+	label.TextSize = 13
+	label.Text = text
+	label.Parent = b
+	buttonRecipe.Bind(b, { tone = tone })
+	buttonRecipe.Bind(label, { tone = tone })
+	buttonRecipe.Bind(corner(b), { tone = tone })
+	return b, label
+end
+
+-- A square tile carrying up to two initials: the icon stand-in.
+local function initials(name: string): string
+	local out = ""
+	for word in string.gmatch(name, "%w+") do
+		out ..= string.upper(string.sub(word, 1, 1))
+		if #out == 2 then
+			break
+		end
+	end
+	return out
+end
+
+-- A `radius` rounds it by hand instead of by the button rule's corner.
+local function tile(parent: Instance, name: string, order: number, px: number, letters: string, radius: number?): (Frame, TextLabel)
+	local f = frame(parent, name, order, UDim2.fromOffset(px, px))
+	f.BackgroundTransparency = 0
+	buttonRecipe.Bind(f, { tone = "default" })
+	if radius then
+		corner(f, UDim.new(0, radius))
+	else
+		buttonRecipe.Bind(corner(f), { tone = "default" })
+	end
+	local glyph = Instance.new("TextLabel")
+	glyph.Name = "Glyph"
+	glyph.Size = UDim2.fromOffset(px, px)
+	glyph.BackgroundTransparency = 1
+	glyph.FontFace = BOLD
+	glyph.TextSize = math.max(12, math.floor(px * 0.42))
+	glyph.Text = letters
+	glyph.Parent = f
+	buttonRecipe.Bind(glyph, { tone = "default" })
+	return f, glyph
+end
+
+-- A pill as wide as its text.
+local function pill(parent: Instance, name: string, order: number, height: number, size: number): TextLabel
+	local p = Instance.new("TextLabel")
+	p.Name = name
+	p.LayoutOrder = order
+	p.BackgroundTransparency = 0
+	p.FontFace = BOLD
+	p.TextSize = size
+	p.Size = UDim2.fromOffset(0, height)
+	p.AutomaticSize = Enum.AutomaticSize.X
+	p.Parent = parent
+	pad(p, 8, 0, 8, 0)
+	corner(p, UDim.new(0, height // 2))
+	return p
+end
+
+-- A vertically scrolling column with a gap between its children.
+local function scroller(parent: Instance, name: string, order: number): ScrollingFrame
+	local s = Instance.new("ScrollingFrame")
+	s.Name = name
+	s.LayoutOrder = order
+	s.Size = UDim2.fromScale(1, 0)
+	s.BackgroundTransparency = 1
+	s.BorderSizePixel = 0
+	s.ScrollBarThickness = 4
+	-- Children size against the canvas, so it tracks the frame's width and
+	-- grows to the height its list lays out.
+	s.CanvasSize = UDim2.fromScale(1, 0)
+	s.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	s.Parent = parent
+	grow(s)
+	pad(s, 16, 0, 16, 16)
+	list(s, Enum.FillDirection.Vertical, 8)
+	return s
+end
+
+--------------------------------------------------------------------------
+-- THE WINDOW: sidebar, divider, content.
+--------------------------------------------------------------------------
+
+local body = frame(root, "Body", 0, UDim2.fromScale(1, 1))
+body.BackgroundTransparency = 0
+windowRecipe.Bind(body, {})
+list(body, Enum.FillDirection.Horizontal, 0)
+
+local sidebar = frame(body, "Sidebar", 1, UDim2.fromScale(0.3, 1))
+sidebar.BackgroundTransparency = 0
+tabRecipe.Bind(sidebar, { state = "inactive" })
+do
+	local c = Instance.new("UISizeConstraint")
+	c.MinSize = Vector2.new(124, 0)
+	c.MaxSize = Vector2.new(200, math.huge)
+	c.Parent = sidebar
+end
+pad(sidebar, 10, 14, 10, 10)
+list(sidebar, Enum.FillDirection.Vertical, 4)
+
+local divider = frame(body, "Divider", 2, UDim2.new(0, 1, 1, 0))
+divider.BackgroundTransparency = 0
+rowRecipe.Bind(divider, {})
+
+local main = frame(body, "Main", 3, UDim2.fromScale(0, 1))
+grow(main)
+
+-- ALL THREE SECTIONS FILL `main`, ONE VISIBLE AT A TIME. Toggling `Visible`
+-- rather than rebuilding keeps Store from re-running `Discover()` on every
+-- visit.
+local function section(name: string): Frame
+	local f = frame(main, name, 0, UDim2.fromScale(1, 1))
+	list(f, Enum.FillDirection.Vertical, 0)
+	return f
+end
+
+local libraryTab = section("LibraryTab")
+local storeTab = section("StoreTab")
+local accountTab = section("AccountTab")
+
+-- A section's title, a one line summary under it, and an optional button.
+-- LAYOUT WORKAROUND: the title column has a fixed height rather than
+-- AutomaticSize Y, so the Center alignment that lines the button up with it
+-- is exact.
+local function header(parent: Instance, title: string): (Frame, TextLabel)
+	local h = frame(parent, "Header", 1, UDim2.fromScale(1, 0))
+	h.AutomaticSize = Enum.AutomaticSize.Y
+	pad(h, 16, 16, 16, 10)
+	local l = list(h, Enum.FillDirection.Horizontal, 10)
+	l.VerticalAlignment = Enum.VerticalAlignment.Center
+	local titles = frame(h, "Titles", 1, UDim2.fromOffset(0, 46))
+	grow(titles)
+	list(titles, Enum.FillDirection.Vertical, 4)
+	line(titles, "Title", 1, 22, BOLD, "primary", 26).Text = title
+	local subtitle = line(titles, "Subtitle", 2, 13, REGULAR, "secondary", 16)
+	return h, subtitle
+end
+
+-- A wrapped status line under a section's header.
+local function statusLine(parent: Instance, order: number): TextLabel
+	local s = paragraph(parent, "Status", order, 13, "accent")
+	pad(s, 16, 0, 16, 10)
+	setMessage(s, "")
+	return s
+end
+
+--------------------------------------------------------------------------
+-- NAVIGATION. `Aether.Tabs`, controlled by `activeTab`, so the account card
+-- at the sidebar's foot can open Account too. Tabs also answers Space,
+-- Return and the arrow keys while an item holds keyboard selection.
+--------------------------------------------------------------------------
+
+type TabName = "library" | "store" | "account"
+
+-- `Source` and `Action` are this dashboard's own vide: a source only
+-- notifies the graph that created it, and only this vide's `create` can
+-- apply its actions.
+local activeTab = source("library" :: TabName)
+local tabs = Tabs({
+	Source = source,
+	Action = vide.action,
+	Tabs = { "library", "store", "account" } :: { TabName },
+	Active = activeTab,
+	OnActiveChanged = function(key: TabName)
+		activeTab(key)
+	end,
+})
+
+do
+	local brand = frame(sidebar, "Brand", 1, UDim2.new(1, 0, 0, 34))
+	pad(brand, 4, 0, 0, 0)
+	local l = list(brand, Enum.FillDirection.Horizontal, 8)
+	l.VerticalAlignment = Enum.VerticalAlignment.Center
+	tile(brand, "Mark", 1, 24, "D")
+	local name = line(brand, "Name", 2, 17, BOLD, "primary")
+	name.Text = "Dew"
+	name.Size = UDim2.fromOffset(0, 22)
+	grow(name)
+	frame(sidebar, "Gap", 2, UDim2.new(1, 0, 0, 10))
+end
+
+type NavItem = { button: TextButton, label: TextLabel, corner: UICorner, count: TextLabel? }
+
+local function navItem(key: TabName, text: string, order: number, counted: boolean): NavItem
+	local b = create("TextButton")(tabs.GetTab(key).GetRootProps({
+		Name = `Tab{text}`,
+		LayoutOrder = order,
+		Size = UDim2.new(1, 0, 0, 36),
+		BackgroundTransparency = 0,
+		AutoButtonColor = false,
+		Text = "",
+		Parent = sidebar,
+	})) :: TextButton
+	pad(b, 10, 0, 8, 0)
+	local l = list(b, Enum.FillDirection.Horizontal, 6)
+	l.VerticalAlignment = Enum.VerticalAlignment.Center
+	local label = line(b, "Label", 1, 15, BOLD, nil, 20)
+	label.Text = text
+	label.Size = UDim2.fromOffset(0, 20)
+	grow(label)
+	local count = if counted then pill(b, "Count", 2, 20, 12) else nil
+	if count then
+		count.Visible = false
+	end
+	return { button = b, label = label, corner = corner(b), count = count }
+end
+
+local nav: { [TabName]: NavItem } = {
+	library = navItem("library", "Library", 3, true),
+	store = navItem("store", "Store", 4, true),
+	account = navItem("account", "Account", 5, false),
+}
+
+local function setCount(key: TabName, n: number?)
+	local count = nav[key].count
+	if count then
+		count.Text = if n then tostring(n) else ""
+		count.Visible = n ~= nil
+	end
+end
+
+local spacer = frame(sidebar, "Spacer", 6, UDim2.fromScale(1, 0))
+grow(spacer)
+
+-- WHO IS SIGNED IN, at the foot of the sidebar on every section. Pressing it
+-- opens Account. Filled in by `refreshAccount`.
+local whoAvatar: Frame
+local whoInitial: TextLabel
+local whoPrimary: TextLabel
+local whoSecondary: TextLabel
+
+vide.root(function()
+	local who = Aether.Pressable({
+		Parent = sidebar,
+		Name = "Who",
+		LayoutOrder = 7,
+		Size = UDim2.new(1, 0, 0, 48),
+		BackgroundTransparency = 0,
+		OnActivated = function()
+			activeTab("account")
+		end,
+	}) :: Frame
+	rowRecipe.Bind(who, {})
+	rowRecipe.Bind(corner(who), {})
+	pad(who, 8, 0, 8, 0)
+	local l = list(who, Enum.FillDirection.Horizontal, 8)
+	l.VerticalAlignment = Enum.VerticalAlignment.Center
+	whoAvatar, whoInitial = tile(who, "Avatar", 1, 28, "", 14)
+	local col = frame(who, "Text", 2, UDim2.fromOffset(0, 32))
+	grow(col)
+	list(col, Enum.FillDirection.Vertical, 2)
+	whoPrimary = line(col, "Primary", 1, 13, BOLD, "primary", 16)
+	whoSecondary = line(col, "Secondary", 2, 12, REGULAR, "secondary", 14)
+end)
+
+vide.root(function()
+	effect(function()
+		local current = activeTab()
+		libraryTab.Visible = current == "library"
+		storeTab.Visible = current == "store"
+		accountTab.Visible = current == "account"
+		for key, item in nav do
+			local selection = { state = if key == current then "active" else "inactive" }
+			tabRecipe.Bind(item.button, selection)
+			tabRecipe.Bind(item.label, selection)
+			tabRecipe.Bind(item.corner, selection)
+			if item.count then
+				chipRecipe.Bind(item.count, selection)
+			end
+		end
+	end)
+end)
+
+--------------------------------------------------------------------------
+-- ROWS, shared by Library and Store.
+--
+-- The head line is icon, name block and buttons in one wrapping list, so a
+-- narrow window moves the buttons onto their own line. The description sits
+-- under it, indented to line up with the name.
+--
+-- LAYOUT WORKAROUND: every child of the head line has a fixed height and
+-- the description lives outside it. A flex grown AutomaticSize Y column in a
+-- wrapping list is measured at its minimum width, which leaves empty space
+-- above buttons that wrapped. Once that is fixed, the description can join
+-- the name block and wrapped buttons can sit under the description.
+--
+-- FLAT ON PURPOSE: only the row, the head line and the description size
+-- themselves (see `actionButton` for why that count matters).
+--------------------------------------------------------------------------
+
+type Row = { row: Frame, actions: Frame }
+
+local function buildRow(
+	parent: Instance,
+	order: number,
+	title: string,
+	detail: string,
+	description: string,
+	buttonWidths: { number }
+): Row
+	local row = frame(parent, "Row", order, UDim2.fromScale(1, 0))
+	row.AutomaticSize = Enum.AutomaticSize.Y
+	row.BackgroundTransparency = 0
+	rowRecipe.Bind(row, {})
+	rowRecipe.Bind(corner(row), {})
+	pad(row, ROW_GAP)
+	list(row, Enum.FillDirection.Vertical, 8)
+
+	local head = frame(row, "Head", 1, UDim2.fromScale(1, 0))
+	head.AutomaticSize = Enum.AutomaticSize.Y
+	local l = list(head, Enum.FillDirection.Horizontal, ROW_GAP)
+	l.Wraps = true
+	l.VerticalAlignment = Enum.VerticalAlignment.Center
+
+	tile(head, "Icon", 1, ICON_SIZE, initials(title))
+
+	local text = frame(head, "Text", 2, UDim2.fromOffset(0, ICON_SIZE))
+	grow(text)
+	atLeast(text, 120)
+	list(text, Enum.FillDirection.Vertical, 2)
+	line(text, "Name", 1, 15, BOLD, "primary", 19).Text = title
+	line(text, "Detail", 2, 13, MONO, "secondary", 15).Text = detail
+
+	-- As wide as its buttons, which are fixed, so it never measures them.
+	local width = 0
+	for i, w in buttonWidths do
+		width += w + if i > 1 then BUTTON_GAP else 0
+	end
+	local actions = frame(head, "Actions", 3, UDim2.fromOffset(width, BUTTON_HEIGHT))
+	list(actions, Enum.FillDirection.Horizontal, BUTTON_GAP)
+
+	local d = paragraph(row, "Description", 2, 13, "secondary")
+	d.Text = description
+	pad(d, ICON_SIZE + ROW_GAP, 0, 0, 0)
+	d.Visible = description ~= ""
+
+	return { row = row, actions = actions }
+end
+
+--------------------------------------------------------------------------
+-- LIBRARY: every installed applet, with Enable/Disable and Uninstall.
+-- `dew.Library`'s calls are synchronous, so a result is read the moment a
+-- call returns.
+--------------------------------------------------------------------------
+
+local libraryHeader, librarySubtitle = header(libraryTab, "Library")
+
+type Filter = "all" | "running" | "stopped"
+
+-- WHICH ROWS SHOW: a second `Aether.Tabs`, controlled by `filter`, drives
+-- the chips. Changing it rebuilds the rows.
+local filter = source("all" :: Filter)
+local rebuildLibraryRows: () -> number
+
+local filters = Tabs({
+	Source = source,
+	Action = vide.action,
+	Tabs = { "all", "running", "stopped" } :: { Filter },
+	Active = filter,
+	OnActiveChanged = function(key: Filter)
+		filter(key)
+		rebuildLibraryRows()
+	end,
+})
+
+local chips: { [Filter]: { button: TextButton, corner: UICorner } } = {}
+do
+	local row = frame(libraryTab, "Filters", 2, UDim2.fromScale(1, 0))
+	row.AutomaticSize = Enum.AutomaticSize.Y
+	pad(row, 16, 0, 16, 10)
+	list(row, Enum.FillDirection.Horizontal, 6).Wraps = true
+	for i, key in { "all", "running", "stopped" } :: { Filter } do
+		local b = create("TextButton")(filters.GetTab(key).GetRootProps({
+			Name = `Filter{string.upper(string.sub(key, 1, 1))}{string.sub(key, 2)}`,
+			LayoutOrder = i,
+			Size = UDim2.fromOffset(0, 26),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundTransparency = 0,
+			AutoButtonColor = false,
+			FontFace = BOLD,
+			TextSize = 13,
+			Parent = row,
+		})) :: TextButton
+		pad(b, 10, 0, 10, 0)
+		chips[key] = { button = b, corner = corner(b, UDim.new(0, 13)) }
+	end
+end
+
+local libraryStatus = statusLine(libraryTab, 3)
+local libraryList = scroller(libraryTab, "List", 4)
+
+local EMPTY_LIBRARY = "No applets installed yet. Find some in the Store."
+
+-- ONE VIDE ROOT PER ROW, KEPT SO A REBUILD CAN TEAR IT DOWN FIRST.
+-- `Aether.Pressable` and `Aether.Dialog` register cleanups with the scope
+-- they are built in, and destroying an Instance does not run them, so
+-- without this every rebuild would leave each button's PointerRouter
+-- registration behind. The row's dialog is kept too: it is parented to
+-- `root`, not the row, so destroying the row does not reach it.
+local libraryRows: { [Frame]: { destroyScope: () -> (), dialog: Instance? } } = {}
+
+local function clearLibraryRows()
+	for _, child in libraryList:GetChildren() do
+		if child:IsA("Frame") and child.Name == "Row" then
+			local owned = libraryRows[child]
+			if owned then
+				-- The scope first: its cleanups unregister the buttons and the
+				-- dialog while their Instances still exist.
+				owned.destroyScope()
+				if owned.dialog then
+					owned.dialog:Destroy()
+				end
+				libraryRows[child] = nil
+			end
+			child:Destroy()
+		end
+	end
+end
+
+--[[
+	THE TOGGLE IS KEYED ON `running`, NOT `enabled`. `running` comes from the
+	host's coordinator, `enabled` from `installed.json`. An applet can be
+	enabled and not running (closed by hand, or crashed); keyed on `enabled`
+	its button would read "Disable" and turn it off instead of starting it.
+	Keyed on `running`, off always reads "Enable" and starts it, and on
+	always reads "Disable" and stops it.
+]]
+local function buildLibraryRow(entry: LibraryEntry, order: number)
+	local owned: { destroyScope: () -> (), dialog: Instance? } = { destroyScope = function() end }
+	local destroyScope, row = vide.root(function(): Frame
+		local built = buildRow(
+			libraryList,
+			order,
+			entry.name,
+			entry.id,
+			if entry.description == "" then entry.id else entry.description,
+			{ NARROW, WIDE }
+		)
+
+		-- Neither handler rebuilds the list: `library.OnChange` does, for
+		-- every change whatever its source. A handler only reports its result.
+		actionButton(built.actions, "Toggle", 1, if entry.running then "Disable" else "Enable", "default", NARROW, function()
+			local result = library.SetEnabled(entry.id, not entry.running)
+			setMessage(
+				libraryStatus,
+				if result.ok then `{if entry.running then "Disabled" else "Enabled"} '{entry.id}'` else result.error
+			)
+		end)
+
+		-- Uninstall asks first. The dialog is built in this row's scope, so
+		-- the row's teardown also tears down its machine.
+		local uninstallDialog: any = nil
+		local uninstallButton: Frame
+		uninstallButton = actionButton(built.actions, "Uninstall", 2, "Uninstall", "danger", WIDE, function()
+			-- Handed the trigger, so the focus trap restores focus to it on close.
+			uninstallDialog.Open(uninstallButton)
+		end)
+
+		local dialogFrame = Aether.Dialog({
+			Id = `uninstall-{entry.id}`,
+			Name = "UninstallConfirm",
+			Title = "Uninstall applet?",
+			Size = UDim2.fromOffset(320, 150),
+			OutDialog = function(d: any)
+				uninstallDialog = d
+			end,
+			Children = function(dialog: any)
+				-- Fills the dialog's surface, padded clear of its title bar.
+				local content = Instance.new("Frame")
+				content.Name = "Content"
+				content.Size = UDim2.fromScale(1, 1)
+				content.BackgroundTransparency = 1
+				pad(content, 16, 48, 16, 16)
+				list(content, Enum.FillDirection.Vertical, 8)
+
+				local message = paragraph(content, "Message", 1, 13, "primary")
+				message.Text = `This removes '{entry.name}' from this machine.`
+				local push = frame(content, "Spacer", 2, UDim2.fromScale(1, 0))
+				grow(push)
+
+				local buttons = frame(content, "Buttons", 3, UDim2.new(1, 0, 0, BUTTON_HEIGHT))
+				local bl = list(buttons, Enum.FillDirection.Horizontal, 8)
+				bl.HorizontalAlignment = Enum.HorizontalAlignment.Right
+				actionButton(buttons, "Cancel", 1, "Cancel", "default", NARROW, function()
+					dialog.Close()
+				end)
+				-- `Close()` runs first, while this row's scope is alive, so the
+				-- screen stack closes cleanly. `Uninstall` then fires `OnChange`,
+				-- and the rebuild destroys this dialog along with its row.
+				actionButton(buttons, "Confirm", 2, "Uninstall", "danger", WIDE, function()
+					dialog.Close()
+					local result = library.Uninstall(entry.id)
+					setMessage(libraryStatus, if result.ok then `Uninstalled '{entry.id}'` else result.error)
+				end)
+				return content
+			end,
+		})
+		-- `Aether.Dialog` does not parent itself. Under `root`, beside the
+		-- body, so its backdrop covers the whole window.
+		dialogFrame.Parent = root
+		owned.dialog = dialogFrame
+
+		return built.row
+	end)
+	owned.destroyScope = destroyScope
+	libraryRows[row] = owned
+end
+
+local function libraryCounts(entries: { LibraryEntry }): (number, number)
+	local running = 0
+	for _, entry in entries do
+		if entry.running then
+			running += 1
+		end
+	end
+	return #entries, running
+end
+
+-- Rebuilds the rows for the current filter, and every count that depends on
+-- the list. Returns how many applets are installed.
+rebuildLibraryRows = function(): number
+	local entries = library.List() :: { LibraryEntry }
+	local total, running = libraryCounts(entries)
+	librarySubtitle.Text = `{total} installed, {running} running`
+	setCount("library", total)
+
+	local current = filter()
+	local labels: { [Filter]: string } = {
+		all = `All {total}`,
+		running = `Running {running}`,
+		stopped = `Stopped {total - running}`,
+	}
+	for key, chip in chips do
+		chip.button.Text = labels[key]
+		local selection = { state = if key == current then "active" else "inactive" }
+		chipRecipe.Bind(chip.button, selection)
+		chipRecipe.Bind(chip.corner, selection)
+	end
+
+	clearLibraryRows()
+	for i, entry in entries do
+		if current == "all" or entry.running == (current == "running") then
+			buildLibraryRow(entry, i)
+		end
+	end
+	return total
+end
+
+local function refreshLibrary()
+	local count = rebuildLibraryRows()
+	setMessage(libraryStatus, if count == 0 then EMPTY_LIBRARY else "")
+end
+
+-- The one place the rows rebuild besides Refresh and the first load. Fires
+-- for a change from any source: a button here, a crash, or `dew install`
+-- run in a terminal. Leaves the status alone unless the list is empty, so a
+-- button's own result message survives the rebuild it caused.
+library.OnChange(function()
+	local count = rebuildLibraryRows()
+	if count == 0 then
+		setMessage(libraryStatus, EMPTY_LIBRARY)
+	end
+end)
+
+--------------------------------------------------------------------------
+-- STORE: what `Discover` returns, each with Install. `Discover` and
+-- `Install` call back once, when their answer lands.
+--------------------------------------------------------------------------
+
+local storeHeader, storeSubtitle = header(storeTab, "Store")
+local storeStatus = statusLine(storeTab, 3)
+local storeList = scroller(storeTab, "List", 4)
+
+-- State first: `buildStoreRow` closes over `onInstalled`, and a function
+-- captures a local only if it is declared before the function is.
+local packages = source(nil :: { Package }?)
+
+local function onDiscovered(discovered)
+	if discovered.ok then
+		packages(discovered.packages)
+		storeSubtitle.Text = `{#discovered.packages} packages from the marketplace`
+		setCount("store", #discovered.packages)
+		setMessage(storeStatus, if #discovered.packages == 0 then "No public packages yet" else "")
+	else
+		setMessage(storeStatus, discovered.error)
+	end
+end
+
+local function onInstalled(installed)
+	setMessage(storeStatus, if installed.ok then `Installed '{installed.id}'` else installed.error)
+	-- A new install is a Library entry, so Library refreshes too.
+	if installed.ok then
+		refreshLibrary()
+	end
+end
+
+-- Built only from the effect below, which is a live vide scope while it
+-- runs: each Install button's cleanup registers with that effect and runs
+-- before its next run, so no per-row scope is needed here.
+local function buildStoreRow(pkg: Package, order: number)
+	local built = buildRow(
+		storeList,
+		order,
+		pkg.appletId,
+		`@{pkg.ownerUserId}/{pkg.appletId}`,
+		`Published {pkg.uploadedAt}`,
+		{ NARROW }
+	)
+	actionButton(built.actions, "Install", 1, "Install", "success", NARROW, function()
+		setMessage(storeStatus, `Installing {pkg.appletId}...`)
+		marketplace.Install(pkg.ownerUserId, pkg.appletId, onInstalled)
+	end)
+end
+
+local function discover(message: string)
+	setMessage(storeStatus, message)
+	marketplace.Discover(onDiscovered)
+end
+
+-- The source is the only state; this effect is the only thing that reacts.
+vide.root(function()
+	effect(function()
+		local current = packages()
+		for _, child in storeList:GetChildren() do
+			if child:IsA("Frame") and child.Name == "Row" then
+				child:Destroy()
+			end
+		end
+		if current == nil then
+			return
+		end
+		for i, pkg in current do
+			buildStoreRow(pkg, i)
+		end
+	end)
+end)
+
+--------------------------------------------------------------------------
+-- ACCOUNT: who is signed in, signing out, and signing in.
+--
+-- KNOWN LIMITATION: the password field is a plain TextBox and is not
+-- masked. The DataModel's TextBox has no masking property, and doing it by
+-- hand means intercepting every keystroke.
+--------------------------------------------------------------------------
+
+local _, accountSubtitle = header(accountTab, "Account")
+local accountList = scroller(accountTab, "Sections", 2)
+
+local function card(order: number, heading: string): Frame
+	local c = frame(accountList, "Section", order, UDim2.fromScale(1, 0))
+	c.AutomaticSize = Enum.AutomaticSize.Y
+	c.BackgroundTransparency = 0
+	rowRecipe.Bind(c, {})
+	rowRecipe.Bind(corner(c), {})
+	pad(c, 14)
+	list(c, Enum.FillDirection.Vertical, 10)
+	line(c, "Heading", 0, 12, BOLD, "secondary", 15).Text = heading
+	return c
+end
+
+-- A form line: a label 84 wide beside a value that takes the rest and is
+-- never narrower than 170. Narrower than that, the value wraps under the
+-- label. Both are as tall as a field and neither is AutomaticSize, so the
+-- line's own alignment never has to place a growing child.
+local function formLine(
+	parent: Instance,
+	order: number,
+	labelName: string,
+	labelText: string,
+	height: number
+): (Frame, TextLabel)
+	local f = frame(parent, "Line", order, UDim2.fromScale(1, 0))
+	f.AutomaticSize = Enum.AutomaticSize.Y
+	list(f, Enum.FillDirection.Horizontal, 10).Wraps = true
+	local key = line(f, labelName, 1, 14, REGULAR, "secondary", height)
+	key.Text = labelText
+	key.Size = UDim2.fromOffset(84, height)
+	return f, key
+end
+
+local function fieldSlot(child: GuiObject, height: number)
+	child.LayoutOrder = 2
+	child.Size = UDim2.fromOffset(0, height)
+	grow(child)
+	atLeast(child, 170)
+end
+
+-- SIGNED IN: the profile, and the session with Sign out. Read-only lines
+-- are one text line tall; there is no field to line up with.
+local VALUE_HEIGHT = 22
+local profileSection = card(1, "PROFILE")
+
+local function profileLine(order: number, name: string, label: string, size: number, font: Font): TextLabel
+	local value = line(formLine(profileSection, order, `{name}Label`, label, VALUE_HEIGHT), `{name}Value`, 2, size, font, "primary")
+	fieldSlot(value, VALUE_HEIGHT)
+	return value
+end
+
+local profileEmail = profileLine(1, "Email", "Email", 14, BOLD)
+local profileUserId = profileLine(2, "UserId", "User ID", 13, MONO)
+local profileLibrary = profileLine(3, "Library", "Library", 14, REGULAR)
+
+local sessionSection = card(2, "SESSION")
+local accountStatus = paragraph(sessionSection, "Status", 1, 13, "accent")
+local sessionActions = frame(sessionSection, "Actions", 2, UDim2.new(1, 0, 0, BUTTON_HEIGHT))
+list(sessionActions, Enum.FillDirection.Horizontal, 8)
+
+-- SIGNED OUT: a sign-in form. Both states exist at once and `refreshAccount`
+-- shows one.
+local signInSection = card(3, "SIGN IN")
+paragraph(signInSection, "Hint", 1, 13, "primary").Text =
+	"Sign in with your Dew account to install applets from the Store and publish your own."
+
+local function textField(parent: Instance, name: string, placeholder: string): TextBox
+	local box = Instance.new("TextBox")
+	box.Name = name
+	box.PlaceholderText = placeholder
+	box.FontFace = REGULAR
+	box.TextSize = 14
+	box.TextXAlignment = Enum.TextXAlignment.Left
+	box.ClearTextOnFocus = false
+	-- Text longer than the field is clipped at its edge.
+	box.ClipsDescendants = true
+	box.Text = ""
+	box.Parent = parent
+	fieldSlot(box, FIELD_HEIGHT)
+	pad(box, 10, 0, 10, 0)
+	textInputRecipe.Bind(box, {})
+	textInputRecipe.Bind(corner(box), {})
+	local stroke = Instance.new("UIStroke")
+	stroke.Parent = box
+	textInputRecipe.Bind(stroke, {})
+	return box
+end
+
+local emailLine, emailLabel = formLine(signInSection, 2, "EmailLabel", "Email", FIELD_HEIGHT)
+local emailBox = textField(emailLine, "Email", "you@example.com")
+local passwordLine, passwordLabel = formLine(signInSection, 3, "PasswordLabel", "Password", FIELD_HEIGHT)
+local passwordBox = textField(passwordLine, "Password", "Password")
+local signInActions = frame(signInSection, "Actions", 4, UDim2.new(1, 0, 0, BUTTON_HEIGHT))
+list(signInActions, Enum.FillDirection.Horizontal, 8)
+local signInError = paragraph(signInSection, "SignInError", 5, 13, "error")
+setMessage(signInError, "")
+
 local signOutButton: Frame
 local signInButton: Frame
 local signInLabel: TextLabel
 local refreshAccount: () -> ()
 
--- GUARDED THE SAME WAY `manage.rs`'s OWN `SIGNIN_IN_FLIGHT` GUARDED ITS
--- button: a second click before the first request returns is ignored
--- rather than starting a second sign-in, and the button's own label says
--- so while one is outstanding.
+-- A second click while a sign-in is outstanding is ignored, and the button
+-- says one is under way.
 local signInInFlight = false
 
--- SIGNED-OUT STATE: a plain sign-in form. Built once, alongside the
--- signed-in controls above, and toggled by `refreshAccount` -- the same
--- "both sets exist, only one is visible" shape `manage.rs`'s own
--- `create_login_section` already used for the identical two states.
-local emailLabel = label(accountTab, "EmailLabel", UDim2.new(0, 16, 0, 52), UDim2.new(0, 70, 0, 20), 12, nil)
-emailLabel.Text = "Email:"
-textRecipe.Bind(emailLabel, { tone = "secondary" })
-
-local emailBox = Instance.new("TextBox")
-emailBox.Name = "Email"
-emailBox.Position = UDim2.new(0, 90, 0, 50)
-emailBox.Size = UDim2.new(1, -106, 0, 24)
-emailBox.PlaceholderText = "you@example.com"
-emailBox.TextSize = 12
-emailBox.ClearTextOnFocus = false
-emailBox.Text = ""
-emailBox.Parent = accountTab
-textInputRecipe.Bind(emailBox, {})
-
-local passwordLabel = label(accountTab, "PasswordLabel", UDim2.new(0, 16, 0, 84), UDim2.new(0, 70, 0, 20), 12, nil)
-passwordLabel.Text = "Password:"
-textRecipe.Bind(passwordLabel, { tone = "secondary" })
-
-local passwordBox = Instance.new("TextBox")
-passwordBox.Name = "Password"
-passwordBox.Position = UDim2.new(0, 90, 0, 82)
-passwordBox.Size = UDim2.new(1, -106, 0, 24)
-passwordBox.PlaceholderText = "Password"
-passwordBox.TextSize = 12
-passwordBox.ClearTextOnFocus = false
-passwordBox.Text = ""
-passwordBox.Parent = accountTab
-textInputRecipe.Bind(passwordBox, {})
-
-local signInError = label(accountTab, "SignInError", UDim2.new(0, 16, 0, 152), UDim2.new(1, -32, 0, 40), 11, nil)
-signInError.Text = ""
-signInError.TextWrapped = true
-signInError.TextYAlignment = Enum.TextYAlignment.Top
-textRecipe.Bind(signInError, { tone = "error" })
-
-local function setSignInFormVisible(visible: boolean)
-	emailLabel.Visible = visible
-	emailBox.Visible = visible
-	passwordLabel.Visible = visible
-	passwordBox.Visible = visible
-	signInButton.Visible = visible
-	signInError.Visible = visible
-end
-
--- BOTH BUTTONS NEED AN ACTIVE VIDE SCOPE TO CONSTRUCT AT ALL (milestone 30
--- sprint 7, the same requirement `libraryRowRoots`'s own comment names in
--- detail for sprint 5): `Aether.Pressable` calls `vide.cleanup
--- (machine.Destroy)` internally, which errors ("cannot cleanup outside a
--- stable or reactive scope") with no active scope.
---
--- UNLIKE LIBRARY'S ROWS, NEITHER BUTTON IS EVER DESTROYED OR REBUILT.
--- Confirmed by reading every place this file touches `signOutButton`/
--- `signInButton`: `refreshAccount` below only ever flips `.Visible`, and
--- nothing anywhere calls `:Destroy()` on either one. A single `vide.root`
--- here, whose own destructor is simply never called, is enough -- the
--- dashboard window itself owns this whole panel's lifetime, and there is
--- no rebuild path (no `library.OnChange`-shaped signal for account state)
--- that would need `libraryRowRoots`-style per-instance tracking to avoid
--- leaking a stale `PointerRouter` registration.
+-- Neither button is ever rebuilt, so one scope whose destructor never runs
+-- is enough: the window owns this panel's lifetime.
 vide.root(function()
-	-- CLICK HANDLING IS `OnActivated` NOW, NOT `.Activated:Connect` --
-	-- `Aether.Pressable` is a Frame, not a `TextButton`; it has no
-	-- `.Activated` signal of its own. Behavior is otherwise verbatim.
-	signOutButton = Aether.Pressable({
-		Parent = accountTab,
-		Name = "SignOut",
-		Position = UDim2.new(0, 16, 0, 84),
-		Size = UDim2.new(0, 96, 0, 28),
-		BackgroundTransparency = 0,
-		OnActivated = function()
-			account.SignOut()
-			refreshAccount()
-		end,
-	})
-	local signOutLabel = Instance.new("TextLabel")
-	signOutLabel.Name = "Label"
-	signOutLabel.Size = UDim2.fromScale(1, 1)
-	signOutLabel.BackgroundTransparency = 1
-	signOutLabel.TextSize = 12
-	signOutLabel.Text = "Sign out"
-	signOutLabel.Parent = signOutButton
-	buttonRecipe.Bind(signOutButton, { tone = "danger" })
-	buttonRecipe.Bind(signOutLabel, { tone = "danger" })
+	signOutButton = actionButton(sessionActions, "SignOut", 1, "Sign out", "danger", NARROW, function()
+		account.SignOut()
+		refreshAccount()
+	end)
 
-	signInButton = Aether.Pressable({
-		Parent = accountTab,
-		Name = "SignIn",
-		Position = UDim2.new(0, 16, 0, 116),
-		Size = UDim2.new(0, 96, 0, 28),
-		BackgroundTransparency = 0,
-		OnActivated = function()
-			if signInInFlight then
-				return
+	signInButton, signInLabel = actionButton(signInActions, "SignIn", 1, "Sign in", "default", 112, function()
+		if signInInFlight then
+			return
+		end
+		local email = emailBox.Text
+		local password = passwordBox.Text
+		if email == "" or password == "" then
+			setMessage(signInError, "Enter an email and password")
+			return
+		end
+
+		signInInFlight = true
+		signInLabel.Text = "Signing in..."
+		setMessage(signInError, "")
+
+		account.SignIn(email, password, function(result)
+			signInInFlight = false
+			signInLabel.Text = "Sign in"
+			if result.ok then
+				passwordBox.Text = ""
+				refreshAccount()
+			else
+				setMessage(signInError, result.error)
 			end
-			local email = emailBox.Text
-			local password = passwordBox.Text
-			if email == "" or password == "" then
-				signInError.Text = "Enter an email and password"
-				return
-			end
-
-			signInInFlight = true
-			signInLabel.Text = "Signing in..."
-			signInError.Text = ""
-
-			account.SignIn(email, password, function(result)
-				signInInFlight = false
-				signInLabel.Text = "Sign in"
-				if result.ok then
-					passwordBox.Text = ""
-					refreshAccount()
-				else
-					signInError.Text = result.error
-				end
-			end)
-		end,
-	})
-	signInLabel = Instance.new("TextLabel")
-	signInLabel.Name = "Label"
-	signInLabel.Size = UDim2.fromScale(1, 1)
-	signInLabel.BackgroundTransparency = 1
-	signInLabel.TextSize = 12
-	signInLabel.Text = "Sign in"
-	signInLabel.Parent = signInButton
-	buttonRecipe.Bind(signInButton, { tone = "default" })
-	buttonRecipe.Bind(signInLabel, { tone = "default" })
+		end)
+	end)
 end)
 
 refreshAccount = function()
-	local session = account.Whoami()
+	local session = account.Whoami() :: Session?
+	local signedIn = session ~= nil
+
+	profileSection.Visible = signedIn
+	sessionSection.Visible = signedIn
+	accountStatus.Visible = signedIn
+	signOutButton.Visible = signedIn
+
+	signInSection.Visible = not signedIn
+	emailLabel.Visible = not signedIn
+	emailBox.Visible = not signedIn
+	passwordLabel.Visible = not signedIn
+	passwordBox.Visible = not signedIn
+	signInButton.Visible = not signedIn
+	if signedIn then
+		setMessage(signInError, "")
+	end
+
 	if session then
+		accountSubtitle.Text = "Your Dew account on this machine"
 		accountStatus.Text = `Signed in as {session.email}`
-		accountStatus.Visible = true
-		signOutButton.Visible = true
-		setSignInFormVisible(false)
+		profileEmail.Text = session.email
+		profileUserId.Text = session.userId or ""
+		local total, running = libraryCounts(library.List() :: { LibraryEntry })
+		profileLibrary.Text = `{total} applets, {running} running`
+		whoPrimary.Text = session.email
+		whoSecondary.Text = "Signed in"
+		textRecipe.Bind(whoSecondary, { tone = "secondary" })
+		whoInitial.Text = string.upper(string.sub(session.email, 1, 1))
 	else
-		accountStatus.Visible = false
-		signOutButton.Visible = false
-		setSignInFormVisible(true)
+		accountSubtitle.Text = "Not signed in"
+		whoPrimary.Text = "Not signed in"
+		whoSecondary.Text = "Sign in"
+		textRecipe.Bind(whoSecondary, { tone = "accent" })
+		whoInitial.Text = ""
 	end
 end
 
+--------------------------------------------------------------------------
+-- REFRESH, AND THE FIRST LOAD.
+--------------------------------------------------------------------------
+
+vide.root(function()
+	actionButton(libraryHeader, "Refresh", 2, "Refresh", "default", NARROW, refreshLibrary)
+	actionButton(storeHeader, "Refresh", 2, "Refresh", "default", NARROW, function()
+		discover("Refreshing...")
+	end)
+end)
+
 refreshAccount()
-
---------------------------------------------------------------------------
--- INITIAL STATE, for the tab that opens active by default.
---------------------------------------------------------------------------
-
+discover("Loading...")
 refreshLibrary()

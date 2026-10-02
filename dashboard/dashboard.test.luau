@@ -1,85 +1,39 @@
 --!strict
 --!tier math
 --[=[
-	Milestone 30 sprint 9's own answer to Open Question 3.
+	The dashboard, driven through the real tree with real pointer clicks.
 
-	WHAT THIS FILE COVERS, and how, each confirmed live rather than assumed:
+	WHAT THIS FILE COVERS:
 
-	1. Tab switching (Library <-> Store <-> Account) -- real `DewTest.Pointer`
-	   clicks on the real tab buttons, asserting each content Frame's own
-	   `.Visible`.
-	2. The Library panel's row rendering against a FAKE `library.List()` --
-	   the row's own Name/Description labels read back off the real tree.
-	3. Toggle calling the fake's own `SetEnabled` with the right `(id,
-	   enabled)` pair, read back off what the fake itself recorded, not real
-	   machine state.
-	4. The Uninstall confirmation `Aether.Dialog`, driven the same way
-	   `dialog-demo.test.luau` drives Dialog A/B: a real click opens it
-	   (`ScreenStack.IsOpen`, not `.Visible` -- the same reasoning that
-	   file's own header already gives for why `.Visible` lags the exit
-	   fade). Cancel, on one fake entry ("sample-applet"), closes it without
-	   calling the fake's `Uninstall`; Confirm, on a SEPARATE fake entry
-	   ("confirm-applet"), calls the fake's `Uninstall` with the right
-	   `entry.id` and the row disappears from the rebuilt list. Two entries,
-	   not one reused for both, because of a real characteristic of
-	   `dashboard.luau` this investigation surfaced along the way: every
-	   Library rebuild (a Toggle click, any `library.OnChange`) leaves the
-	   PREVIOUS row's own Uninstall dialog Frame behind, invisible and
-	   unregistered but never destroyed, parented under `body` forever --
-	   see `findDialog`'s own comment below for the full chain of reasoning
-	   and why this test-writing sprint reports it rather than fixing it.
-	5. The sign-in form's visibility toggle: signed-out shows the form
-	   (stubbed `Whoami` returning `nil`), a stubbed `SignIn` flipping to a
-	   session flips the chrome to signed-in, matching `refreshAccount`'s own
-	   two-state shape.
+	1. Navigation: each sidebar item shows its section, and the account card
+	   at the sidebar's foot opens Account.
+	2. Library against a FAKE `library.List()`: rows, the sidebar count, the
+	   Running and Stopped filters, Refresh, Toggle calling `SetEnabled` with
+	   the right `(id, enabled)` pair, and the Uninstall confirmation
+	   `Aether.Dialog` (Cancel leaves the applet, Confirm uninstalls it and
+	   the row goes). Dialog state is read through `ScreenStack.IsOpen`, not
+	   `.Visible`, which lags the exit fade.
+	3. Store against a fake `Discover`/`Install`: a package's row, Install
+	   calling the fake with the right package, and Refresh discovering again.
+	4. Account: the sign-in form while signed out, signing in and out, and
+	   the account card following the session.
+	5. Fit: at four window widths, in every section and both account states,
+	   every visible element lies inside its parent and every piece of text
+	   that does not truncate fits its box.
 
-	HOW THE FAKES GET IN FRONT OF `dashboard.luau`'S OWN TOP-LEVEL
-	`assert(dew.Marketplace, ...)` etc: `install_test_surface`
-	(`host/src/main.rs`), confirmed by reading it directly, sets `desktop`
-	(a FIXED, real capability set -- Widget/Window/Overlay/Popover/Storage/
-	Clipboard, real enough that `desktop.Window` below is the same handle
-	`DewTest.Root` reads back) and `DewTest` as globals, but never touches a
-	`dew` global at all -- `dew_subtable` (`capabilities.rs`) only creates one
-	lazily, from inside a `Permission::Library`/`Marketplace`/`Auth` arm
-	`install_test_surface`'s own fixed grant list never reaches. `dew` is
-	therefore simply nil under `dew test` for this suite, with nothing to
-	shadow -- this file sets it itself, as a plain global, before its own
-	`require("./dashboard")` below, and mlua's shared-globals `require`
-	(confirmed by reading `crates/runtime/src/modules.rs`: modules load into
-	the SAME Lua state's global table, there is no per-script environment
-	the way real Roblox gives every script its own) makes that assignment
-	visible to `dashboard.luau`'s own top-level `assert`s the instant they
-	run.
+	HOW THE FAKES GET IN: `dew test` gives this suite `desktop` and `DewTest`
+	but no `dew` global, so this file sets one before requiring the
+	dashboard. Modules share one global table here, so the dashboard's own
+	top-level `assert(dew.Library, ...)` sees it.
 
-	WHAT THIS FILE DOES NOT COVER, AND WHY -- open honestly, not silently
-	shipped as full coverage:
+	WHAT THIS FILE DOES NOT COVER:
 
-	- The Store panel's real `dew.Marketplace.Discover`/`Install` against a
-	  real marketplace are exercised here only against this file's OWN fake
-	  (canned `Discover`/`Install` results), the same as Library/Account --
-	  this proves the DASHBOARD's wiring (does clicking Install call
-	  `marketplace.Install` with the right package, does a successful
-	  install refresh Library), not the real network-backed `platform`
-	  functions behind it, which sprint 6/7's own investigation already
-	  found call real HTTP endpoints with no injectable seam.
-	- No REAL `dew.Library`/`dew.Marketplace`/`dew.Account` call is ever
-	  exercised by this file, and it does not attempt to be: `capabilities.rs`
-	  wires `Permission::Library`'s `List` directly to `crate::library::list()`
-	  (real `installed.json`, real coordinator state) with no seam to
-	  substitute a fixture, and `Account.SignIn`/`Marketplace.Discover`/
-	  `Install` all call real, network-backed `platform` functions
-	  (confirmed independently by milestone 30's sprints 6-8, and reconfirmed
-	  here by reading `capabilities.rs` directly before writing this file).
-	  A host-side seam that would let `dew test` substitute a fixture store
-	  for `crate::library::list()`/the real coordinator is a genuine,
-	  separate architectural change -- not attempted here, see this sprint's
-	  own report for why.
-	- Keyboard/gamepad selection through the tab bar's `SelectionRouter`
-	  wiring is not driven here -- only pointer clicks, the same scope
-	  `dialog-demo.test.luau`'s own suite keeps.
-	- The password field's known lack of masking (named in `dashboard.luau`'s
-	  own header) is a pre-existing, still-open gap this suite does not
-	  re-litigate.
+	- The real `dew.Library`, `dew.Marketplace` and `dew.Account`. They read
+	  real `installed.json` and coordinator state, or call the network, with
+	  no seam for a fixture. This suite proves the dashboard's wiring only.
+	- Keyboard and gamepad selection through the sidebar's `SelectionRouter`
+	  wiring; only pointer clicks are driven.
+	- The password field is not masked (see the dashboard's Account section).
 
 		cargo run -- test dashboard
 ]=]
@@ -88,28 +42,14 @@ local T = require("@testkit")
 local ScreenStack = require("./roblox_packages/aether").ScreenStack
 
 --------------------------------------------------------------------------
--- FAKES. Every one of these is in-memory, constructed by this test file
--- alone -- nothing here reaches `crate::library::list()`, real
--- `installed.json`, or a real network call. `dashboard.luau` never knows
--- the difference: it only ever sees a `dew.Library`/`dew.Marketplace`/
--- `dew.Account` shaped table, exactly like the real `desktop` table
--- `capabilities.rs` hands a real applet.
+-- FAKES. In memory, built by this file alone.
 --------------------------------------------------------------------------
 
 type LibraryEntry = { id: string, name: string, description: string, enabled: boolean, running: boolean }
 
--- TWO ENTRIES, DELIBERATELY -- "sample-applet" carries the render/Toggle/
--- Cancel scenarios, "confirm-applet" is reserved for the Confirm scenario
--- alone. Not for reactivity reasons -- see `findDialog`'s own comment below
--- for the real one, found live while writing this suite: every Library
--- rebuild leaves the previous row's own Uninstall dialog Frame behind,
--- un-destroyed, so a single entry reused across every dialog test would
--- accumulate several same-named "UninstallConfirm" Frames for THAT one
--- entry and make "which one is current" ambiguous for no reason beyond this
--- suite's own convenience. Two entries keep each scenario's own dialog
--- lookup unambiguous by CONTENT (`findDialog`'s own Message-text match)
--- without relying on find-the-last-one order for entries that also share a
--- name.
+-- TWO ENTRIES, so the Cancel scenario and the Confirm scenario each open a
+-- dialog no other test has touched, and each dialog is told apart by the
+-- name in its message.
 local libraryEntries: { LibraryEntry } = {
 	{ id = "sample-applet", name = "Sample Applet", description = "A fake entry for this test", enabled = true, running = false },
 	{ id = "confirm-applet", name = "Confirm Applet", description = "Uninstalled via Confirm, once, in this suite", enabled = true, running = false },
@@ -121,12 +61,11 @@ local recorded = {
 	setEnabled = {} :: { { id: string, enabled: boolean } },
 	uninstall = {} :: { string },
 	installed = {} :: { { owner: string, id: string } },
+	discovered = 0,
 }
 
--- `library.Uninstall`/`SetEnabled` FIRE `OnChange` SYNCHRONOUSLY, matching
--- `dashboard.luau`'s own comment on `buildLibraryRow`'s Confirm handler
--- ("library.Uninstall fires library.OnChange SYNCHRONOUSLY") -- this fake
--- mirrors that documented real contract, not an arbitrary choice of its own.
+-- `SetEnabled` and `Uninstall` fire `OnChange` synchronously, as the real
+-- ones do.
 local fakeLibrary = {
 	List = function(): { LibraryEntry }
 		local copy = {}
@@ -165,9 +104,14 @@ local fakeLibrary = {
 	end,
 }
 
+local storePackages = {
+	{ ownerUserId = "3f9c2a71-8d4e-4b0a-9e1f-6c2d7a5b8e03", appletId = "store-applet", uploadedAt = "2026-09-28" },
+}
+
 local fakeMarketplace = {
 	Discover = function(callback: (any) -> ())
-		callback({ ok = true, packages = {} })
+		recorded.discovered += 1
+		callback({ ok = true, packages = storePackages })
 	end,
 	Install = function(owner: string, id: string, callback: (any) -> ())
 		table.insert(recorded.installed, { owner = owner, id = id })
@@ -175,7 +119,7 @@ local fakeMarketplace = {
 	end,
 }
 
-local session: { email: string }? = nil
+local session: { email: string, userId: string }? = nil
 
 local fakeAccount = {
 	Whoami = function()
@@ -185,14 +129,12 @@ local fakeAccount = {
 		session = nil
 	end,
 	SignIn = function(email: string, _password: string, callback: (any) -> ())
-		session = { email = email }
+		session = { email = email, userId = "9e4b6c20-7f31-4d8a-b5e6-2a1c0f93d7e4" }
 		callback({ ok = true })
 	end,
 }
 
--- SET BEFORE `require("./dashboard")` BELOW -- see this file's own header
--- for why a plain global assignment here is what `dashboard.luau`'s own
--- top-level `assert(dew.Marketplace, ...)` etc. actually see.
+-- Set before `require("./dashboard")`: see this file's header.
 dew = ({
 	Marketplace = fakeMarketplace,
 	Library = fakeLibrary,
@@ -205,8 +147,7 @@ local root = (DewTest :: any).Root
 local pointer = (DewTest :: any).Pointer
 local harness = (DewTest :: any)
 
---- The first descendant named `name`, depth-first -- the same helper
---- `dialog-demo.test.luau` already proves out.
+--- The first descendant named `name`, depth-first.
 local function find(from: any, name: string): any
 	for _, child in ipairs(from:GetChildren()) do
 		if child.Name == name then
@@ -220,13 +161,7 @@ local function find(from: any, name: string): any
 	return nil
 end
 
---- Every descendant named `name`, depth-first -- unlike `find` above, does
---- not stop at the first match. Needed once more than one Library row's own
---- `Aether.Dialog` exists at once: both share the literal `Name =
---- "UninstallConfirm"`/`"Cancel"`/`"Confirm"`, so `find(root, "Confirm")`
---- alone cannot tell one row's dialog from another's -- it would silently
---- return whichever comes first in tree order, found live the first time
---- this suite ran two Library entries side by side.
+--- Every descendant named `name`, depth-first.
 local function findAll(from: any, name: string, results: { any }?): { any }
 	results = results or {}
 	for _, child in ipairs(from:GetChildren()) do
@@ -249,8 +184,17 @@ local function clickCenter(element: any)
 	click(position.X + size.X / 2, position.Y + size.Y / 2)
 end
 
+local HEIGHT = 560
+local width = 720
+
 local function settle()
-	harness.Settle({ width = 420, height = 560 })
+	harness.Settle({ width = width, height = HEIGHT })
+end
+
+--- Settles, then clicks: layout has to have run before a click can land.
+local function press(element: any)
+	settle()
+	clickCenter(element)
 end
 
 local function libraryTab(): any
@@ -265,45 +209,61 @@ local function accountTab(): any
 	return find(root, "AccountTab")
 end
 
+local function sidebar(): any
+	return find(root, "Sidebar")
+end
+
 --------------------------------------------------------------------------
--- TAB SWITCHING
+-- NAVIGATION
 --------------------------------------------------------------------------
 
 local function testLibraryTabIsActiveInitially()
 	settle()
-	assert(libraryTab().Visible, "Library is the dashboard's own InitialActive tab")
+	assert(libraryTab().Visible, "Library is the dashboard's own initial section")
 	assert(not storeTab().Visible, "Store should not be visible while Library is active")
 	assert(not accountTab().Visible, "Account should not be visible while Library is active")
 end
 
 local function testClickingStoreTabSwitchesVisibility()
-	settle()
-	clickCenter(find(root, "TabStore"))
+	press(find(root, "TabStore"))
 	assert(storeTab().Visible, "clicking the Store tab should show StoreTab")
 	assert(not libraryTab().Visible, "switching to Store should hide LibraryTab")
 end
 
 local function testClickingAccountTabSwitchesVisibility()
-	settle()
-	clickCenter(find(root, "TabAccount"))
+	press(find(root, "TabAccount"))
 	assert(accountTab().Visible, "clicking the Account tab should show AccountTab")
 	assert(not storeTab().Visible, "switching to Account should hide StoreTab")
 end
 
 local function testClickingLibraryTabReturnsToLibrary()
-	settle()
-	clickCenter(find(root, "TabLibrary"))
+	press(find(root, "TabLibrary"))
 	assert(libraryTab().Visible, "clicking the Library tab should show LibraryTab again")
 	assert(not accountTab().Visible, "switching back to Library should hide AccountTab")
 end
 
+local function testTheAccountCardOpensAccount()
+	press(find(root, "TabLibrary"))
+	press(find(sidebar(), "Who"))
+	assert(accountTab().Visible, "pressing the account card should show AccountTab")
+	assert(not libraryTab().Visible, "pressing the account card should hide LibraryTab")
+	press(find(root, "TabLibrary"))
+end
+
+local function testSidebarCountsFollowTheData()
+	settle()
+	local libraryCount = find(find(root, "TabLibrary"), "Count")
+	local storeCount = find(find(root, "TabStore"), "Count")
+	assert(libraryCount.Visible and libraryCount.Text == tostring(#libraryEntries), "Library's count is the installed total")
+	assert(storeCount.Visible and storeCount.Text == tostring(#storePackages), "Store's count is what Discover returned")
+	assert(find(sidebar(), "Primary").Text == "Not signed in", "the account card says nobody is signed in")
+end
+
 --------------------------------------------------------------------------
--- LIBRARY: rendering against the fake, Toggle wiring, Uninstall's Dialog
+-- LIBRARY
 --------------------------------------------------------------------------
 
---- The Library row whose own `Name` label reads `entryName` -- depth-first
---- `find` alone is not enough once more than one row exists (both share the
---- Name "Row"), so this looks inside each one for its label instead.
+--- The Library row whose `Name` label reads `entryName`.
 local function findRow(entryName: string): any
 	local list = find(libraryTab(), "List")
 	if not list then
@@ -320,82 +280,81 @@ local function findRow(entryName: string): any
 	return nil
 end
 
---- The CURRENT Uninstall confirmation dialog whose own Message names
---- `entryName` -- the LAST such match, not the first. Two things found live
---- while writing this suite, together, are why: (1) `find`/`findAll` cannot
---- tell two rows' dialogs apart on name alone, since both share the literal
---- `Name = "UninstallConfirm"`; and (2) `buildLibraryRow`'s own Dialog Frame
---- is parented to `body` (see `dashboard.luau`'s own comment on
---- `uninstallDialogFrame.Parent = body`, for why it has to cover the whole
---- window rather than just one row) and is destroyed ONLY by the Confirm
---- path's own explicit `uninstallDialogFrame:Destroy()` -- an ordinary
---- rebuild (Toggle, or any `library.OnChange`) calls `clearLibraryRows`,
---- which tears down each row's own `vide.root` scope (unregistering that
---- dialog's `ScreenStack`/`TransitionOrchestrator` state) but never destroys
---- the dialog FRAME itself, since it was never parented under the row that
---- scope owns. Every rebuild therefore leaves the PREVIOUS dialog Frame
---- behind as an invisible, unregistered zombie under `body`, and
---- `buildLibraryRow` parents a brand new one alongside it -- confirmed
---- directly here (this suite's own Toggle test, upstream, triggers exactly
---- one such rebuild, and this function found FOUR `UninstallConfirm` frames
---- in the tree by the time this test ran, two per entry, only the LAST of
---- each pair still live). This is a real characteristic of the shipped
---- dashboard this investigation surfaced, not a defect this test-writing
---- sprint fixes -- see this sprint's own report. Picking the last match is
---- this suite's own honest accommodation of it, not a workaround for a bug
---- in this file.
+local function rowCount(listOwner: any): number
+	local n = 0
+	for _, child in ipairs(find(listOwner, "List"):GetChildren()) do
+		if child.Name == "Row" then
+			n += 1
+		end
+	end
+	return n
+end
+
+--- The Uninstall confirmation dialog whose message names `entryName`.
 local function findDialog(entryName: string): any
-	local match: any = nil
 	for _, dialog in ipairs(findAll(root, "UninstallConfirm")) do
 		local message = find(dialog, "Message")
 		if message and string.find(message.Text, entryName, 1, true) then
-			match = dialog
+			return dialog
 		end
 	end
-	return match
+	return nil
 end
 
 local function testLibraryRowRendersFakeListData()
-	settle()
-	clickCenter(find(root, "TabLibrary"))
+	press(find(root, "TabLibrary"))
 	local row = findRow("Sample Applet")
-	assert(row ~= nil, "buildLibraryRow should have drawn a row for the fake's 'Sample Applet' entry")
+	assert(row ~= nil, "a row should be drawn for the fake's 'Sample Applet' entry")
 	assert(
 		find(row, "Description").Text == "A fake entry for this test",
 		"the row's own Description label should read the fake entry's description"
 	)
+	assert(find(row, "Detail").Text == "sample-applet", "the row's Detail line should read the entry's id")
 end
 
 local function testToggleCallsFakeSetEnabledWithTheRightArguments()
-	settle()
-	clickCenter(find(root, "TabLibrary"))
+	press(find(root, "TabLibrary"))
 	local before = #recorded.setEnabled
-	clickCenter(find(findRow("Sample Applet"), "Toggle"))
+	press(find(findRow("Sample Applet"), "Toggle"))
 	assert(#recorded.setEnabled == before + 1, "clicking Toggle should call library.SetEnabled exactly once")
 	local call = recorded.setEnabled[#recorded.setEnabled]
 	assert(call.id == "sample-applet", "SetEnabled should be called with this row's own entry id")
 	assert(call.enabled == true, "the entry started not-running, so Toggle should ask to enable it")
+	assert(find(findRow("Sample Applet"), "Toggle").Label.Text == "Disable", "a running applet's Toggle reads Disable")
+end
+
+local function testARebuildLeavesOneDialogPerRow()
+	-- The Toggle above rebuilt every row. Each row owns one dialog, and the
+	-- rebuild destroys the old ones.
+	local dialogs = #findAll(root, "UninstallConfirm")
+	assert(dialogs == rowCount(libraryTab()), `one dialog per row after a rebuild, found {dialogs}`)
+end
+
+local function testTheFiltersShowRunningAndStoppedRows()
+	press(find(root, "TabLibrary"))
+	press(find(libraryTab(), "FilterRunning"))
+	assert(findRow("Sample Applet") ~= nil, "Running shows the running applet")
+	assert(findRow("Confirm Applet") == nil, "Running hides the stopped applet")
+	assert(find(libraryTab(), "FilterRunning").Text == "Running 1", "the Running chip counts running applets")
+
+	press(find(libraryTab(), "FilterStopped"))
+	assert(findRow("Sample Applet") == nil, "Stopped hides the running applet")
+	assert(findRow("Confirm Applet") ~= nil, "Stopped shows the stopped applet")
+
+	press(find(libraryTab(), "FilterAll"))
+	assert(findRow("Sample Applet") ~= nil and findRow("Confirm Applet") ~= nil, "All shows both")
 end
 
 local function testUninstallOpensDialogAndCancelDoesNotUninstall()
-	settle()
-	clickCenter(find(root, "TabLibrary"))
+	press(find(root, "TabLibrary"))
 	local before = #recorded.uninstall
-	clickCenter(find(findRow("Sample Applet"), "Uninstall"))
+	press(find(findRow("Sample Applet"), "Uninstall"))
 	assert(ScreenStack.IsOpen("uninstall-sample-applet")(), "clicking Uninstall should open the confirmation dialog")
 	assert(#recorded.uninstall == before, "opening the dialog must not call library.Uninstall by itself")
 
-	-- SETTLE AGAIN, NOW THAT THE DIALOG IS OPEN: `DewTest.Settle` only
-	-- computes layout for what is CURRENTLY visible (`commit_geometry`), and
-	-- the Cancel/Confirm row was invisible during the top-of-test `settle()`
-	-- above (`Dialog.luau`'s own content only becomes part of a laid-out,
-	-- visible tree once `Open()` runs). Clicking before this second settle
-	-- hits stale (0, 0)-sized geometry and can land on the wrong button --
-	-- found live the first time this test was written, the same
-	-- "layout has to have run before a test can ask where anything is"
-	-- requirement `install_test_surface`'s own `Settle` comment names.
-	settle()
-	clickCenter(find(findDialog("Sample Applet"), "Cancel"))
+	-- `press` settles again first: the dialog's buttons only have geometry
+	-- once it is open.
+	press(find(findDialog("Sample Applet"), "Cancel"))
 	assert(
 		not ScreenStack.IsOpen("uninstall-sample-applet")(),
 		"Cancel should close the confirmation dialog"
@@ -404,47 +363,81 @@ local function testUninstallOpensDialogAndCancelDoesNotUninstall()
 	assert(findRow("Sample Applet") ~= nil, "the applet should still be in the fake's own list after Cancel")
 end
 
--- A SEPARATE ENTRY ("confirm-applet"), NOT "sample-applet" -- see
--- `libraryEntries`'s own comment above for why. Its own `Aether.Dialog` has
--- no open/close history yet, so this is a single, first-ever `Open()` ->
--- `Confirm`, the same shape the Cancel test's own single open->close already
--- proved works.
 local function testUninstallConfirmCallsFakeUninstallAndRemovesTheRow()
-	settle()
-	clickCenter(find(root, "TabLibrary"))
-	clickCenter(find(findRow("Confirm Applet"), "Uninstall"))
+	press(find(root, "TabLibrary"))
+	press(find(findRow("Confirm Applet"), "Uninstall"))
 	assert(ScreenStack.IsOpen("uninstall-confirm-applet")(), "Uninstall should open the confirmation dialog")
 
-	settle()
-	clickCenter(find(findDialog("Confirm Applet"), "Confirm"))
+	press(find(findDialog("Confirm Applet"), "Confirm"))
 	assert(#recorded.uninstall == 1, "Confirm should call library.Uninstall exactly once")
 	assert(recorded.uninstall[1] == "confirm-applet", "Confirm should call library.Uninstall with this row's own entry id")
 	assert(findRow("Confirm Applet") == nil, "the fake's own OnChange should have rebuilt the list without the uninstalled row")
 	assert(findRow("Sample Applet") ~= nil, "uninstalling one entry should not touch the other")
+	assert(findDialog("Confirm Applet") == nil, "the confirmed dialog is gone")
+end
+
+local function testLibraryRefreshRebuildsFromList()
+	press(find(root, "TabLibrary"))
+	-- Added behind the dashboard's back: no OnChange fires.
+	table.insert(libraryEntries, { id = "late-applet", name = "Late Applet", description = "", enabled = true, running = false })
+	assert(findRow("Late Applet") == nil, "nothing has told the dashboard yet")
+	press(find(find(libraryTab(), "Header"), "Refresh"))
+	local row = findRow("Late Applet")
+	assert(row ~= nil, "Refresh should read List again and draw the new entry")
+	assert(find(row, "Description").Text == "late-applet", "an entry with no description shows its id")
+	assert(find(find(root, "TabLibrary"), "Count").Text == tostring(#libraryEntries), "Refresh updates the count")
 end
 
 --------------------------------------------------------------------------
--- ACCOUNT: sign-in form visibility against a stubbed Whoami/SignIn
+-- STORE
+--------------------------------------------------------------------------
+
+local function testStoreRowInstallsThroughTheFake()
+	press(find(root, "TabStore"))
+	local row = find(find(storeTab(), "List"), "Row")
+	assert(row ~= nil, "Discover's package should have a row")
+	assert(find(row, "Name").Text == "store-applet", "the row is named by its applet id")
+	assert(
+		find(row, "Detail").Text == "@3f9c2a71-8d4e-4b0a-9e1f-6c2d7a5b8e03/store-applet",
+		"the Detail line is the install handle"
+	)
+
+	press(find(row, "Install"))
+	local call = recorded.installed[#recorded.installed]
+	assert(call ~= nil, "Install should call marketplace.Install")
+	assert(call.owner == storePackages[1].ownerUserId and call.id == "store-applet", "Install passes this row's package")
+	assert(find(storeTab(), "Status").Text == "Installed 'store-applet'", "the result is reported")
+end
+
+local function testStoreRefreshDiscoversAgain()
+	press(find(root, "TabStore"))
+	local before = recorded.discovered
+	press(find(find(storeTab(), "Header"), "Refresh"))
+	assert(recorded.discovered == before + 1, "Refresh should call Discover again")
+	assert(rowCount(storeTab()) == #storePackages, "Refresh redraws one row per package")
+end
+
+--------------------------------------------------------------------------
+-- ACCOUNT
 --------------------------------------------------------------------------
 
 local function testSignedOutShowsTheSignInForm()
-	settle()
-	clickCenter(find(root, "TabAccount"))
+	press(find(root, "TabAccount"))
 	assert(find(accountTab(), "Email").Visible, "signed out should show the email field")
 	assert(find(accountTab(), "Password").Visible, "signed out should show the password field")
 	assert(find(accountTab(), "SignIn").Visible, "signed out should show the Sign in button")
 	assert(not find(accountTab(), "SignOut").Visible, "signed out should hide Sign out")
 end
 
-local function testSigningInSwitchesToSignedInChrome()
-	settle()
-	clickCenter(find(root, "TabAccount"))
-	local emailBox = find(accountTab(), "Email")
-	local passwordBox = find(accountTab(), "Password")
-	emailBox.Text = "person@example.com"
-	passwordBox.Text = "hunter2"
+local function signIn(email: string)
+	press(find(root, "TabAccount"))
+	find(accountTab(), "Email").Text = email
+	find(accountTab(), "Password").Text = "hunter2"
+	press(find(accountTab(), "SignIn"))
+end
 
-	clickCenter(find(accountTab(), "SignIn"))
+local function testSigningInSwitchesToSignedInChrome()
+	signIn("person@example.com")
 
 	assert(not find(accountTab(), "Email").Visible, "signing in should hide the email field")
 	assert(not find(accountTab(), "Password").Visible, "signing in should hide the password field")
@@ -453,17 +446,101 @@ local function testSigningInSwitchesToSignedInChrome()
 		find(accountTab(), "Status").Text == "Signed in as person@example.com",
 		"the status label should read the stubbed SignIn's own session email"
 	)
+	assert(find(sidebar(), "Primary").Text == "person@example.com", "the account card shows who is signed in")
+end
+
+local function testSigningOutReturnsToTheSignInForm()
+	press(find(root, "TabAccount"))
+	press(find(accountTab(), "SignOut"))
+	assert(session == nil, "Sign out should call account.SignOut")
+	assert(find(accountTab(), "Email").Visible, "signing out should show the email field again")
+	assert(not find(accountTab(), "SignOut").Visible, "signing out should hide Sign out")
+	assert(find(sidebar(), "Primary").Text == "Not signed in", "the account card says nobody is signed in")
+end
+
+--------------------------------------------------------------------------
+-- FIT
+--------------------------------------------------------------------------
+
+local TOLERANCE = 1
+
+--- `Parent.Child.Name` up to the root, for a readable failure.
+local function path(node: any): string
+	local names = {}
+	while node and node ~= root do
+		table.insert(names, 1, node.Name)
+		node = node.Parent
+	end
+	return table.concat(names, ".")
+end
+
+--- Every visible GuiObject under `node` that pokes outside its parent, and
+--- every visible text that neither truncates nor fits its box.
+local function misfits(node: any, problems: { string })
+	local parentIsGui = node:IsA("GuiObject")
+	local scrolls = node:IsA("ScrollingFrame")
+	for _, child in ipairs(node:GetChildren()) do
+		if child:IsA("GuiObject") and child.Visible then
+			local p, s = child.AbsolutePosition, child.AbsoluteSize
+			if parentIsGui then
+				local pp, ps = node.AbsolutePosition, node.AbsoluteSize
+				local outsideX = p.X < pp.X - TOLERANCE or p.X + s.X > pp.X + ps.X + TOLERANCE
+				-- A scrolling list's rows run below its visible box on purpose.
+				local outsideY = not scrolls and (p.Y < pp.Y - TOLERANCE or p.Y + s.Y > pp.Y + ps.Y + TOLERANCE)
+				if outsideX or outsideY then
+					table.insert(problems, `{path(child)} at {p} size {s} outside {node.Name} at {pp} size {ps}`)
+				end
+			end
+			local isText = child:IsA("TextLabel") or child:IsA("TextButton")
+			if isText and child.Text ~= "" and child.TextTruncate == Enum.TextTruncate.None and not child.TextFits then
+				table.insert(problems, `{path(child)} does not fit "{child.Text}" ({child.TextBounds} in {s})`)
+			end
+			misfits(child, problems)
+		end
+	end
+end
+
+local function assertFits(what: string)
+	settle()
+	local problems = {}
+	misfits(root, problems)
+	assert(#problems == 0, `{what} at {width}x{HEIGHT}:\n  {table.concat(problems, "\n  ")}`)
+end
+
+local function testNothingOverflowsAtAnyTestedWidth()
+	for _, w in { 420, 520, 720, 960 } do
+		width = w
+		press(find(root, "TabLibrary"))
+		assertFits("Library")
+		press(find(root, "TabStore"))
+		assertFits("Store")
+		press(find(root, "TabAccount"))
+		assertFits("Account, signed out")
+		signIn("riley.moss@example.com")
+		assertFits("Account, signed in")
+		press(find(accountTab(), "SignOut"))
+	end
+	width = 720
 end
 
 T.test("Library is the active tab initially", testLibraryTabIsActiveInitially, "math")
 T.test("clicking the Store tab switches visibility", testClickingStoreTabSwitchesVisibility, "math")
 T.test("clicking the Account tab switches visibility", testClickingAccountTabSwitchesVisibility, "math")
 T.test("clicking the Library tab returns to Library", testClickingLibraryTabReturnsToLibrary, "math")
+T.test("the account card opens Account", testTheAccountCardOpensAccount, "math")
+T.test("the sidebar counts follow the data", testSidebarCountsFollowTheData, "math")
 T.test("a Library row renders the fake's own List data", testLibraryRowRendersFakeListData, "math")
 T.test("Toggle calls the fake's own SetEnabled with the right arguments", testToggleCallsFakeSetEnabledWithTheRightArguments, "math")
+T.test("a rebuild leaves one Uninstall dialog per row", testARebuildLeavesOneDialogPerRow, "math")
+T.test("the filters show running and stopped rows", testTheFiltersShowRunningAndStoppedRows, "math")
 T.test("Uninstall opens the dialog and Cancel does not uninstall", testUninstallOpensDialogAndCancelDoesNotUninstall, "math")
 T.test("Uninstall's Confirm calls the fake's Uninstall and removes the row", testUninstallConfirmCallsFakeUninstallAndRemovesTheRow, "math")
+T.test("Library's Refresh rebuilds the rows from List", testLibraryRefreshRebuildsFromList, "math")
+T.test("a Store row installs through the fake", testStoreRowInstallsThroughTheFake, "math")
+T.test("Store's Refresh discovers again", testStoreRefreshDiscoversAgain, "math")
 T.test("signed out shows the sign-in form", testSignedOutShowsTheSignInForm, "math")
 T.test("signing in switches to signed-in chrome", testSigningInSwitchesToSignedInChrome, "math")
+T.test("signing out returns to the sign-in form", testSigningOutReturnsToTheSignInForm, "math")
+T.test("nothing overflows at any tested width", testNothingOverflowsAtAnyTestedWidth, "math")
 
 return T.run("dashboard")
