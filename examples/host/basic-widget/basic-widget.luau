@@ -23,7 +23,7 @@ local root = widget({
 	width = 260,
 	height = 120,
 	--- Corner of the screen to sit in, and how far in from it.
-	anchor = "topRight",
+	anchor = "top-right",
 	offset = { x = 24, y = 24 },
 })
 
