@@ -14,6 +14,7 @@
 
 use crate::frame::{Align, BlendMode, Delta, Gradient, Image, Node, Rect, Rgb};
 use crate::painter::Painter;
+use crate::text::{lay_out, Block, Face};
 use dew_raster::{Backend, Bitmap, Canvas, Font};
 use std::collections::HashMap;
 
@@ -22,7 +23,7 @@ pub struct RasterPainter {
     /// The face used for every run. One font for now, deliberately: the display
     /// list carries no font name yet, so pretending to select one would be a
     /// second place for text to diverge between hosts.
-    font: Option<Font>,
+    face: Option<Face<Font>>,
     /// Images already uploaded to the rasteriser, by `frame::Bitmap::id`.
     ///
     /// THE DISPLAY LIST CARRIES PIXELS AND THE RASTERISER WANTS THEM
@@ -48,7 +49,7 @@ impl RasterPainter {
     pub fn new(width: u32, height: u32, backend: Backend) -> Option<Self> {
         Some(RasterPainter {
             canvas: Canvas::new(width, height, backend)?,
-            font: None,
+            face: None,
             uploaded: HashMap::new(),
         })
     }
@@ -77,7 +78,7 @@ impl RasterPainter {
     /// Without a font, text nodes are SKIPPED rather than drawn in a substitute face — a missing glyph run is visible in a snapshot,
     /// whereas a silently substituted font looks like a rendering bug in Aether.
     pub fn with_font(mut self, font: Font) -> Self {
-        self.font = Some(font);
+        self.face = Some(Face::stand_in(font));
         self
     }
 
@@ -133,69 +134,6 @@ fn blend_code(blend: BlendMode) -> u8 {
         BlendMode::Additive => 1,
         BlendMode::Multiply => 2,
     }
-}
-
-/// Break `text` into the lines `TextWrapped` paints, against the same face
-/// `fill_text` draws with -- measurement and painting share `font.width`
-/// rather than a second guess at glyph advances, for the reason `dew_raster`
-/// gives its own layout function: two measures of the same string that can
-/// drift apart is how a wrap that fits at layout time still overflows on
-/// screen.
-///
-/// Paragraphs split on `\n` and survive as their own (possibly empty) line.
-/// Within a paragraph, words are packed greedily against `max_width`; a
-/// single word wider than `max_width` on its own is broken at character
-/// boundaries rather than left to overflow.
-fn wrap_lines(font: Font, text: &str, size: f32, max_width: f32) -> Vec<String> {
-    if max_width <= 0.0 {
-        return text.split('\n').map(str::to_string).collect();
-    }
-
-    let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
-        let before = lines.len();
-        let mut current = String::new();
-
-        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
-            let word_w = font.width(size, word).unwrap_or(0.0);
-            if word_w > max_width {
-                if !current.is_empty() {
-                    lines.push(std::mem::take(&mut current));
-                }
-                for ch in word.chars() {
-                    let candidate = format!("{current}{ch}");
-                    if current.is_empty()
-                        || font.width(size, &candidate).unwrap_or(0.0) <= max_width
-                    {
-                        current = candidate;
-                    } else {
-                        lines.push(std::mem::take(&mut current));
-                        current = ch.to_string();
-                    }
-                }
-                continue;
-            }
-
-            let candidate = if current.is_empty() {
-                word.to_string()
-            } else {
-                format!("{current} {word}")
-            };
-            if current.is_empty() || font.width(size, &candidate).unwrap_or(0.0) <= max_width {
-                current = candidate;
-            } else {
-                lines.push(std::mem::take(&mut current));
-                current = word.to_string();
-            }
-        }
-
-        // A PARAGRAPH THAT NEVER PUSHED A LINE still owes one -- an empty
-        // paragraph between two blank lines is a blank line, not nothing.
-        if !current.is_empty() || lines.len() == before {
-            lines.push(current);
-        }
-    }
-    lines
 }
 
 impl Painter for RasterPainter {
@@ -255,68 +193,58 @@ impl Painter for RasterPainter {
     }
 
     fn draw_text(&mut self, node: &Node) {
-        let (Some(font), Some(text)) = (self.font, node.text.as_deref()) else {
+        let (Some(face), Some(text)) = (self.face, node.text.as_deref()) else {
             return;
         };
         if text.is_empty() {
             return;
         }
 
-        let colour = node.text_colour.unwrap_or(Rgb(255, 255, 255));
-        let size = node.text_size;
-
-        // UNWRAPPED IS STILL THE COMMON CASE, so it keeps the single-run path
-        // rather than going through `wrap_lines` for one line every time.
-        if !node.text_wrap {
-            let width = font.width(size, text).unwrap_or(0.0);
-            let x = match node.text_align_x.unwrap_or(Align::Center) {
-                Align::Start => node.rect.x,
-                Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
-                Align::End => node.rect.x + node.rect.w - width,
-            };
-            let y = match node.text_align_y.unwrap_or(Align::Center) {
-                Align::Start => node.rect.y,
-                Align::Center => node.rect.y + (node.rect.h - size) / 2.0,
-                Align::End => node.rect.y + node.rect.h - size,
-            };
-            self.canvas
-                .fill_text(font, size, x, y, rgba(colour, node.text_alpha), text);
-            return;
-        }
-
-        // ONE LINE HEIGHT, EVERYWHERE THIS HOST TALKS ABOUT WRAPPED TEXT: 1.5x
-        // TextSize is `LAYOUT.md` section 7's rule, and `measure_wrapped` sizes
-        // the box this rect came from by the same number. Painting to a
-        // different rhythm than the box was grown by is how a wrap that
-        // measures correctly still clips or overlaps on screen.
-        let line_height = size * 1.5;
-        let lines = wrap_lines(font, text, size, node.rect.w);
-        let total_h = lines.len() as f32 * line_height;
-
-        // `fill_text` takes the TOP-LEFT and converts to a baseline itself. An
-        // earlier draft here added `font.ascent(size)` on top of that, which the
-        // ABI's own comment warns against by name — every run landed about a line
-        // too low. The rule lives in one place; this supplies a box, not a
-        // baseline.
-        let start_y = match node.text_align_y.unwrap_or(Align::Center) {
-            Align::Start => node.rect.y,
-            Align::Center => node.rect.y + (node.rect.h - total_h) / 2.0,
-            Align::End => node.rect.y + node.rect.h - total_h,
+        // THE LINES THE HOST LAID OUT, drawn where it put them. A node from a
+        // Luau display list carries none and is laid out here by the same
+        // function, in its own rect, so there is still one placement rule.
+        let computed;
+        let layout = match &node.text_layout {
+            Some(layout) => layout,
+            None => {
+                computed = lay_out(
+                    &face,
+                    &Block {
+                        text,
+                        text_size: node.text_size,
+                        content: node.rect,
+                        wrap: node.text_wrap,
+                        align_x: node.text_align_x.unwrap_or(Align::Center),
+                        align_y: node.text_align_y.unwrap_or(Align::Center),
+                        truncate: false,
+                        line_height: 1.0,
+                    },
+                );
+                match &computed {
+                    Some(layout) => layout,
+                    None => return,
+                }
+            }
         };
 
-        for (i, line) in lines.iter().enumerate() {
-            if line.is_empty() {
+        let colour = rgba(
+            node.text_colour.unwrap_or(Rgb(255, 255, 255)),
+            node.text_alpha,
+        );
+        for line in &layout.lines {
+            if line.text.is_empty() {
                 continue;
             }
-            let width = font.width(size, line).unwrap_or(0.0);
-            let x = match node.text_align_x.unwrap_or(Align::Center) {
-                Align::Start => node.rect.x,
-                Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
-                Align::End => node.rect.x + node.rect.w - width,
-            };
-            let y = start_y + i as f32 * line_height;
-            self.canvas
-                .fill_text(font, size, x, y, rgba(colour, node.text_alpha), line);
+            // `fill_text` takes the TOP-LEFT and converts to a baseline itself;
+            // `Line` already holds that top-left.
+            self.canvas.fill_text(
+                face.font,
+                layout.glyph_px,
+                line.x,
+                line.y,
+                colour,
+                &line.text,
+            );
         }
     }
 

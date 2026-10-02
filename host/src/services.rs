@@ -56,6 +56,7 @@
 //! expected to be revisited only if the standard ever does specify one.
 
 use dew_raster::Font;
+use dew_runtime::text::{self, Face};
 use mlua::prelude::*;
 use mlua::WeakLua;
 use std::collections::BTreeSet;
@@ -81,6 +82,21 @@ pub fn face() -> Option<Font> {
     })
 }
 
+/// The face every label is laid out and drawn in, as the line model takes it.
+///
+/// ONE FACE, STANDING IN FOR THE ENGINE'S DEFAULT. A new text object's
+/// `FontFace` is LegacyArial, whose line box is 1.5 x TextSize, so this face
+/// gets the Legacy em scale and keeps drawing its glyphs at TextSize, as it
+/// always has. When faces resolve per family, each brings its own numbers and
+/// this stops being the only answer.
+///
+/// Memoised like [`face`]: every label asks for it on every frame, and its
+/// metrics are a lookup in the font file.
+pub fn default_face() -> Option<Face<Font>> {
+    static DEFAULT: OnceLock<Option<Face<Font>>> = OnceLock::new();
+    *DEFAULT.get_or_init(|| face().map(Face::stand_in))
+}
+
 /// Measure a string in the face this host draws with.
 ///
 /// SYNCHRONOUS, AND THAT IS THE CONTRACT RATHER THAN AN IMPLEMENTATION DETAIL.
@@ -96,135 +112,26 @@ pub fn face() -> Option<Font> {
 /// every label in it were blank. An error is recoverable and a collapse is not:
 /// Aether's `Text.Measure` catches a failing provider and falls back to its
 /// bundled advance table, which is approximate and visible, which is right.
-/// LINE HEIGHT IS 1.5x TEXTSIZE per line, and that is a rule of the DataModel
-/// layout standard (`LAYOUT.md` section 7) rather than of the underlying font:
-/// in Studio and in conformance, a single line of text in an auto-sized element
-/// resolves to exactly 1.5 x TextSize, while raw font typographic metrics
-/// vary by font.
+///
+/// THE LINE MODEL ANSWERS, `dew_runtime::text::measure`, which is also what
+/// lays out and paints every label. A line is one effective em tall, 1.5 x
+/// TextSize in the default face (`LAYOUT.md` section 7), and the height is
+/// that times the number of lines.
 pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
-    let Some(font) = face() else {
-        return Err("this host has no font, so it cannot measure text".into());
-    };
-    let width = if text.is_empty() {
-        0.0
-    } else {
-        let mut max_w = 0.0_f32;
-        for line in text.split('\n') {
-            let w = font
-                .width(size, line)
-                .ok_or("the measuring face did not parse")?;
-            max_w = max_w.max(w);
-        }
-        max_w
-    };
-    let lines = text.split('\n').count().max(1) as f32;
-    let height = lines * size * 1.5;
-    Ok((width, height))
+    let face = default_face().ok_or("this host has no font, so it cannot measure text")?;
+    text::measure(&face, text, size, None).ok_or_else(|| "the measuring face did not parse".into())
 }
 
 /// Measure a string with word wrapping against an available width constraint.
 ///
-/// When `TextWrapped = true`, breaks at word boundaries against `max_width`,
-/// and at glyph/character boundaries when a single word exceeds `max_width`.
-/// Multi-line inputs separated by '\n' are preserved as distinct paragraphs.
-/// Total height is resolved line count * size * 1.5.
+/// Breaks at word boundaries against `max_width`, and between characters when a
+/// single word exceeds it. Paragraphs separated by '\n' stay distinct. Every
+/// line is counted: this is the size the text needs, not what a box of some
+/// height would show. A `max_width` of zero or less does not wrap.
 pub fn measure_wrapped(text: &str, size: f32, max_width: f32) -> Result<(f32, f32), String> {
-    let Some(font) = face() else {
-        return Err("this host has no font, so it cannot measure text".into());
-    };
-    if text.is_empty() {
-        return Ok((0.0, size * 1.5));
-    }
-    if max_width <= 0.0 {
-        return measure(text, size);
-    }
-
-    let mut total_lines = 0usize;
-    let mut max_observed_w = 0.0_f32;
-
-    for paragraph in text.split('\n') {
-        if paragraph.is_empty() {
-            total_lines += 1;
-            continue;
-        }
-
-        let mut current_line = String::new();
-        let words: Vec<&str> = paragraph.split(' ').collect();
-
-        for word in words {
-            if word.is_empty() {
-                continue;
-            }
-
-            let word_w = font
-                .width(size, word)
-                .ok_or("the measuring face did not parse")?;
-
-            if word_w <= max_width {
-                if current_line.is_empty() {
-                    current_line.push_str(word);
-                } else {
-                    let mut candidate = current_line.clone();
-                    candidate.push(' ');
-                    candidate.push_str(word);
-                    let cand_w = font
-                        .width(size, &candidate)
-                        .ok_or("the measuring face did not parse")?;
-                    if cand_w <= max_width {
-                        current_line = candidate;
-                    } else {
-                        let line_w = font
-                            .width(size, &current_line)
-                            .ok_or("the measuring face did not parse")?;
-                        max_observed_w = max_observed_w.max(line_w);
-                        total_lines += 1;
-                        current_line.clear();
-                        current_line.push_str(word);
-                    }
-                }
-            } else {
-                if !current_line.is_empty() {
-                    let line_w = font
-                        .width(size, &current_line)
-                        .ok_or("the measuring face did not parse")?;
-                    max_observed_w = max_observed_w.max(line_w);
-                    total_lines += 1;
-                    current_line.clear();
-                }
-
-                for ch in word.chars() {
-                    let mut candidate = current_line.clone();
-                    candidate.push(ch);
-                    let cand_w = font
-                        .width(size, &candidate)
-                        .ok_or("the measuring face did not parse")?;
-                    if cand_w <= max_width || current_line.is_empty() {
-                        current_line = candidate;
-                    } else {
-                        let line_w = font
-                            .width(size, &current_line)
-                            .ok_or("the measuring face did not parse")?;
-                        max_observed_w = max_observed_w.max(line_w);
-                        total_lines += 1;
-                        current_line.clear();
-                        current_line.push(ch);
-                    }
-                }
-            }
-        }
-
-        if !current_line.is_empty() {
-            let line_w = font
-                .width(size, &current_line)
-                .ok_or("the measuring face did not parse")?;
-            max_observed_w = max_observed_w.max(line_w);
-            total_lines += 1;
-        }
-    }
-
-    let line_count = total_lines.max(1) as f32;
-    let height = line_count * size * 1.5;
-    Ok((max_observed_w, height))
+    let face = default_face().ok_or("this host has no font, so it cannot measure text")?;
+    text::measure(&face, text, size, Some(max_width))
+        .ok_or_else(|| "the measuring face did not parse".into())
 }
 
 // -- The clock ---------------------------------------------------------------

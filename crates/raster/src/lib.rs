@@ -149,6 +149,16 @@ pub extern "C" fn ar_text_ascent(font: u32, size: f32) -> f32 {
     })
 }
 
+/// Descent for a size, in pixels below the baseline, as a positive number.
+/// Negative when the font id is unknown.
+#[no_mangle]
+pub extern "C" fn ar_text_descent(font: u32, size: f32) -> f32 {
+    with_fonts(|f| match f.layout(font, size, "") {
+        Some(run) => run.descent,
+        None => -1.0,
+    })
+}
+
 fn utf8<'a>(ptr: *const u8, len: u32) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
