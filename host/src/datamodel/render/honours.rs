@@ -128,8 +128,9 @@ fn gui_object(class: &str, property: &str) -> Honour {
     // the stroke, on the three classes that report `TextBounds`.
     if matches!(class, "TextLabel" | "TextButton" | "TextBox") {
         match property {
-            "TextTruncate" | "LineHeight" | "TextStrokeColor3" | "TextStrokeTransparency" => {
-                return Implemented
+            "LineHeight" | "TextStrokeColor3" | "TextStrokeTransparency" => return Implemented,
+            "TextTruncate" => {
+                return Partial("AtEnd is drawn with an ellipsis; SplitWord is drawn as None")
             }
             "RichText" => {
                 return Partial(
