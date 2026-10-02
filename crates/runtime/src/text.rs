@@ -1,0 +1,704 @@
+//! The text line model: which lines a string breaks into, where each one sits,
+//! and what `TextBounds` and `TextFits` read.
+//!
+//! EVERY TEXT PATH ASKS THIS MODULE. AutomaticSize and `desktop.Text.Measure`
+//! call [`measure`], TextScaled calls [`scaled_size`], and the display list
+//! carries the [`TextLayout`] that [`lay_out`] returns, which the painter draws
+//! line by line and the host reports as `TextBounds` and `TextFits`. The painter
+//! once chose its own top edge, one way for wrapped text and another for
+//! unwrapped, and a single line of text moved when `TextWrapped` changed. With
+//! one function there is no second answer to drift from the first.
+//!
+//! WHAT THE ENGINE DOES, measured in Studio at TextSize 14, 20 and 32 for three
+//! families, wrapped and unwrapped:
+//!
+//! - Every line sits in a line box one EFFECTIVE EM tall. The effective em is
+//!   TextSize times the face's em scale, which is 1.5 for the Legacy families
+//!   and 1.0 for the rest.
+//! - Wrapped and unwrapped text with the same lines place identically.
+//! - The glyphs are centred in the line box by their ascent plus descent
+//!   ([`Face::glyph_top`]).
+//! - A wrapped line that does not fit the box height is not drawn, and
+//!   `TextBounds` counts only the lines that are.
+//!
+//! THE FACE IS A PARAMETER. Which file a label draws with, its em scale and its
+//! metrics are decided by whoever resolves fonts; this module takes the answer
+//! and never looks a face up itself.
+
+use crate::frame::{Align, Rect};
+
+/// Glyph advances for one font: the only thing the model asks of a font file.
+pub trait Advance {
+    /// Width of `text` drawn with glyphs `px` pixels tall, or `None` when the
+    /// font cannot answer. `None` is a failure, never a zero width: a zero
+    /// width collapses whatever asked.
+    fn advance(&self, px: f32, text: &str) -> Option<f32>;
+}
+
+#[cfg(feature = "raster")]
+impl Advance for dew_raster::Font {
+    fn advance(&self, px: f32, text: &str) -> Option<f32> {
+        self.width(px, text)
+    }
+}
+
+/// A face, as the line model needs it.
+///
+/// `font` answers advances. The other four numbers turn a TextSize into a line
+/// box and a glyph size, and say where the glyphs sit in that box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Face<F> {
+    pub font: F,
+    /// Effective em per unit of TextSize. The line box is
+    /// `TextSize * em_scale` tall.
+    pub em_scale: f32,
+    /// Glyph size per pixel of effective em: what is handed to the rasteriser
+    /// as the size of a run.
+    pub glyph_per_em: f32,
+    /// The font's ascent per pixel of glyph size, as `fill_text` uses it to
+    /// find the baseline.
+    pub ascent: f32,
+    /// The font's descent per pixel of glyph size, positive.
+    pub descent: f32,
+}
+
+/// The em scale of the Legacy families, LegacyArial among them, which is the
+/// default `FontFace` of every new text object.
+pub const LEGACY_EM_SCALE: f32 = 1.5;
+
+impl<F> Face<F> {
+    /// Height of one line box.
+    pub fn effective_em(&self, text_size: f32) -> f32 {
+        text_size * self.em_scale
+    }
+
+    /// The size glyphs are drawn at.
+    pub fn glyph_px(&self, text_size: f32) -> f32 {
+        self.effective_em(text_size) * self.glyph_per_em
+    }
+
+    /// Where the top of a run goes, for a line box starting at `line_top`.
+    ///
+    /// THE PLACEMENT RULE, AND THE ONLY COPY OF IT: the face's ascent plus
+    /// descent is centred in the line box. The alternative fitted against the
+    /// same engine screenshots, a baseline at ascent over ascent plus descent
+    /// of the line height, is the same rule whenever the glyphs exactly fill
+    /// the box and lands up to 3 px lower when they do not.
+    ///
+    /// A TOP, NOT A BASELINE, because `fill_text` takes a top edge and adds
+    /// the ascent itself. Handing it a baseline draws every run a line low.
+    pub fn glyph_top(&self, line_top: f32, line_height: f32, glyph_px: f32) -> f32 {
+        line_top + (line_height - (self.ascent + self.descent) * glyph_px) / 2.0
+    }
+}
+
+#[cfg(feature = "raster")]
+impl Face<dew_raster::Font> {
+    /// The one face Dew draws with today, standing in for LegacyArial.
+    ///
+    /// Line boxes are the Legacy 1.5 em, as they are for the engine's default
+    /// face, and glyphs are drawn at TextSize, as this face always has been.
+    /// Font resolution replaces this per family.
+    pub fn stand_in(font: dew_raster::Font) -> Self {
+        Face {
+            font,
+            em_scale: LEGACY_EM_SCALE,
+            glyph_per_em: 1.0 / LEGACY_EM_SCALE,
+            ascent: font.ascent(1.0),
+            descent: font.descent(1.0),
+        }
+    }
+}
+
+/// What to lay out, and into what.
+#[derive(Debug, Clone, Copy)]
+pub struct Block<'a> {
+    pub text: &'a str,
+    /// The TextSize to draw at, after TextScaled.
+    pub text_size: f32,
+    /// The label's box inset by its UIPadding.
+    pub content: Rect,
+    pub wrap: bool,
+    pub align_x: Align,
+    pub align_y: Align,
+    /// `TextTruncate` is not `None`. Carried so the signature is ready for it;
+    /// nothing reads it yet.
+    pub truncate: bool,
+    /// `LineHeight`, as a multiple of the line box. Carried so the signature
+    /// is ready for it; nothing reads it yet.
+    pub line_height: f32,
+}
+
+/// One visible line, placed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Line {
+    pub text: String,
+    /// The top-left `fill_text` takes.
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+}
+
+/// A laid-out label: what is drawn, and what `TextBounds` and `TextFits` say.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextLayout {
+    /// The TextSize this was laid out at, after TextScaled.
+    pub text_size: f32,
+    /// The size every line is drawn at.
+    pub glyph_px: f32,
+    pub line_height: f32,
+    /// The lines that are drawn, top to bottom. Lines that did not fit are
+    /// not here.
+    pub lines: Vec<Line>,
+    /// `TextBounds`: the widest drawn line by the height of the drawn lines.
+    pub bounds: (f32, f32),
+    /// `TextFits`: every line drawn, and all of it inside the content box.
+    pub fits: bool,
+}
+
+/// How far a size may exceed its box and still fit. Widths and heights are
+/// sums of floats, and an AutomaticSize box is exactly as large as the text
+/// that grew it.
+const SLACK: f32 = 0.01;
+
+/// Break `text` into lines with their widths.
+///
+/// Paragraphs split on `\n`, wrapped or not. With a width, words are packed
+/// greedily against it, and a word wider than the width on its own is broken
+/// between characters rather than left to overflow.
+fn break_lines<F: Advance>(
+    font: &F,
+    text: &str,
+    px: f32,
+    max_width: Option<f32>,
+) -> Option<Vec<(String, f32)>> {
+    let Some(max_width) = max_width.filter(|w| *w > 0.0) else {
+        return text
+            .split('\n')
+            .map(|line| Some((line.to_string(), font.advance(px, line)?)))
+            .collect();
+    };
+
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let before = lines.len();
+        let mut current = String::new();
+        let mut current_w = 0.0_f32;
+
+        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
+            let word_w = font.advance(px, word)?;
+            if word_w > max_width {
+                if !current.is_empty() {
+                    lines.push((std::mem::take(&mut current), current_w));
+                }
+                for ch in word.chars() {
+                    let candidate = format!("{current}{ch}");
+                    let candidate_w = font.advance(px, &candidate)?;
+                    if current.is_empty() || candidate_w <= max_width {
+                        current = candidate;
+                        current_w = candidate_w;
+                    } else {
+                        lines.push((std::mem::take(&mut current), current_w));
+                        current = ch.to_string();
+                        current_w = font.advance(px, &current)?;
+                    }
+                }
+                continue;
+            }
+
+            if current.is_empty() {
+                current = word.to_string();
+                current_w = word_w;
+                continue;
+            }
+            let candidate = format!("{current} {word}");
+            let candidate_w = font.advance(px, &candidate)?;
+            if candidate_w <= max_width {
+                current = candidate;
+                current_w = candidate_w;
+            } else {
+                lines.push((std::mem::take(&mut current), current_w));
+                current = word.to_string();
+                current_w = word_w;
+            }
+        }
+
+        // A paragraph that never pushed a line still owes one: an empty
+        // paragraph between two newlines is a blank line, not nothing.
+        if !current.is_empty() || lines.len() == before {
+            lines.push((current, current_w));
+        }
+    }
+    Some(lines)
+}
+
+/// The size `text` takes with every line drawn: the widest line, and the
+/// height of all of them. What AutomaticSize grows a box to.
+///
+/// `wrap_width` breaks lines against a width; `None` breaks only at `\n`.
+pub fn measure<F: Advance>(
+    face: &Face<F>,
+    text: &str,
+    text_size: f32,
+    wrap_width: Option<f32>,
+) -> Option<(f32, f32)> {
+    let lines = break_lines(&face.font, text, face.glyph_px(text_size), wrap_width)?;
+    let width = lines.iter().fold(0.0_f32, |w, (_, lw)| w.max(*lw));
+    Some((width, lines.len() as f32 * face.effective_em(text_size)))
+}
+
+/// Lay a label's text out in its content box.
+pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> {
+    let line_height = face.effective_em(block.text_size);
+    let glyph_px = face.glyph_px(block.text_size);
+    let content = block.content;
+    let all = break_lines(
+        &face.font,
+        block.text,
+        glyph_px,
+        block.wrap.then_some(content.w),
+    )?;
+
+    // WRAPPED LINES THAT DO NOT FIT ARE DROPPED WHOLE, not clipped and not
+    // left to overflow. The first line always stays: a label shorter than its
+    // own line still shows it.
+    let visible = if block.wrap && line_height > 0.0 {
+        let room = ((content.h + SLACK) / line_height).floor().max(1.0) as usize;
+        all.len().min(room)
+    } else {
+        all.len()
+    };
+
+    let block_h = visible as f32 * line_height;
+    let top = match block.align_y {
+        Align::Start => content.y,
+        Align::Center => content.y + (content.h - block_h) / 2.0,
+        Align::End => content.y + content.h - block_h,
+    };
+
+    let lines: Vec<Line> = all
+        .iter()
+        .take(visible)
+        .enumerate()
+        .map(|(i, (text, width))| Line {
+            text: text.clone(),
+            x: match block.align_x {
+                Align::Start => content.x,
+                Align::Center => content.x + (content.w - width) / 2.0,
+                Align::End => content.x + content.w - width,
+            },
+            y: face.glyph_top(top + i as f32 * line_height, line_height, glyph_px),
+            width: *width,
+        })
+        .collect();
+
+    let drawn_w = lines.iter().fold(0.0_f32, |w, line| w.max(line.width));
+    let widest = all.iter().fold(0.0_f32, |w, (_, lw)| w.max(*lw));
+    let fits = visible == all.len() && widest <= content.w + SLACK && block_h <= content.h + SLACK;
+
+    Some(TextLayout {
+        text_size: block.text_size,
+        glyph_px,
+        line_height,
+        lines,
+        bounds: (drawn_w, block_h),
+        fits,
+    })
+}
+
+/// The largest TextSize at which `text` fits a `width` by `height` box: what
+/// TextScaled draws at.
+pub fn scaled_size<F: Advance>(
+    face: &Face<F>,
+    text: &str,
+    width: f32,
+    height: f32,
+    wrap: bool,
+) -> Option<f32> {
+    if !wrap {
+        // Widths and heights are linear in the size, so one measurement at
+        // size 1 answers directly.
+        let (w1, h1) = measure(face, text, 1.0, None)?;
+        let by_w = if w1 > 0.0 { width / w1 } else { f32::INFINITY };
+        let by_h = if h1 > 0.0 { height / h1 } else { f32::INFINITY };
+        return Some(by_w.min(by_h));
+    }
+
+    // Wrapping is not linear, because the breaks move with the size, so the
+    // size is searched for.
+    let mut low = 1.0_f32;
+    let mut high = (height / face.em_scale).max(1.0);
+    for _ in 0..16 {
+        let mid = (low + high) / 2.0;
+        let (w, h) = measure(face, text, mid, Some(width))?;
+        if w <= width && h <= height {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    Some(low)
+}
+
+/// `ContentText` of a label with `RichText` on: the text with its markup
+/// removed and its escapes decoded.
+///
+/// ONLY THE ENGINE'S OWN TAGS ARE MARKUP. Anything else between angle
+/// brackets is text and stays as written. `<br />` is a line break, and a
+/// comment is removed whole. This strips; it does not render, and a RichText
+/// label is still drawn with its tags.
+pub fn strip_markup(text: &str) -> String {
+    const TAGS: &[&str] = &[
+        "b",
+        "i",
+        "u",
+        "s",
+        "br",
+        "font",
+        "stroke",
+        "mark",
+        "sc",
+        "smallcaps",
+        "uc",
+        "uppercase",
+    ];
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(at) = rest.find('<') {
+        out.push_str(&rest[..at]);
+        let tail = &rest[at..];
+        if let Some(body) = tail.strip_prefix("<!--") {
+            if let Some(end) = body.find("-->") {
+                rest = &body[end + 3..];
+                continue;
+            }
+        }
+        if let Some(end) = tail.find('>') {
+            let name = tail[1..end]
+                .trim_start_matches('/')
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or("");
+            if TAGS.contains(&name) {
+                if name == "br" {
+                    out.push('\n');
+                }
+                rest = &tail[end + 1..];
+                continue;
+            }
+        }
+        out.push('<');
+        rest = &tail[1..];
+    }
+    out.push_str(rest);
+    // `&amp;` LAST, so an escaped escape decodes once and no further.
+    out.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The tags the engine reads are removed, and nothing else is.
+    #[test]
+    fn markup_is_stripped_and_text_is_kept() {
+        assert_eq!(strip_markup("<b>bold</b> plain"), "bold plain");
+        assert_eq!(
+            strip_markup(r#"<font color="rgb(255,0,0)">red</font><br/>next"#),
+            "red\nnext"
+        );
+        assert_eq!(strip_markup("a <!-- note --> b"), "a  b");
+        assert_eq!(strip_markup("1 < 2 and <x>"), "1 < 2 and <x>");
+        assert_eq!(strip_markup("&lt;b&gt; &amp;lt;"), "<b> &lt;");
+    }
+
+    /// A monospace font with no file behind it: every character is 0.6 of the
+    /// glyph size wide, so line breaks are known in advance.
+    #[derive(Debug, Clone, Copy)]
+    struct Mono;
+
+    impl Advance for Mono {
+        fn advance(&self, px: f32, text: &str) -> Option<f32> {
+            Some(text.chars().count() as f32 * 0.6 * px)
+        }
+    }
+
+    /// The faces the engine was measured with: name, whether it is drawn as a
+    /// Legacy family, and ascent, descent and cap height per em of glyph size
+    /// from the font's own tables. LegacyArial is Arimo drawn the Legacy way.
+    const FACES: [(&str, bool, f32, f32, f32); 4] = [
+        ("LegacyArial", true, 0.905, 0.212, 0.688),
+        ("Arimo", false, 0.905, 0.212, 0.688),
+        ("Builder Sans", false, 0.980, 0.280, 0.700),
+        ("Source Sans Pro", false, 0.984, 0.273, 0.660),
+    ];
+
+    fn close(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    fn face(em_scale: f32, glyph_per_em: f32, ascent: f32, descent: f32) -> Face<Mono> {
+        Face {
+            font: Mono,
+            em_scale,
+            glyph_per_em,
+            ascent,
+            descent,
+        }
+    }
+
+    fn stand_in() -> Face<Mono> {
+        face(1.5, 1.0 / 1.5, 1.079, 0.251)
+    }
+
+    fn block(text: &str, size: f32, content: Rect, wrap: bool, y: Align) -> Block<'_> {
+        Block {
+            text,
+            text_size: size,
+            content,
+            wrap,
+            align_x: Align::Start,
+            align_y: y,
+            truncate: false,
+            line_height: 1.0,
+        }
+    }
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect { x, y, w, h }
+    }
+
+    /// The single line of a wrapped label and of an unwrapped one land on the
+    /// same pixels, at every alignment and size. The painter once disagreed by
+    /// 5 px at TextSize 20, centred.
+    #[test]
+    fn wrapped_and_unwrapped_place_one_line_identically() {
+        let f = stand_in();
+        for size in [14.0, 20.0, 32.0, 48.0, 64.0] {
+            for y in [Align::Start, Align::Center, Align::End] {
+                let content = rect(10.0, 20.0, 400.0, 104.0);
+                let plain = lay_out(&f, &block("H", size, content, false, y)).unwrap();
+                let wrapped = lay_out(&f, &block("H", size, content, true, y)).unwrap();
+                assert_eq!(plain.lines, wrapped.lines, "size {size}, {y:?}");
+                assert_eq!(plain.bounds, wrapped.bounds);
+            }
+        }
+    }
+
+    /// The line box is one effective em: TextSize times the em scale, 1.5 for
+    /// the face standing in for LegacyArial and 1.0 for a modern family.
+    #[test]
+    fn a_line_is_one_effective_em_tall() {
+        let legacy = stand_in();
+        let modern = face(1.0, 1.0 / 1.26, 0.98, 0.28);
+        let roomy = rect(0.0, 0.0, 400.0, 400.0);
+        for size in [14.0, 20.0, 32.0] {
+            let l = lay_out(&legacy, &block("H", size, roomy, false, Align::Start)).unwrap();
+            let m = lay_out(&modern, &block("H", size, roomy, false, Align::Start)).unwrap();
+            assert!(close(l.bounds.1, size * 1.5));
+            assert!(close(m.bounds.1, size));
+            assert!(close(
+                measure(&legacy, "H\nH", size, None).unwrap().1,
+                size * 3.0
+            ));
+        }
+    }
+
+    /// The engine's cap centre sits within 1.5 px of the centre of its line
+    /// box, for every family measured. With the faces' own metrics, the rule
+    /// reproduces that at every size from 14 to 64 and every alignment.
+    #[test]
+    fn the_cap_centre_is_within_a_pixel_and_a_half_of_the_line_box_centre() {
+        let content = rect(0.0, 0.0, 400.0, 200.0);
+        for (name, legacy, ascent, descent, cap) in FACES {
+            // A Legacy family's glyphs are one effective em; a modern family's
+            // are scaled so that ascent plus descent fills the line.
+            let (em_scale, glyph_per_em) = if legacy {
+                (LEGACY_EM_SCALE, 1.0)
+            } else {
+                (1.0, 1.0 / (ascent + descent))
+            };
+            let f = face(em_scale, glyph_per_em, ascent, descent);
+            for size in [14.0, 20.0, 32.0, 48.0, 64.0] {
+                for y in [Align::Start, Align::Center, Align::End] {
+                    let laid = lay_out(&f, &block("H", size, content, false, y)).unwrap();
+                    let line_top = match y {
+                        Align::Start => 0.0,
+                        Align::Center => (content.h - laid.line_height) / 2.0,
+                        Align::End => content.h - laid.line_height,
+                    };
+                    let baseline = laid.lines[0].y + ascent * laid.glyph_px;
+                    let cap_centre = baseline - cap * laid.glyph_px / 2.0;
+                    let box_centre = line_top + laid.line_height / 2.0;
+                    let off = cap_centre - box_centre;
+                    assert!(
+                        off.abs() <= 1.5,
+                        "{name} at {size}, em scale {em_scale}, {y:?}: cap centre {off:+.2} px from the line box centre"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Padding is applied by the caller as the content box. Moving the content
+    /// box moves every line by exactly as much, wrapped or not.
+    #[test]
+    fn insetting_the_content_box_moves_the_lines_by_the_inset() {
+        let f = stand_in();
+        for wrap in [false, true] {
+            for y in [Align::Start, Align::Center, Align::End] {
+                let bare = rect(0.0, 0.0, 200.0, 64.0);
+                // UIPadding left 16 and top 16, right and bottom 0.
+                let padded = rect(16.0, 16.0, 184.0, 48.0);
+                let a = lay_out(&f, &block("H", 20.0, bare, wrap, y)).unwrap();
+                let b = lay_out(&f, &block("H", 20.0, padded, wrap, y)).unwrap();
+                let dy = match y {
+                    Align::Start => 16.0,
+                    Align::Center => 8.0,
+                    Align::End => 0.0,
+                };
+                assert!(close(b.lines[0].x - a.lines[0].x, 16.0));
+                assert!(close(b.lines[0].y - a.lines[0].y, dy), "{y:?}");
+            }
+        }
+    }
+
+    /// Three wrapped lines of 30 in a box 64 tall: two are drawn, the third is
+    /// not, `TextBounds` is two lines and `TextFits` is false. In a box 90
+    /// tall all three fit. Unwrapped lines are never dropped.
+    #[test]
+    fn wrapped_lines_that_do_not_fit_are_dropped() {
+        let f = stand_in();
+        // 0.6 x 20 = 12 px a character: "one two" is 84, "three four" 120.
+        let text = "one two three four five six";
+        let short = lay_out(
+            &f,
+            &block(text, 20.0, rect(0.0, 0.0, 120.0, 64.0), true, Align::Start),
+        )
+        .unwrap();
+        assert_eq!(short.lines.len(), 2);
+        assert_eq!(short.lines[0].text, "one two");
+        assert_eq!(short.lines[1].text, "three four");
+        assert!(close(short.bounds.0, 120.0) && close(short.bounds.1, 60.0));
+        assert!(!short.fits);
+
+        let tall = lay_out(
+            &f,
+            &block(text, 20.0, rect(0.0, 0.0, 120.0, 90.0), true, Align::Start),
+        )
+        .unwrap();
+        assert_eq!(tall.lines.len(), 3);
+        assert!(close(tall.bounds.1, 90.0));
+        assert!(tall.fits);
+
+        // A box shorter than one line still shows the first.
+        let tiny = lay_out(
+            &f,
+            &block(text, 20.0, rect(0.0, 0.0, 120.0, 10.0), true, Align::Start),
+        )
+        .unwrap();
+        assert_eq!(tiny.lines.len(), 1);
+        assert!(!tiny.fits);
+
+        let unwrapped = lay_out(
+            &f,
+            &block(
+                "a\nb\nc",
+                20.0,
+                rect(0.0, 0.0, 120.0, 64.0),
+                false,
+                Align::Start,
+            ),
+        )
+        .unwrap();
+        assert_eq!(unwrapped.lines.len(), 3);
+        assert!(!unwrapped.fits);
+    }
+
+    /// `TextBounds` is what is drawn: the widest drawn line, not the box, and
+    /// not the string. `TextFits` is false when the text is wider than the
+    /// box even though nothing is dropped.
+    #[test]
+    fn text_bounds_and_text_fits() {
+        let f = stand_in();
+        let fits = lay_out(
+            &f,
+            &block(
+                "Hello",
+                20.0,
+                rect(0.0, 0.0, 200.0, 64.0),
+                false,
+                Align::Center,
+            ),
+        )
+        .unwrap();
+        assert!(close(fits.bounds.0, 60.0) && close(fits.bounds.1, 30.0));
+        assert!(fits.fits);
+
+        let wide = lay_out(
+            &f,
+            &block(
+                "Hello",
+                20.0,
+                rect(0.0, 0.0, 50.0, 64.0),
+                false,
+                Align::Center,
+            ),
+        )
+        .unwrap();
+        assert!(close(wide.bounds.0, 60.0));
+        assert!(!wide.fits);
+
+        // Exactly the size AutomaticSize would grow the box to.
+        let (w, h) = measure(&f, "Hello", 20.0, None).unwrap();
+        let snug = lay_out(
+            &f,
+            &block("Hello", 20.0, rect(0.0, 0.0, w, h), false, Align::Center),
+        )
+        .unwrap();
+        assert!(snug.fits);
+        assert_eq!(snug.bounds, (w, h));
+
+        // Empty text is one empty line.
+        let empty = lay_out(
+            &f,
+            &block("", 20.0, rect(0.0, 0.0, 200.0, 64.0), false, Align::Center),
+        )
+        .unwrap();
+        assert_eq!(empty.bounds.0, 0.0);
+        assert!(close(empty.bounds.1, 30.0));
+    }
+
+    /// TextScaled grows the text until one axis is full, through the same
+    /// measurement the layout uses.
+    #[test]
+    fn scaled_size_fills_the_tighter_axis() {
+        let f = stand_in();
+        // "Hi" is 1.2 px wide and 1.5 tall per unit of TextSize.
+        assert!(close(
+            scaled_size(&f, "Hi", 120.0, 300.0, false).unwrap(),
+            100.0
+        ));
+        assert!(close(
+            scaled_size(&f, "Hi", 1200.0, 30.0, false).unwrap(),
+            20.0
+        ));
+        let wrapped = scaled_size(&f, "Hi there", 120.0, 300.0, true).unwrap();
+        let (w, h) = measure(&f, "Hi there", wrapped, Some(120.0)).unwrap();
+        assert!(w <= 120.0 && h <= 300.0);
+    }
+
+    /// The wrap breaks between words, then between characters for a word
+    /// wider than the box, and keeps blank paragraphs.
+    #[test]
+    fn lines_break_between_words_then_characters() {
+        let px = 10.0; // 6 px a character
+        let lines = break_lines(&Mono, "ab cd\n\nabcdefgh", px, Some(30.0)).unwrap();
+        let texts: Vec<&str> = lines.iter().map(|(t, _)| t.as_str()).collect();
+        assert_eq!(texts, ["ab cd", "", "abcde", "fgh"]);
+    }
+}

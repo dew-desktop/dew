@@ -23,7 +23,7 @@ use crate::{
     ar_clip_push_rounded, ar_draw_image, ar_fill_gradient, ar_fill_radial_gradient, ar_fill_rect,
     ar_fill_text, ar_font_load, ar_image_free, ar_image_size, ar_image_upload, ar_png,
     ar_stroke_rect, ar_surface_free, ar_surface_new_backend, ar_surface_resize, ar_text_ascent,
-    ar_text_line_height, ar_text_width, Surface,
+    ar_text_descent, ar_text_line_height, ar_text_width, Surface,
 };
 
 /// Which rasteriser paints.
@@ -69,6 +69,12 @@ impl Font {
     /// Distance from the top of the line box to the baseline.
     pub fn ascent(self, size: f32) -> f32 {
         ar_text_ascent(self.0, size)
+    }
+
+    /// Distance from the baseline down to the bottom of the line box, as a
+    /// positive number.
+    pub fn descent(self, size: f32) -> f32 {
+        ar_text_descent(self.0, size)
     }
 
     /// Height of one line, in pixels. `None` when the font is unknown.

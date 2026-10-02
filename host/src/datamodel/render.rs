@@ -67,6 +67,7 @@ use dew_runtime::frame::{
     Align, AlphaStop, BlendMode, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale,
     Stop, Stroke,
 };
+use dew_runtime::text::{lay_out, scaled_size, Block, TextLayout};
 use rbx_types::{Variant, Vector2};
 use std::collections::HashMap;
 
@@ -2241,6 +2242,8 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
     collected.into_iter().map(|(_, placed)| placed).collect()
 }
 
+/// The TextSize a label draws at: its own, or with TextScaled the largest that
+/// fits its content box, as the line model measures it.
 fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
     let authored_size = number(dom, id, "TextSize").unwrap_or(14.0);
     if boolean(dom, id, "TextScaled") != Some(true) {
@@ -2251,45 +2254,52 @@ fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
     let Some(text_content) = text_for(dom, id, &class) else {
         return authored_size;
     };
-    if text_content.is_empty() {
+    let content = content_box(dom, id, placed_rect);
+    if content.w <= 0.0 || content.h <= 0.0 {
         return authored_size;
     }
-
-    let (pad_l, pad_t, pad_r, pad_b) = padding_of(dom, id);
-    let box_w = (placed_rect.w - pad_l - pad_r).max(0.0);
-    let box_h = (placed_rect.h - pad_t - pad_b).max(0.0);
-    if box_w <= 0.0 || box_h <= 0.0 {
-        return authored_size;
-    }
-
     let wrapped = boolean(dom, id, "TextWrapped").unwrap_or(false);
-    if !wrapped {
-        if let Ok((w1, _)) = crate::services::measure(&text_content, 1.0) {
-            let lines = text_content.split('\n').count().max(1) as f32;
-            let h1 = lines * 1.0 * 1.5;
-            let scale_w = if w1 > 0.0 { box_w / w1 } else { f32::INFINITY };
-            let scale_h = if h1 > 0.0 { box_h / h1 } else { f32::INFINITY };
-            return scale_w.min(scale_h);
-        }
-    } else {
-        let mut low = 1.0_f32;
-        let mut high = (box_h / 1.5).max(1.0);
-        for _ in 0..16 {
-            let mid = (low + high) / 2.0;
-            if let Ok((mw, mh)) = crate::services::measure_wrapped(&text_content, mid, box_w) {
-                if mw <= box_w && mh <= box_h {
-                    low = mid;
-                } else {
-                    high = mid;
-                }
-            } else {
-                break;
-            }
-        }
-        return low;
-    }
+    crate::services::default_face()
+        .and_then(|face| scaled_size(&face, &text_content, content.w, content.h, wrapped))
+        .unwrap_or(authored_size)
+}
 
-    authored_size
+/// Lay out the text of one placed element: the line model, given this
+/// element's properties and its box inset by its UIPadding.
+///
+/// ONE LAYOUT PER ELEMENT PER FRAME. `commit_geometry` makes it, reports
+/// `TextBounds` and `TextFits` from it, and `frame_of` hands the same value to
+/// the display list, so the painter draws what was reported.
+fn text_layout_of(dom: &Dom, id: usize, class: &str, rect: Box2) -> Option<TextLayout> {
+    if !draws_text(class) {
+        return None;
+    }
+    let face = crate::services::default_face()?;
+    let text = text_for(dom, id, class).unwrap_or_default();
+    let content = content_box(dom, id, rect);
+    lay_out(
+        &face,
+        &Block {
+            text: &text,
+            text_size: resolved_text_size(dom, id, rect),
+            content: Rect {
+                x: content.x,
+                y: content.y,
+                w: content.w,
+                h: content.h,
+            },
+            wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
+            align_x: align(dom, id, "TextXAlignment", "TextXAlignment").unwrap_or(Align::Center),
+            align_y: align(dom, id, "TextYAlignment", "TextYAlignment").unwrap_or(Align::Center),
+            truncate: false,
+            line_height: 1.0,
+        },
+    )
+}
+
+/// The classes with `TextBounds`, `TextFits` and `ContentText` members.
+fn reports_text(class: &str) -> bool {
+    matches!(class, "TextLabel" | "TextButton" | "TextBox")
 }
 
 /// Turn one placed element into the display list node the painter consumes.
@@ -2300,7 +2310,7 @@ fn resolved_text_size(dom: &Dom, id: usize, placed_rect: Box2) -> f32 {
 /// cache lives on the DOM because it is per-mod, so building a node writes to it.
 /// `display_list` is still `&Dom` and `input::hit` still reads the same
 /// placement, which is the property that mattered.
-fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
+fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>) -> Node {
     let id = placed.id;
     let class = dom.class_of(id).unwrap_or_default();
     let image = if draws_image(&class) {
@@ -2309,6 +2319,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         None
     };
     let dom = &*dom;
+    let laid = laid.or_else(|| text_layout_of(dom, id, &class, placed.rect));
     Node {
         id: sequence,
         name: dom.name_of(id).unwrap_or_default(),
@@ -2335,10 +2346,12 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
         } else {
             None
         },
-        text_size: if draws_text(&class) {
-            resolved_text_size(dom, id, placed.rect)
-        } else {
-            number(dom, id, "TextSize").unwrap_or(14.0)
+        // FROM THE LAYOUT WHEN THERE IS ONE: TextScaled searches for its size,
+        // and searching twice a frame doubled the cost of every scaled label.
+        text_size: match &laid {
+            Some(laid) => laid.text_size,
+            None if draws_text(&class) => resolved_text_size(dom, id, placed.rect),
+            None => number(dom, id, "TextSize").unwrap_or(14.0),
         },
         text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
@@ -2351,6 +2364,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
                 .unwrap_or(0.0)
                 .clamp(0.0, 1.0),
         text_wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
+        text_layout: laid,
         image,
         blend_mode: blend_mode_of(dom, id),
     }
@@ -2358,6 +2372,18 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64) -> Node {
 
 /// Build the display list for the subtree under `root`.
 pub fn frame(dom: &mut Dom, root: usize, width: f32, height: f32) -> Frame {
+    frame_with(dom, root, width, height, HashMap::new())
+}
+
+/// [`frame`], reusing text layouts `commit_geometry` already made, by
+/// instance id and the rect each was made for.
+fn frame_with(
+    dom: &mut Dom,
+    root: usize,
+    width: f32,
+    height: f32,
+    mut texts: HashMap<usize, (Box2, TextLayout)>,
+) -> Frame {
     // THE SEQUENCE NUMBER IS ASSIGNED AFTER THE SORT, and it was assigned before
     // it when this walk built `Node`s inline. Nothing read it, so nothing broke;
     // it is now what it claims to be, a paint index.
@@ -2370,7 +2396,13 @@ pub fn frame(dom: &mut Dom, root: usize, width: f32, height: f32) -> Frame {
     let nodes = placed
         .iter()
         .enumerate()
-        .map(|(i, placed)| node(dom, placed, i as u64 + 1))
+        .map(|(i, placed)| {
+            let laid = texts
+                .remove(&placed.id)
+                .filter(|(rect, _)| *rect == placed.rect)
+                .map(|(_, laid)| laid);
+            node(dom, placed, i as u64 + 1, laid)
+        })
         .collect();
 
     Frame {
@@ -2390,6 +2422,22 @@ pub fn frame(dom: &mut Dom, root: usize, width: f32, height: f32) -> Frame {
 /// assignment path, which refuses them as read-only, and that is correct on both
 /// counts: read-only to a guest, written by the host that computed them.
 pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
+    commit(dom, root, width, height);
+}
+
+/// [`commit_geometry`], handing back the text layouts it made so a frame
+/// built straight after does not make them again.
+///
+/// `TextBounds`, `TextFits` and `ContentText` are written here beside
+/// `AbsoluteSize`, for the same reason and through the same door: read-only to
+/// a guest, computed by the host, and wrong if left at the default. They
+/// describe what is drawn, so they come from the layout the painter is given.
+fn commit(
+    dom: &mut Dom,
+    root: usize,
+    width: f32,
+    height: f32,
+) -> HashMap<usize, (Box2, TextLayout)> {
     let surface = Box2 {
         x: 0.0,
         y: 0.0,
@@ -2407,6 +2455,19 @@ pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
         dom.set_internal(grid, "AbsoluteCellSize", Variant::Vector2(cell_size));
         dom.set_internal(grid, "AbsoluteCellCount", Variant::Vector2(cell_count));
     }
+    let mut texts = HashMap::new();
+    // LAST PLACEMENT WINS, as it does for the writes below: a subtree placed
+    // again after AutomaticSize grew its parent appears twice, and only the
+    // later rect is drawn.
+    for item in solved.items.iter().rev() {
+        if texts.contains_key(&item.id) {
+            continue;
+        }
+        let class = dom.class_of(item.id).unwrap_or_default();
+        if let Some(laid) = text_layout_of(dom, item.id, &class, item.rect) {
+            texts.insert(item.id, (item.rect, laid));
+        }
+    }
     for item in solved.items {
         dom.set_internal(
             item.id,
@@ -2419,13 +2480,33 @@ pub fn commit_geometry(dom: &mut Dom, root: usize, width: f32, height: f32) {
             Variant::Vector2(Vector2::new(item.rect.w, item.rect.h)),
         );
     }
+    for (id, (_, laid)) in &texts {
+        let class = dom.class_of(*id).unwrap_or_default();
+        if !reports_text(&class) {
+            continue;
+        }
+        let raw = text(dom, *id, "Text").unwrap_or_default();
+        let content = if boolean(dom, *id, "RichText") == Some(true) {
+            dew_runtime::text::strip_markup(&raw)
+        } else {
+            raw
+        };
+        dom.set_internal(
+            *id,
+            "TextBounds",
+            Variant::Vector2(Vector2::new(laid.bounds.0, laid.bounds.1)),
+        );
+        dom.set_internal(*id, "TextFits", Variant::Bool(laid.fits));
+        dom.set_internal(*id, "ContentText", Variant::String(content));
+    }
+    texts
 }
 
 /// Render whatever is under `root` in a shared DOM.
 pub fn frame_of(dom: &SharedDom, root: usize, width: f32, height: f32) -> Frame {
     let mut guard = dom.lock().expect("dom");
-    commit_geometry(&mut guard, root, width, height);
-    frame(&mut guard, root, width, height)
+    let texts = commit(&mut guard, root, width, height);
+    frame_with(&mut guard, root, width, height, texts)
 }
 
 #[cfg(test)]
@@ -3623,5 +3704,220 @@ mod paint_order {
             vec!["Loud".to_string(), "Quiet".to_string(), "Inner".to_string()],
             "Quiet outranks Loud as a sibling, and Inner belongs to Quiet"
         );
+    }
+}
+
+#[cfg(test)]
+mod text_paint {
+    //! What the painter draws against what the line model measured, in real
+    //! pixels and the real face. These skip on a machine with no font.
+    use super::*;
+    use crate::datamodel::{install, install_vocabulary, SharedDom};
+    use dew_runtime::{Painter, RasterPainter};
+    use mlua::prelude::*;
+
+    const W: u32 = 240;
+    const H: u32 = 120;
+
+    /// Build `src` under a `root` global, lay it out and draw it. Returns the
+    /// Luau state (to read members back), the frame, and the painted pixels as
+    /// one brightness byte each.
+    fn draw(src: &str) -> Option<(Lua, Frame, Vec<u8>)> {
+        let font = crate::services::face()?;
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        lua.load(src).exec().expect("guest");
+        let frame = frame_of(&dom, root, W as f32, H as f32);
+
+        let mut painter = RasterPainter::new(W, H, dew_raster::Backend::VelloCpu)
+            .expect("surface")
+            .with_font(font);
+        painter.paint_frame(&frame, Some(Rgb(0, 0, 0)));
+        let bgra = painter.canvas_mut().bgra().expect("pixels");
+        let ink = bgra.chunks(4).map(|p| p[0].max(p[1]).max(p[2])).collect();
+        Some((lua, frame, ink))
+    }
+
+    /// The smallest box holding every pixel brighter than half: (left, top,
+    /// right, bottom), right and bottom exclusive.
+    fn ink_box(ink: &[u8]) -> (u32, u32, u32, u32) {
+        let (mut l, mut t, mut r, mut b) = (W, H, 0, 0);
+        for (i, v) in ink.iter().enumerate() {
+            if *v > 127 {
+                let (x, y) = (i as u32 % W, i as u32 / W);
+                l = l.min(x);
+                t = t.min(y);
+                r = r.max(x + 1);
+                b = b.max(y + 1);
+            }
+        }
+        (l, t, r, b)
+    }
+
+    fn label(props: &str) -> String {
+        format!(
+            r#"
+            local t = Instance.new("TextLabel")
+            t.Name = "Label"
+            t.BackgroundTransparency = 1
+            t.TextColor3 = Color3.new(1, 1, 1)
+            {props}
+            t.Parent = root
+            label = t
+            "#
+        )
+    }
+
+    /// THE GUARD AGAINST PAINT AND MEASURE DRIFTING APART. A label sized by
+    /// AutomaticSize is exactly as large as the model measured its text; every
+    /// pixel the painter draws must land inside it, and the ink must start
+    /// and end where the model's line does, give or take a glyph's side
+    /// bearing.
+    #[test]
+    fn painted_ink_is_where_the_measurement_says() {
+        let Some((_, frame, ink)) = draw(&label(
+            r#"t.Text = "Hamburgefonts"
+            t.TextSize = 20
+            t.AutomaticSize = Enum.AutomaticSize.XY
+            t.Position = UDim2.fromOffset(10, 10)"#,
+        )) else {
+            return;
+        };
+        let node = frame
+            .nodes
+            .iter()
+            .find(|n| n.name == "Label")
+            .expect("label");
+        let laid = node.text_layout.as_ref().expect("a laid-out label");
+        let line = &laid.lines[0];
+        let (l, t, r, b) = ink_box(&ink);
+
+        let rect = node.rect;
+        assert!(
+            l as f32 >= rect.x && r as f32 <= rect.x + rect.w + 0.5,
+            "ink x {l}..{r} outside {rect:?}"
+        );
+        assert!(
+            t as f32 >= rect.y && b as f32 <= rect.y + rect.h,
+            "ink y {t}..{b} outside {rect:?}"
+        );
+        assert!(
+            (l as f32 - line.x).abs() <= 3.0,
+            "ink starts at {l}, the line at {}",
+            line.x
+        );
+        assert!(
+            (r as f32 - (line.x + line.width)).abs() <= 3.0,
+            "ink ends at {r}, the line at {}",
+            line.x + line.width
+        );
+    }
+
+    /// One line, wrapped or not, is the same pixels, at every alignment.
+    #[test]
+    fn wrapping_one_line_paints_the_same_pixels() {
+        for y in ["Top", "Center", "Bottom"] {
+            let props = |wrap: bool| {
+                format!(
+                    r#"t.Text = "Hello"
+                    t.TextSize = 20
+                    t.Size = UDim2.fromOffset(200, 64)
+                    t.TextYAlignment = Enum.TextYAlignment.{y}
+                    t.TextWrapped = {wrap}"#
+                )
+            };
+            let Some((_, _, plain)) = draw(&label(&props(false))) else {
+                return;
+            };
+            let (_, _, wrapped) = draw(&label(&props(true))).expect("a face");
+            assert!(plain == wrapped, "{y}: wrapping one line moved it");
+        }
+    }
+
+    /// A UIPadding moves the painted text by exactly its offsets.
+    #[test]
+    fn padding_moves_the_ink_by_the_padding() {
+        let props = r#"t.Text = "H"
+            t.TextSize = 20
+            t.Size = UDim2.fromOffset(200, 64)
+            t.TextXAlignment = Enum.TextXAlignment.Left
+            t.TextYAlignment = Enum.TextYAlignment.Top"#;
+        let Some((_, _, bare)) = draw(&label(props)) else {
+            return;
+        };
+        let padded_props = format!(
+            r#"{props}
+            local p = Instance.new("UIPadding")
+            p.PaddingLeft = UDim.new(0, 16)
+            p.PaddingTop = UDim.new(0, 16)
+            p.Parent = t"#
+        );
+        let (_, _, padded) = draw(&label(&padded_props)).expect("a face");
+        let (l0, t0, r0, b0) = ink_box(&bare);
+        let (l1, t1, r1, b1) = ink_box(&padded);
+        assert_eq!((l1 - l0, t1 - t0, r1 - r0, b1 - b0), (16, 16, 16, 16));
+    }
+
+    /// `TextBounds`, `TextFits` and `ContentText` read real values from Luau
+    /// once a frame has laid the label out.
+    #[test]
+    fn text_members_are_readable_after_a_frame() {
+        let Some((lua, frame, _)) = draw(&label(
+            r#"t.Text = "one two three four five six"
+            t.TextSize = 20
+            t.TextWrapped = true
+            t.Size = UDim2.fromOffset(120, 64)
+            t.RichText = true"#,
+        )) else {
+            return;
+        };
+        let node = frame
+            .nodes
+            .iter()
+            .find(|n| n.name == "Label")
+            .expect("label");
+        let laid = node.text_layout.as_ref().expect("laid out");
+        let (x, y, fits, content): (f32, f32, bool, String) = lua
+            .load(
+                "return label.TextBounds.X, label.TextBounds.Y, label.TextFits, label.ContentText",
+            )
+            .eval()
+            .expect("members");
+        assert_eq!((x, y), laid.bounds);
+        // Three lines of 30 in 64: two are drawn.
+        assert_eq!(laid.lines.len(), 2);
+        assert_eq!(y, 60.0);
+        assert!(x <= 120.0);
+        assert!(!fits);
+        assert_eq!(content, "one two three four five six");
+    }
+
+    /// `ContentText` is the text without its markup when `RichText` is on, and
+    /// the text as written when it is off.
+    #[test]
+    fn content_text_strips_markup_only_for_rich_text() {
+        for (rich, want) in [(true, "bold plain"), (false, "<b>bold</b> plain")] {
+            let Some((lua, _, _)) = draw(&label(&format!(
+                r#"t.Text = "<b>bold</b> plain"
+                t.Size = UDim2.fromOffset(200, 64)
+                t.RichText = {rich}"#
+            ))) else {
+                return;
+            };
+            let content: String = lua.load("return label.ContentText").eval().expect("read");
+            assert_eq!(content, want);
+        }
     }
 }
