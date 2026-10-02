@@ -633,8 +633,8 @@ pub mod tests {
         }
     }
 
-    /// An applet actually run through `installed::install`, into the real
-    /// per-user store `installed::list()`/`dew.Library` themselves read --
+    /// An applet actually run through `installed::install`, into the same
+    /// store `installed::list()`/`dew.Library` themselves read --
     /// faking that store would test a different `List`/`Launch`/`Uninstall`
     /// than the ones a mod actually calls. Removed on drop with
     /// `installed::uninstall`, best-effort: a test that already uninstalled
