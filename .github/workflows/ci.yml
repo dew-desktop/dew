@@ -446,12 +446,14 @@ jobs:
       - name: Run every command the CLI documents
         run: lune run scripts/smoke.luau --no-build
 
-      # THE QUICK PANEL'S OWN SUITE. Smoke mounts only `examples/`, and a
+      # THE BUNDLED APPLETS' OWN SUITES. Smoke mounts only `examples/`, and a
       # bundled applet cannot mount from a checkout at all (its host-only
-      # permission is refused outside the bundled directory), so its
-      # `.test.luau` against a fake library is what exercises it here.
+      # permissions are refused outside the bundled directory), so each one's
+      # `.test.luau` against fakes is what exercises it here.
       - name: Run the quick panel's tests
         run: cargo run --quiet --manifest-path host/Cargo.toml --bin dew -- test quickpanel
+      - name: Run the dashboard's tests
+        run: cargo run --quiet --manifest-path host/Cargo.toml --bin dew -- test dashboard
 
       # FMT AND CLIPPY HERE RATHER THAN IN A JOB OF THEIR OWN.
       #
