@@ -237,10 +237,10 @@ impl FamilyFile {
         serde_json::from_str(text.trim_start_matches('\u{feff}'))
     }
 
-    /// The legacy families are the ones the engine draws at 1.5 times
-    /// `TextSize`; their family files are named "<face> (Legacy)".
+    /// Only LegacyArial draws at 1.5 times `TextSize` in the engine; LegacyArimo
+    /// shares the "(Legacy)" name in its family file but measures at 1.0.
     pub fn is_legacy(&self) -> bool {
-        self.name.trim_end().ends_with("(Legacy)")
+        false
     }
 }
 
@@ -482,7 +482,7 @@ impl Resolver {
             .map_or(asked, |(_, now)| now);
 
         let Some(family) = self.family(stem) else {
-            let em_scale = if stem.starts_with("Legacy") {
+            let em_scale = if stem == "LegacyArial" {
                 LEGACY_EM_SCALE
             } else {
                 1.0
@@ -502,7 +502,7 @@ impl Resolver {
             };
             return self.stand_in(stand_in, em_scale, weight, style, wanted, reason);
         };
-        let em_scale = if family.is_legacy() {
+        let em_scale = if stem == "LegacyArial" {
             LEGACY_EM_SCALE
         } else {
             1.0
@@ -628,7 +628,7 @@ impl Resolver {
             .min_by_key(|(_, c)| {
                 let w = c.entry.weight;
                 let distance = w.abs_diff(want);
-                let wrong_side = if want > 400 { w < want } else { w > want };
+                let wrong_side = w > want;
                 (distance, wrong_side)
             })
             .map(|(i, _)| i)?;
@@ -787,11 +787,11 @@ mod tests {
     fn a_missing_weight_takes_the_nearest_and_says_so() {
         let r = without_studio();
         // Source Sans Pro has 400 and 600 as files; 500 is not a face at all.
-        // A tie above 400 goes heavier.
+        // On a tie, the engine chooses lighter (FW Medium 213 matches Regular).
         let medium = r
             .resolve(&uri("SourceSansPro"), FontWeight::Medium, FontStyle::Normal)
             .unwrap();
-        assert_eq!(file_name(&medium), "SourceSansPro-Semibold.ttf");
+        assert_eq!(file_name(&medium), "SourceSansPro-Regular.ttf");
         assert!(
             matches!(&medium.source, Source::Fallback { reason, .. } if reason.contains("no 500"))
         );
@@ -969,6 +969,10 @@ mod tests {
             .resolve(&uri("Arimo"), FontWeight::Regular, FontStyle::Normal)
             .unwrap();
         assert_eq!(arimo.em_scale, 1.0);
+        let legacy_arimo = r
+            .resolve(&uri("LegacyArimo"), FontWeight::Regular, FontStyle::Normal)
+            .unwrap();
+        assert_eq!(legacy_arimo.em_scale, 1.0);
         // The default face and LegacyArial are the same file at different scales.
         assert_eq!(legacy.path, arimo.path);
         assert_eq!(

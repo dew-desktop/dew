@@ -173,8 +173,28 @@ pub fn face() -> Option<Font> {
 /// TextSize in the default face (`LAYOUT.md` section 7), and the height is
 /// that times the number of lines. This measures in [`default_face`]; a label
 /// with a `FontFace` is measured in its own by the renderer.
+pub fn face_for_name(name: &str) -> Option<Face<Font>> {
+    if let Some(font) = crate::fonts::from_enum(name) {
+        return face_for(&font);
+    }
+    let stem = crate::fonts::family_stem(name).unwrap_or(name);
+    let uri = format!("{}{stem}.json", crate::fonts::FAMILY_PREFIX);
+    let font = rbx_types::Font::new(
+        &uri,
+        rbx_types::FontWeight::Regular,
+        rbx_types::FontStyle::Normal,
+    );
+    face_for(&font)
+}
+
 pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
-    let face = default_face().ok_or("this host has no font, so it cannot measure text")?;
+    measure_in(text, size, None)
+}
+
+pub fn measure_in(text: &str, size: f32, face: Option<Face<Font>>) -> Result<(f32, f32), String> {
+    let face = face
+        .or_else(default_face)
+        .ok_or("this host has no font, so it cannot measure text")?;
     text::measure(&face, text, size, None).ok_or_else(|| "the measuring face did not parse".into())
 }
 
@@ -185,7 +205,18 @@ pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
 /// line is counted: this is the size the text needs, not what a box of some
 /// height would show. A `max_width` of zero or less does not wrap.
 pub fn measure_wrapped(text: &str, size: f32, max_width: f32) -> Result<(f32, f32), String> {
-    let face = default_face().ok_or("this host has no font, so it cannot measure text")?;
+    measure_wrapped_in(text, size, max_width, None)
+}
+
+pub fn measure_wrapped_in(
+    text: &str,
+    size: f32,
+    max_width: f32,
+    face: Option<Face<Font>>,
+) -> Result<(f32, f32), String> {
+    let face = face
+        .or_else(default_face)
+        .ok_or("this host has no font, so it cannot measure text")?;
     text::measure(&face, text, size, Some(max_width))
         .ok_or_else(|| "the measuring face did not parse".into())
 }
@@ -747,28 +778,23 @@ fn install_core(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     let text = lua.create_table()?;
     text.set(
         "Measure",
-        // THE THIRD ARGUMENT IS ACCEPTED AND REPORTED, NOT IGNORED. Aether's
-        // `Host.Text` contract passes a font name and this host has one face, so
-        // the honest answer is to measure in the face it will draw with and SAY
-        // that the name selected nothing. Sprint 4's rule: `Slice` and `Tile` are
-        // stretched and reported by name, because silently doing the wrong thing
-        // was that sprint's named failure mode. Taking the argument and dropping
-        // it quietly would make a mod look styled when it is not.
         lua.create_function(|_, (text, size, font): (String, f32, Option<String>)| {
-            if let Some(name) = font {
-                note_once_font(&name);
+            let face = font.as_deref().and_then(face_for_name);
+            if font.is_some() && face.is_none() {
+                note_once_font(font.as_deref().unwrap());
             }
-            measure(&text, size).map_err(LuaError::runtime)
+            measure_in(&text, size, face).map_err(LuaError::runtime)
         })?,
     )?;
     text.set(
         "MeasureWrapped",
         lua.create_function(
             |_, (text, size, max_width, font): (String, f32, f32, Option<String>)| {
-                if let Some(name) = font {
-                    note_once_font(&name);
+                let face = font.as_deref().and_then(face_for_name);
+                if font.is_some() && face.is_none() {
+                    note_once_font(font.as_deref().unwrap());
                 }
-                measure_wrapped(&text, size, max_width).map_err(LuaError::runtime)
+                measure_wrapped_in(&text, size, max_width, face).map_err(LuaError::runtime)
             },
         )?,
     )?;

@@ -373,6 +373,8 @@ pub struct Node {
     /// NOT DECODED FROM LUA, like `image` -- see [`BlendMode`] and
     /// [`Frame::HOST_FIELDS`].
     pub blend_mode: BlendMode,
+    pub text_stroke_colour: Option<Rgb>,
+    pub text_stroke_alpha: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -438,8 +440,14 @@ impl Frame {
     ///
     /// `text_wrap` IS HERE FOR A DIFFERENT REASON: it CAN be emitted from Lua in
     /// principle, and simply is not yet -- see its doc comment on `Node`.
-    pub const HOST_FIELDS: &'static [&'static str] =
-        &["image", "text_wrap", "text_layout", "blend_mode"];
+    pub const HOST_FIELDS: &'static [&'static str] = &[
+        "image",
+        "text_wrap",
+        "text_layout",
+        "blend_mode",
+        "text_stroke_colour",
+        "text_stroke_alpha",
+    ];
 }
 
 /// What changed since the last delta.
@@ -555,6 +563,8 @@ impl Node {
             text_layout: None,
             // NOR THIS -- see `BlendMode`'s own doc comment.
             blend_mode: BlendMode::Alpha,
+            text_stroke_colour: None,
+            text_stroke_alpha: 0.0,
         })
     }
 }
@@ -662,6 +672,8 @@ mod tests {
             text_wrap: false,
             text_layout: None,
             blend_mode: BlendMode::Alpha,
+            text_stroke_colour: None,
+            text_stroke_alpha: 0.0,
         };
         let Node {
             id: _,
@@ -684,6 +696,8 @@ mod tests {
             text_wrap: _,
             text_layout: _,
             blend_mode: _,
+            text_stroke_colour: _,
+            text_stroke_alpha: _,
         } = node;
 
         // `rect` is four keys and the rest are one each; the names are Live.luau's
@@ -712,6 +726,8 @@ mod tests {
             "text_wrap",
             "text_layout",
             "blend_mode",
+            "text_stroke_colour",
+            "text_stroke_alpha",
         ];
         for key in named {
             assert!(
