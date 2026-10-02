@@ -9,10 +9,9 @@
 	promoted to a shared module -- no existing convention shares a Luau file
 	between an example package and a top-level applet's own package (each is
 	a fully self-contained pesde package with its own vendored
-	`roblox_packages/`), and inventing one to save ~80 lines duplicated
-	exactly once would be exactly the infrastructure-nobody-asked-for-twice
-	mistake this milestone's own vision doc names. Worth revisiting if a
-	third real Dom-adapter consumer shows up.
+	`roblox_packages/`), and inventing one to save about 80 lines duplicated
+	exactly once would be infrastructure nobody has asked for twice. Worth
+	revisiting if a third real Dom adapter consumer shows up.
 
 	ONE THING `createRecipe.luau` DOES NOT DO ITSELF, confirmed by reading
 	it in full: it never parents its own shared "Aether recipe" `StyleSheet`

@@ -148,8 +148,8 @@ pub struct Block<'a> {
     pub wrap: bool,
     pub align_x: Align,
     pub align_y: Align,
-    /// `TextTruncate` is `AtEnd`: a line wider than the content box is cut to
-    /// a prefix and an ellipsis.
+    /// `TextTruncate` is `AtEnd`: a line wider than the content box, and the
+    /// last line drawn when wrapped lines were dropped, end in an ellipsis.
     pub truncate: bool,
     /// `LineHeight`, as a multiple of the line box: the step from one line's
     /// top to the next.
@@ -346,7 +346,11 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
         Align::End => content.y + content.h - block_h,
     };
 
+    // A CUT LINE ENDS IN THE ELLIPSIS: one wider than the box, and the last
+    // line drawn when wrapped lines below it were dropped. That last line
+    // keeps as much of itself as fits beside the ellipsis.
     let ellipsis = ellipsis(&face.font);
+    let dropped = visible < all.len();
     let mut truncated_any = false;
     let lines: Vec<Line> = all
         .iter()
@@ -355,7 +359,8 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
         .map(|(i, (text, width))| {
             let mut line_text = text.clone();
             let mut line_width = *width;
-            if block.truncate && line_width > content.w + SLACK && content.w > 0.0 {
+            let cut = line_width > content.w + SLACK || (dropped && i + 1 == visible);
+            if block.truncate && cut && content.w > 0.0 {
                 if let Some(ellipsis_w) = face.font.advance(glyph_px, ellipsis) {
                     if ellipsis_w <= content.w + SLACK {
                         let target_w = (content.w - ellipsis_w).max(0.0);
@@ -835,6 +840,41 @@ mod tests {
         assert_eq!(without.lines[0].text, "A lon...");
         assert!(close(without.bounds.0, 96.0), "{}", without.bounds.0);
         assert!(!without.fits);
+    }
+
+    /// A wrapped label whose lower lines were dropped ends its last drawn line
+    /// in the ellipsis: whole when the line and the ellipsis fit the box, cut
+    /// back a character at a time when they do not. Without TextTruncate the
+    /// line is drawn as it broke.
+    #[test]
+    fn a_wrapped_cut_ends_its_last_drawn_line_in_the_ellipsis() {
+        let s = stand_in();
+        let face = Face {
+            font: MonoWithEllipsis,
+            em_scale: s.em_scale,
+            glyph_per_em: s.glyph_per_em,
+            ascent: s.ascent,
+            descent: s.descent,
+        };
+        // 12 px a character, lines 30 tall: one line of 8 characters fits.
+        let content = rect(0.0, 0.0, 100.0, 30.0);
+
+        let mut b = block("ab cd efgh ij", 20.0, content, true, Align::Start);
+        b.truncate = true;
+        let laid = lay_out(&face, &b).unwrap();
+        assert_eq!(laid.lines.len(), 1);
+        assert_eq!(laid.lines[0].text, "ab cd\u{2026}");
+        assert!(close(laid.bounds.0, 72.0), "{}", laid.bounds.0);
+        assert!(!laid.fits);
+
+        let mut b = block("ab cd ef gh", 20.0, content, true, Align::Start);
+        b.truncate = true;
+        let laid = lay_out(&face, &b).unwrap();
+        assert_eq!(laid.lines[0].text, "ab cd e\u{2026}");
+        assert!(close(laid.bounds.0, 96.0), "{}", laid.bounds.0);
+
+        let plain = block("ab cd efgh ij", 20.0, content, true, Align::Start);
+        assert_eq!(lay_out(&face, &plain).unwrap().lines[0].text, "ab cd");
     }
 
     /// The wrap breaks between words, then between characters for a word
