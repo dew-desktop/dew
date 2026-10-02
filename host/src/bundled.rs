@@ -2,15 +2,18 @@
 //! directory `applets::load` trusts with a `Capability::Host` permission.
 //!
 //! THE SET IS FIXED HERE, NOT READ FROM ANY MANIFEST. Every destination this
-//! module writes is `Bundled/<id>` for an id in [`APPLETS`], and every source
-//! is that id's folder in this checkout. Nothing a user, an installed applet
-//! or the marketplace supplies can choose a destination, which is what keeps
-//! "loaded from Bundled" meaning "shipped with this build of Dew".
+//! module writes is `Bundled/<id>` for an id in [`APPLETS`], and every file
+//! it writes there is one built into this binary. Nothing a user, an
+//! installed applet or the marketplace supplies can choose a destination or
+//! a file, which is what keeps "loaded from Bundled" meaning "shipped with
+//! this build of Dew".
 //!
-//! COPIED FROM THE CHECKOUT, found through `CARGO_MANIFEST_DIR` at compile
-//! time. There is no installer yet to place these folders next to `dew.exe`,
-//! so the checkout stands in for one. The day an installer exists,
-//! [`source_dir`] is the function that changes.
+//! BUILT INTO THE BINARY. `host/build.rs` walks each applet's folder,
+//! `roblox_packages/` included, and generates a table of its files as
+//! `include_bytes!`, so a `dew.exe` with nothing beside it still has its
+//! dashboard and quick panel. An applet loads from a directory, so the
+//! table is written to `<local data>/Dew/Bundled/<id>` and loaded from
+//! there, the way `fonts.rs` writes the faces it ships.
 //!
 //! TWO KINDS OF BUNDLED APPLET. The dashboard is opened from the tray and is
 //! never listed: it is the surface the list is shown in. The quick panel is
@@ -20,6 +23,7 @@
 
 #![cfg(windows)]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 pub struct BundledApplet {
@@ -39,6 +43,18 @@ pub const APPLETS: &[BundledApplet] = &[
     },
 ];
 
+/// One bundled applet's files as `host/build.rs` embedded them. Paths are
+/// relative to the applet's folder, with `/` between components.
+struct EmbeddedApplet {
+    id: &'static str,
+    /// Every directory, each listed after its parent.
+    dirs: &'static [&'static str],
+    files: &'static [(&'static str, &'static [u8])],
+}
+
+// Defines `EMBEDDED: &[EmbeddedApplet]`, one entry per applet folder.
+include!(concat!(env!("OUT_DIR"), "/bundled_applets.rs"));
+
 /// Is `id` one of Dew's own applets? Such an id cannot be installed over,
 /// uninstalled, or shadowed by a folder under `Applets/`.
 pub fn is_bundled_id(id: &str) -> bool {
@@ -55,17 +71,13 @@ pub fn uninstall_refusal(id: &str) -> String {
     format!("'{id}' ships with Dew and cannot be uninstalled; disable it instead")
 }
 
-/// This checkout's own folder for `id`, a sibling of `host/`.
-fn source_dir(id: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("host/ has a parent")
-        .join(id)
-}
-
 /// Where `id`'s bundled copy lives, whether or not it has been written yet.
 pub fn installed_dir(id: &str) -> Option<PathBuf> {
     Some(crate::installed::bundled_applets_dir()?.join(id))
+}
+
+fn not_shipped(id: &str) -> String {
+    format!("'{id}' is not an applet Dew ships")
 }
 
 /// Bring `id`'s bundled copy up to date with the files this build ships, and
@@ -75,18 +87,11 @@ pub fn installed_dir(id: &str) -> Option<PathBuf> {
 /// folder of its choosing into the bundled directory.
 pub fn ensure(id: &str) -> Result<PathBuf, String> {
     if !is_bundled_id(id) {
-        return Err(format!("'{id}' is not an applet Dew ships"));
+        return Err(not_shipped(id));
     }
     let dest = installed_dir(id)
         .ok_or("could not find a per-user data directory to bundle applets into")?;
-    let source = source_dir(id);
-    if !source.join("dew.toml").is_file() {
-        return Err(format!(
-            "{}: no bundled applet source here",
-            source.display()
-        ));
-    }
-    sync_dir(&source, &dest)?;
+    ensure_into(id, &dest)?;
     Ok(dest)
 }
 
@@ -101,167 +106,115 @@ pub fn ensure_listed() {
     }
 }
 
-/// Make `dst` hold exactly the files under `src`.
+/// Make `dest` hold exactly the files this build embeds for `id`.
 ///
 /// THE BYTES, NOT THE TIMESTAMP OR THE SIZE. A file whose bytes already
-/// match is left alone; any other is rewritten. A file or folder in `dst`
-/// that `src` no longer has is removed, since a leftover module would still
-/// be `require`-able from the copy.
-///
-/// Symlinks and other exotic entries in `src` are skipped rather than
-/// followed, as `installed::copy_dir` does, so a link cannot pull a file
-/// from outside the applet's folder into the trusted directory.
-pub fn sync_dir(src: &Path, dst: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+/// match is left alone; any other is written to a temporary name and renamed
+/// over it, so a reader never sees half a file. A file or folder in `dest`
+/// that the table does not have is removed, since a leftover module would
+/// still be `require`-able from the copy.
+pub(crate) fn ensure_into(id: &str, dest: &Path) -> Result<(), String> {
+    let applet = EMBEDDED
+        .iter()
+        .find(|a| a.id == id && is_bundled_id(id))
+        .ok_or_else(|| not_shipped(id))?;
+    let fail = |path: &Path, e: std::io::Error| format!("{}: {e}", path.display());
 
-    let mut wanted = std::collections::HashSet::new();
-    for entry in std::fs::read_dir(src).map_err(|e| format!("{}: {e}", src.display()))? {
-        let entry = entry.map_err(|e| format!("{}: {e}", src.display()))?;
-        let file_type = entry
-            .file_type()
-            .map_err(|e| format!("{}: {e}", entry.path().display()))?;
-        let name = entry.file_name();
-        let target = dst.join(&name);
-
-        if file_type.is_dir() {
-            if target.is_file() {
-                std::fs::remove_file(&target).map_err(|e| format!("{}: {e}", target.display()))?;
-            }
-            sync_dir(&entry.path(), &target)?;
-        } else if file_type.is_file() {
-            let bytes = std::fs::read(entry.path())
-                .map_err(|e| format!("{}: {e}", entry.path().display()))?;
-            if target.is_dir() {
-                std::fs::remove_dir_all(&target)
-                    .map_err(|e| format!("{}: {e}", target.display()))?;
-            }
-            let same = std::fs::metadata(&target).map(|m| m.len()).ok() == Some(bytes.len() as u64)
-                && std::fs::read(&target).is_ok_and(|current| current == bytes);
-            if !same {
-                std::fs::write(&target, &bytes)
-                    .map_err(|e| format!("{}: {e}", target.display()))?;
-            }
-        } else {
+    std::fs::create_dir_all(dest).map_err(|e| fail(dest, e))?;
+    for rel in applet.dirs {
+        let target = dest.join(rel);
+        clear_unless(&target, Kind::Dir).map_err(|e| fail(&target, e))?;
+        std::fs::create_dir_all(&target).map_err(|e| fail(&target, e))?;
+    }
+    for (rel, bytes) in applet.files {
+        let target = dest.join(rel);
+        clear_unless(&target, Kind::File).map_err(|e| fail(&target, e))?;
+        if holds(&target, bytes) {
             continue;
         }
-        wanted.insert(name);
+        let name = target.file_name().unwrap_or_default().to_string_lossy();
+        let temp = target.with_file_name(format!("{name}.{}.tmp", std::process::id()));
+        std::fs::write(&temp, bytes).map_err(|e| fail(&temp, e))?;
+        if let Err(e) = std::fs::rename(&temp, &target) {
+            let _ = std::fs::remove_file(&temp);
+            // Another process syncing the same build may have won the race.
+            if !holds(&target, bytes) {
+                return Err(fail(&target, e));
+            }
+        }
     }
 
-    for entry in std::fs::read_dir(dst).map_err(|e| format!("{}: {e}", dst.display()))? {
-        let entry = entry.map_err(|e| format!("{}: {e}", dst.display()))?;
-        if wanted.contains(&entry.file_name()) {
+    let wanted: HashSet<&str> = applet
+        .dirs
+        .iter()
+        .copied()
+        .chain(applet.files.iter().map(|(rel, _)| *rel))
+        .collect();
+    prune(dest, "", &wanted)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Kind {
+    Dir,
+    File,
+}
+
+/// Remove whatever is at `path` unless it is already a `keep`. A link is
+/// never kept, so nothing written afterwards lands outside the copy.
+fn clear_unless(path: &Path, keep: Kind) -> std::io::Result<()> {
+    let Ok(meta) = std::fs::symlink_metadata(path) else {
+        return Ok(());
+    };
+    if meta.is_dir() {
+        return match keep {
+            Kind::Dir => Ok(()),
+            Kind::File => std::fs::remove_dir_all(path),
+        };
+    }
+    if meta.is_file() && keep == Kind::File {
+        return Ok(());
+    }
+    std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
+}
+
+/// Does the file at `path` already hold exactly `bytes`?
+fn holds(path: &Path, bytes: &[u8]) -> bool {
+    std::fs::metadata(path).map(|m| m.len()).ok() == Some(bytes.len() as u64)
+        && std::fs::read(path).is_ok_and(|current| current == bytes)
+}
+
+/// Remove every entry under `dir` whose path relative to the copy's root is
+/// not in `wanted`. `rel` is `dir`'s own relative path.
+fn prune(dir: &Path, rel: &str, wanted: &HashSet<&str>) -> Result<(), String> {
+    for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let path = entry.path();
+        let child = entry.file_name().to_str().map(|name| {
+            if rel.is_empty() {
+                name.to_string()
+            } else {
+                format!("{rel}/{name}")
+            }
+        });
+        let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+        if child.as_deref().is_some_and(|c| wanted.contains(c)) {
+            if is_dir {
+                prune(&path, child.as_deref().unwrap_or_default(), wanted)?;
+            }
             continue;
         }
-        let path = entry.path();
-        let removed = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+        let removed = if is_dir {
             std::fs::remove_dir_all(&path)
         } else {
-            std::fs::remove_file(&path)
+            std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path))
         };
         removed.map_err(|e| format!("{}: {e}", path.display()))?;
     }
     Ok(())
 }
 
+// The tests compare the embedded table with this checkout's applet folders,
+// so they sit in a file of their own and this one names no source folder.
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn scratch(name: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("dew-bundled-test-{name}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("scratch dir");
-        dir
-    }
-
-    /// A first sync copies every file and folder.
-    #[test]
-    fn sync_copies_a_tree_into_an_empty_destination() {
-        let root = scratch("copy");
-        let src = root.join("src");
-        let dst = root.join("dst");
-        std::fs::create_dir_all(src.join("roblox_packages")).unwrap();
-        std::fs::write(src.join("dew.toml"), "id = \"x\"\n").unwrap();
-        std::fs::write(src.join("roblox_packages").join("vide.luau"), "return {}").unwrap();
-
-        sync_dir(&src, &dst).expect("sync");
-
-        assert_eq!(
-            std::fs::read_to_string(dst.join("dew.toml")).unwrap(),
-            "id = \"x\"\n"
-        );
-        assert_eq!(
-            std::fs::read_to_string(dst.join("roblox_packages").join("vide.luau")).unwrap(),
-            "return {}"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    /// A stale copy is replaced: a file with different bytes is rewritten,
-    /// a file the source dropped is removed, and a file whose bytes match is
-    /// left untouched, which its unchanged modification time proves.
-    #[test]
-    fn sync_replaces_a_stale_copy_and_leaves_a_current_file_alone() {
-        let root = scratch("stale");
-        let src = root.join("src");
-        let dst = root.join("dst");
-        std::fs::create_dir_all(&src).unwrap();
-        std::fs::create_dir_all(dst.join("old_folder")).unwrap();
-        std::fs::write(src.join("main.luau"), "return 2").unwrap();
-        std::fs::write(src.join("same.luau"), "unchanged").unwrap();
-        // Same length as the source, different bytes: a size check alone
-        // would keep it.
-        std::fs::write(dst.join("main.luau"), "return 1").unwrap();
-        std::fs::write(dst.join("same.luau"), "unchanged").unwrap();
-        std::fs::write(dst.join("removed.luau"), "gone from the source").unwrap();
-        std::fs::write(dst.join("old_folder").join("x.luau"), "").unwrap();
-
-        let same = std::fs::File::options()
-            .write(true)
-            .open(dst.join("same.luau"))
-            .unwrap();
-        let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
-        same.set_modified(old).unwrap();
-        drop(same);
-
-        sync_dir(&src, &dst).expect("sync");
-
-        assert_eq!(
-            std::fs::read_to_string(dst.join("main.luau")).unwrap(),
-            "return 2"
-        );
-        assert!(
-            !dst.join("removed.luau").exists(),
-            "a file the source dropped must go"
-        );
-        assert!(
-            !dst.join("old_folder").exists(),
-            "a folder the source dropped must go"
-        );
-        assert_eq!(
-            std::fs::metadata(dst.join("same.luau"))
-                .unwrap()
-                .modified()
-                .unwrap(),
-            old,
-            "a file whose bytes already match must not be rewritten"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn ensure_refuses_an_id_dew_does_not_ship() {
-        let err = ensure("some-installed-applet").expect_err("only Dew's own ids may be bundled");
-        assert!(err.contains("not an applet Dew ships"), "got: {err}");
-        let err = ensure("..").expect_err("a path-shaped id must be refused");
-        assert!(err.contains("not an applet Dew ships"), "got: {err}");
-    }
-
-    #[test]
-    fn the_dashboard_is_bundled_but_not_listed_and_the_quick_panel_is_listed() {
-        assert!(is_bundled_id("dashboard") && is_bundled_id("quickpanel"));
-        let listed: Vec<_> = listed_ids().collect();
-        assert_eq!(listed, vec!["quickpanel"]);
-    }
-}
+#[path = "bundled_tests.rs"]
+mod tests;
