@@ -24,6 +24,7 @@ pub mod compat;
 pub mod conformance;
 pub mod datamodel;
 pub mod flags;
+pub mod fonts;
 pub mod framework;
 pub mod gallery;
 pub mod manifest;
