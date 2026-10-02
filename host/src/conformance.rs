@@ -27,6 +27,10 @@ const TOLERANCE: f32 = 0.01;
 pub static SUPPORTS: &[&str] = &[
     "AnchorPoint",
     "ClipsDescendants",
+    "ContentText",
+    "TextBounds",
+    "TextFits",
+    "TextPadding",
     "TextScaled",
     "TextWrapped",
     "UIAspectRatioConstraint",
@@ -550,42 +554,112 @@ fn ratio_key<T: FromLua>(item: &Table, key: &str) -> Result<Option<T>, String> {
     }
 }
 
-/// Reads a ratio's field off a node. Every field a case may name is listed;
-/// one Dew does not compute yet is an error that says so, and an unknown one
-/// is an error too, so a ratio never compares a value nobody measured.
-fn read_field(node: &dew_runtime::Node, field: &str) -> Result<f32, String> {
+/// Reads a ratio's field off a node. Every field a case may name is listed,
+/// and an unknown one is an error, so a ratio never compares a value nobody
+/// measured. `textBoundsX` and `textBoundsY` are read through Luau, as a
+/// script reads `TextBounds`.
+fn read_field(node: &dew_runtime::Node, field: &str, text: &TextMember) -> Result<f32, String> {
     match field {
         "textHeight" => Ok(node.text_size),
         "x" => Ok(node.rect.x),
         "y" => Ok(node.rect.y),
         "w" => Ok(node.rect.w),
         "h" => Ok(node.rect.h),
-        "textBoundsX" | "textBoundsY" => Err(format!(
-            "'{field}' is not implemented: Dew does not compute TextBounds yet"
-        )),
+        "textBoundsX" | "textBoundsY" => {
+            // A whole number comes back from Luau as an integer.
+            let number = |v: &Value| match v {
+                Value::Number(n) => Some(*n as f32),
+                Value::Integer(n) => Some(*n as f32),
+                _ => None,
+            };
+            let (x, y) = text(&node.name, "TextBounds")?;
+            match (number(&x), number(&y)) {
+                (Some(x), Some(y)) => Ok(if field == "textBoundsX" { x } else { y }),
+                _ => Err(format!("TextBounds read as {x:?}, {y:?}")),
+            }
+        }
         _ => Err(format!("no measurable field '{field}'")),
     }
 }
 
-/// Every key an expect entry may name besides `name`, `x`, `y`, `w` and `h`
-/// is checked here. A key this runner does not compare is a failure naming
-/// the key, so an entry never passes on an assertion nobody checked.
+/// Reads a member of the instance a case names, through Luau: the value a
+/// script sees, after the frame that computed it. A `Vector2` comes back as
+/// its two components, anything else as itself and nil.
+type TextMember<'a> = dyn Fn(&str, &str) -> Result<(Value, Value), String> + 'a;
+
+const READ_MEMBER: &str = r#"
+return function(root, name, member)
+    local node = root:FindFirstChild(name, true)
+    if node == nil then
+        error("no instance named " .. name)
+    end
+    local value = node[member]
+    if member == "TextBounds" then
+        return value.X, value.Y
+    end
+    return value, nil
+end
+"#;
+
+/// Compares an expect entry's `textFits` and `contentText` with the members of
+/// the instance it names, read through Luau.
+fn check_text_expect(exp: &ExpectedNode, text: &TextMember) -> Option<String> {
+    if let Some(want) = exp.other_bools.get("textFits") {
+        match text(&exp.name, "TextFits") {
+            Ok((Value::Boolean(got), _)) if got == *want => {}
+            Ok((got, _)) => {
+                return Some(format!(
+                    "{}: textFits: expected {want}, got {got:?}",
+                    exp.name
+                ))
+            }
+            Err(e) => return Some(format!("{}: textFits: {e}", exp.name)),
+        }
+    }
+    if let Some(want) = exp.other_strings.get("contentText") {
+        match text(&exp.name, "ContentText") {
+            Ok((Value::String(got), _)) if got.to_string_lossy() == *want => {}
+            Ok((got, _)) => {
+                return Some(format!(
+                    "{}: contentText: expected {want:?}, got {got:?}",
+                    exp.name
+                ))
+            }
+            Err(e) => return Some(format!("{}: contentText: {e}", exp.name)),
+        }
+    }
+    None
+}
+
+/// Every key an expect entry may name besides `name`, `x`, `y`, `w`, `h`,
+/// `textFits` and `contentText` fails here, naming the key, so an entry never
+/// passes on an assertion nobody checked. `textFits` given a non-boolean, or
+/// `contentText` a non-string, fails too.
 fn unchecked_expect_key(exp: &ExpectedNode) -> Option<String> {
+    let checked = |key: &str, typed: bool| typed && matches!(key, "textFits" | "contentText");
     let mut keys: Vec<&str> = exp
         .other_numbers
         .keys()
-        .chain(exp.other_strings.keys())
-        .chain(exp.other_bools.keys())
-        .chain(exp.other_values.iter())
         .map(String::as_str)
+        .chain(
+            exp.other_strings
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !checked(k, *k == "contentText")),
+        )
+        .chain(
+            exp.other_bools
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !checked(k, *k == "textFits")),
+        )
+        .chain(exp.other_values.iter().map(String::as_str))
         .collect();
     keys.sort_unstable();
     let key = keys.first()?;
     Some(match *key {
-        "textFits" | "contentText" => format!(
-            "{}: '{key}' is not implemented: Dew does not compare it yet",
-            exp.name
-        ),
+        "textFits" => format!("{}: 'textFits' must be a boolean", exp.name),
+        "contentText" => format!("{}: 'contentText' must be a string", exp.name),
         _ => format!("{}: this runner reads no expect field '{key}'", exp.name),
     })
 }
@@ -840,7 +914,7 @@ pub fn run_case_with_options(
         }
     };
 
-    if let Err(e) = build_fn.call::<Value>((tree_table, root_handle)) {
+    if let Err(e) = build_fn.call::<Value>((tree_table, root_handle.clone())) {
         return CaseResult {
             file_stem: case.file_stem.clone(),
             name: case.name.clone(),
@@ -855,6 +929,14 @@ pub fn run_case_with_options(
 
     // 5. Render the frame through Dew's layout and display list builder
     let frame = frame_of(&dom, root_id, case.surface.width, case.surface.height);
+
+    let reader: Option<mlua::Function> = lua.load(READ_MEMBER).eval().ok();
+    let text_member = |name: &str, member: &str| -> Result<(Value, Value), String> {
+        let reader = reader.as_ref().ok_or("the member reader did not load")?;
+        reader
+            .call::<(Value, Value)>((root_handle.clone(), name, member))
+            .map_err(|e| format!("reading {name}.{member}: {e}"))
+    };
 
     // Index generated nodes by name
     let mut by_name = HashMap::new();
@@ -919,6 +1001,10 @@ pub fn run_case_with_options(
         if let Some(detail) = unchecked_expect_key(exp) {
             return finalize_result(case, detail, None);
         }
+        if let Some(detail) = check_text_expect(exp, &text_member) {
+            let remediation = diagnose_remediation(case, &detail);
+            return finalize_result(case, detail, Some(remediation));
+        }
     }
 
     // 7. Evaluate ratios
@@ -944,11 +1030,11 @@ pub fn run_case_with_options(
             }
         };
 
-        let num = match read_field(of_node, &r.field) {
+        let num = match read_field(of_node, &r.field, &text_member) {
             Ok(v) => v,
             Err(e) => return finalize_result(case, format!("node '{}': {e}", r.of), None),
         };
-        let den = match read_field(to_node, to_field) {
+        let den = match read_field(to_node, to_field, &text_member) {
             Ok(v) => v,
             Err(e) => return finalize_result(case, format!("node '{}': {e}", r.to), None),
         };
@@ -2077,20 +2163,43 @@ mod tests {
         assert_fails_with(status, "reads no expect field 'colour'");
     }
 
+    /// `Label` is "label" at TextSize 20 in a 100 x 30 box: one line of 30,
+    /// narrower than the box, so it fits.
     #[test]
-    fn content_text_and_text_fits_fail_while_unimplemented() {
+    fn content_text_and_text_fits_are_compared() {
+        if crate::services::face().is_none() {
+            return;
+        }
         let content = run_inline(r#"expect = { { name = "Label", contentText = "label" } },"#);
-        assert_fails_with(content, "'contentText' is not implemented");
+        assert_eq!(content, CaseStatus::Pass);
+        let wrong = run_inline(r#"expect = { { name = "Label", contentText = "lab" } },"#);
+        assert_fails_with(wrong, "contentText: expected \"lab\"");
         let fits = run_inline(r#"expect = { { name = "Label", textFits = true } },"#);
-        assert_fails_with(fits, "'textFits' is not implemented");
+        assert_eq!(fits, CaseStatus::Pass);
+        let not = run_inline(r#"expect = { { name = "Label", textFits = false } },"#);
+        assert_fails_with(not, "textFits: expected false");
+        let typed = run_inline(r#"expect = { { name = "Label", textFits = "yes" } },"#);
+        assert_fails_with(typed, "'textFits' must be a boolean");
     }
 
     #[test]
-    fn text_bounds_fail_while_unimplemented() {
-        let status = run_inline(
-            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsX", toField = "w", max = 1 } },"#,
+    fn text_bounds_are_compared() {
+        if crate::services::face().is_none() {
+            return;
+        }
+        // One line in the default face is 1.5 x 20 = 30, the box's height.
+        let height = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsY", toField = "h", expect = 1 } },"#,
         );
-        assert_fails_with(status, "'textBoundsX' is not implemented");
+        assert_eq!(height, CaseStatus::Pass);
+        let width = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsX", toField = "w", max = 0.99 } },"#,
+        );
+        assert_eq!(width, CaseStatus::Pass);
+        let wrong = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsY", toField = "h", expect = 2 } },"#,
+        );
+        assert_fails_with(wrong, "ratio Label.textBoundsY / Label.h");
         let unknown = run_inline(
             r#"ratios = { { of = "Wide", to = "Square", field = "depth", expect = 1 } },"#,
         );
