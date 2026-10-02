@@ -1769,8 +1769,28 @@ impl UserData for InstanceRef {
                             .expect("checked")
                             .props
                             .insert(key.clone(), Variant::Enum(stored));
+                        // `Font` IS A VIEW ONTO `FontFace`. The engine sets the
+                        // face the item stands for, so a label given a `Font`
+                        // draws in it and reads it back from `FontFace`.
+                        let face = (key == "Font")
+                            .then(|| enums::item_by_value("Font", stored.to_u32()))
+                            .flatten()
+                            .and_then(|item| crate::fonts::from_enum(item.name))
+                            .filter(|_| describe(&class, "FontFace").is_some());
+                        let face_changed = face.is_some_and(|face| {
+                            let face = Variant::Font(face);
+                            let changed = dom.property(this.id, "FontFace").as_ref() != Some(&face);
+                            dom.node_mut(this.id)
+                                .expect("checked")
+                                .props
+                                .insert("FontFace".to_string(), face);
+                            changed
+                        });
                         dom.touch();
                         drop(dom);
+                        if face_changed {
+                            signal::property_changed(lua, &this.dom, this.id, "FontFace")?;
+                        }
                         return signal::property_changed(lua, &this.dom, this.id, &key);
                     }
                     other => {

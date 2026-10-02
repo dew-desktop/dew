@@ -42,6 +42,8 @@ for i, class in ipairs(CLASSES) do
 			{ "TextXAlignment", { "Enum", "TextXAlignment", "Left" } },
 			{ "TextYAlignment", { "Enum", "TextYAlignment", "Top" } },
 			{ "TextWrapped", true },
+			{ "FontFace", { "Font", "rbxasset://fonts/families/SourceSansPro.json" } },
+			{ "Font", { "Enum", "Font", "SourceSans" } },
 		}
 	do
 		table.insert(variants, { node = name, prop = v[1], value = v[2] })

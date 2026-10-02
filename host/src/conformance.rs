@@ -24,10 +24,14 @@ const TOLERANCE: f32 = 0.01;
 ///
 /// Features not in this list that are requested via a case's `requires` field
 /// are reported as UNSUPPORTED rather than failed.
+///
+/// `FontFace.BuilderSans` is not here: Builder Sans may not be shipped, so it
+/// is drawn only where a local Studio install provides it.
 pub static SUPPORTS: &[&str] = &[
     "AnchorPoint",
     "ClipsDescendants",
     "ContentText",
+    "FontFace",
     "TextBounds",
     "TextFits",
     "TextPadding",
@@ -763,6 +767,13 @@ pub const TREE_BUILDER: &str = r#"
                 end
             elseif k == "NumberSequenceKeypoint" then
                 return NumberSequenceKeypoint.new(v[2], v[3], v[4])
+            elseif k == "Font" then
+                -- { "Font", family, weight?, style? }, the enum items by name.
+                return Font.new(
+                    v[2],
+                    if v[3] then Enum.FontWeight[v[3]] else nil,
+                    if v[4] then Enum.FontStyle[v[4]] else nil
+                )
             end
             error("unknown encoded type " .. tostring(k))
         end
@@ -1120,8 +1131,8 @@ pub fn run_case_with_options(
                 return finalize_result(case, "failed to create raster painter".to_string(), None);
             }
         };
-        if let Some(font) = crate::services::face() {
-            painter = painter.with_font(font);
+        if let Some(face) = crate::services::default_face() {
+            painter = painter.with_face(face);
         }
         painter.paint_frame(&frame, None);
 

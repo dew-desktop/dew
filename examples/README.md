@@ -194,7 +194,7 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | :--- | :--- | :--- | :--- | ---: |
 | `aether/calculator` | error | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | did not load: calculator: runtime error: examples/aether/calculator/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global. | 0 |
 | `aether/contextmenu` | error | `desktop.Widget` (mount), Aether, which detects its host (runs on both), `desktop` | did not load: contextmenu: runtime error: examples/aether/contextmenu/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global... | 0 |
-| `aether/dialog-demo` | Roblox-ahead | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | `Frame.BorderSizePixel`, `TextLabel.Font`, `UICorner.CornerRadius` (in part), `UIStroke.Color` (in part), `UIStroke.Transparency` (in part) | 29 |
+| `aether/dialog-demo` | Roblox-ahead | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | `Frame.BorderSizePixel`, `TextLabel.Font` (in part), `TextLabel.FontFace` (in part), `UICorner.CornerRadius` (in part), `UIStroke.Color` (in part), `UIStroke.Transparency` (in part) | 29 |
 | `aether/pressable` | error | `DewRoot` (mount), a returned `mount` (mount), Aether, which detects its host (runs on both) | did not load: pressable: runtime error: examples/aether/pressable/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global. | 0 |
 | `aether/slider-demo` | Roblox-ahead | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | `Frame.BorderSizePixel`, `UICorner.CornerRadius` (in part) | 5 |
 | `aether/styled-pressable` | Dew-only | `desktop.Widget` (mount), Aether, which detects its host (runs on both), `services` | `Frame.BorderSizePixel`, `UICorner.CornerRadius` (in part) | 11 |
@@ -217,6 +217,8 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 Read in part, in the renderer's own words:
 
 - `ImageLabel.ScaleType`: Stretch, Fit and Crop are drawn; Slice and Tile fall back to Stretch
+- `TextLabel.Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- `TextLabel.FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
 - `UICorner.CornerRadius`: the offset rounds the corners; the scale is dropped
 - `UIPadding.PaddingBottom`: the offset insets the content; the scale is discarded
 - `UIPadding.PaddingLeft`: the offset insets the content; the scale is discarded

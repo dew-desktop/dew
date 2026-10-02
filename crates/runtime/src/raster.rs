@@ -20,9 +20,9 @@ use std::collections::HashMap;
 
 pub struct RasterPainter {
     canvas: Canvas,
-    /// The face used for every run. One font for now, deliberately: the display
-    /// list carries no font name yet, so pretending to select one would be a
-    /// second place for text to diverge between hosts.
+    /// The face for a text node that carries no layout of its own, which is a
+    /// node from a Luau display list. A node the host laid out is drawn in the
+    /// face its [`crate::text::TextLayout`] names.
     face: Option<Face<Font>>,
     /// Images already uploaded to the rasteriser, by `frame::Bitmap::id`.
     ///
@@ -69,7 +69,7 @@ impl RasterPainter {
         self.canvas.resize(width, height)
     }
 
-    /// Use this font for text.
+    /// Use this face for text that arrives without a layout.
     ///
     /// TEXT ALSO NEEDS THE RIGHT BACKEND. tiny-skia is a shape backend with no
     /// text at all, so a run on one is dropped however good the font is; pair a
@@ -77,8 +77,8 @@ impl RasterPainter {
     ///
     /// Without a font, text nodes are SKIPPED rather than drawn in a substitute face — a missing glyph run is visible in a snapshot,
     /// whereas a silently substituted font looks like a rendering bug in Aether.
-    pub fn with_font(mut self, font: Font) -> Self {
-        self.face = Some(Face::stand_in(font));
+    pub fn with_face(mut self, face: Face<Font>) -> Self {
+        self.face = Some(face);
         self
     }
 
@@ -193,7 +193,7 @@ impl Painter for RasterPainter {
     }
 
     fn draw_text(&mut self, node: &Node) {
-        let (Some(face), Some(text)) = (self.face, node.text.as_deref()) else {
+        let Some(text) = node.text.as_deref() else {
             return;
         };
         if text.is_empty() {
@@ -207,6 +207,9 @@ impl Painter for RasterPainter {
         let layout = match &node.text_layout {
             Some(layout) => layout,
             None => {
+                let Some(face) = self.face else {
+                    return;
+                };
                 computed = lay_out(
                     &face,
                     &Block {
@@ -227,6 +230,16 @@ impl Painter for RasterPainter {
             }
         };
 
+        // THE FACE THE LINES WERE MEASURED IN. Drawing them in any other would
+        // put glyphs of one width where the breaks and alignment assumed
+        // another.
+        let Some(font) = layout
+            .face
+            .and_then(Font::from_id)
+            .or(self.face.map(|face| face.font))
+        else {
+            return;
+        };
         let colour = rgba(
             node.text_colour.unwrap_or(Rgb(255, 255, 255)),
             node.text_alpha,
@@ -237,14 +250,8 @@ impl Painter for RasterPainter {
             }
             // `fill_text` takes the TOP-LEFT and converts to a baseline itself;
             // `Line` already holds that top-left.
-            self.canvas.fill_text(
-                face.font,
-                layout.glyph_px,
-                line.x,
-                line.y,
-                colour,
-                &line.text,
-            );
+            self.canvas
+                .fill_text(font, layout.glyph_px, line.x, line.y, colour, &line.text);
         }
     }
 
