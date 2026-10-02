@@ -40,12 +40,22 @@ pub trait Advance {
     fn raster_id(&self) -> Option<u32> {
         None
     }
+
+    /// Whether the font draws `ch` with a glyph of its own. A font that cannot
+    /// say is treated as lacking it.
+    fn has_glyph(&self, _ch: char) -> bool {
+        false
+    }
 }
 
 #[cfg(feature = "raster")]
 impl Advance for dew_raster::Font {
     fn advance(&self, px: f32, text: &str) -> Option<f32> {
         self.width(px, text)
+    }
+
+    fn has_glyph(&self, ch: char) -> bool {
+        dew_raster::Font::has_glyph(*self, ch)
     }
 
     fn raster_id(&self) -> Option<u32> {
@@ -138,11 +148,11 @@ pub struct Block<'a> {
     pub wrap: bool,
     pub align_x: Align,
     pub align_y: Align,
-    /// `TextTruncate` is not `None`. Carried so the signature is ready for it;
-    /// nothing reads it yet.
+    /// `TextTruncate` is `AtEnd`: a line wider than the content box is cut to
+    /// a prefix and an ellipsis.
     pub truncate: bool,
-    /// `LineHeight`, as a multiple of the line box. Carried so the signature
-    /// is ready for it; nothing reads it yet.
+    /// `LineHeight`, as a multiple of the line box: the step from one line's
+    /// top to the next.
     pub line_height: f32,
 }
 
@@ -285,6 +295,17 @@ pub fn measure_spaced<F: Advance>(
     Some((width, height))
 }
 
+/// What a truncated line ends in: the engine draws one HORIZONTAL ELLIPSIS
+/// (U+2026), so a face with that glyph ends in it, and only a face without it
+/// falls back to three full stops rather than drawing a box.
+fn ellipsis<F: Advance>(font: &F) -> &'static str {
+    if font.has_glyph('\u{2026}') {
+        "\u{2026}"
+    } else {
+        "..."
+    }
+}
+
 /// Lay a label's text out in its content box.
 pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> {
     let base_line_h = face.effective_em(block.text_size);
@@ -325,6 +346,7 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
         Align::End => content.y + content.h - block_h,
     };
 
+    let ellipsis = ellipsis(&face.font);
     let mut truncated_any = false;
     let lines: Vec<Line> = all
         .iter()
@@ -334,7 +356,7 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
             let mut line_text = text.clone();
             let mut line_width = *width;
             if block.truncate && line_width > content.w + SLACK && content.w > 0.0 {
-                if let Some(ellipsis_w) = face.font.advance(glyph_px, "...") {
+                if let Some(ellipsis_w) = face.font.advance(glyph_px, ellipsis) {
                     if ellipsis_w <= content.w + SLACK {
                         let target_w = (content.w - ellipsis_w).max(0.0);
                         let mut prefix = String::new();
@@ -350,7 +372,7 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
                                 }
                             }
                         }
-                        line_text = format!("{prefix}...");
+                        line_text = format!("{prefix}{ellipsis}");
                         line_width = prefix_w + ellipsis_w;
                         truncated_any = true;
                     }
@@ -768,6 +790,51 @@ mod tests {
         let wrapped = scaled_size(&f, "Hi there", 120.0, 300.0, true).unwrap();
         let (w, h) = measure(&f, "Hi there", wrapped, Some(120.0)).unwrap();
         assert!(w <= 120.0 && h <= 300.0);
+    }
+
+    /// Mono, with a glyph for every character it is asked about, U+2026
+    /// included.
+    #[derive(Debug, Clone, Copy)]
+    struct MonoWithEllipsis;
+
+    impl Advance for MonoWithEllipsis {
+        fn advance(&self, px: f32, text: &str) -> Option<f32> {
+            Mono.advance(px, text)
+        }
+
+        fn has_glyph(&self, _ch: char) -> bool {
+            true
+        }
+    }
+
+    /// A truncated line ends in the engine's single ellipsis glyph, U+2026,
+    /// when the face has it, and in three full stops only when it does not.
+    /// Either way the prefix and the ellipsis together fit the box, and
+    /// `TextBounds` is their width.
+    #[test]
+    fn truncation_ends_in_one_ellipsis_glyph_when_the_face_has_it() {
+        // 12 px a character at TextSize 20: 8 characters fit in 100.
+        let content = rect(0.0, 0.0, 100.0, 64.0);
+        let mut b = block("A long label", 20.0, content, false, Align::Start);
+        b.truncate = true;
+
+        let s = stand_in();
+        let with = Face {
+            font: MonoWithEllipsis,
+            em_scale: s.em_scale,
+            glyph_per_em: s.glyph_per_em,
+            ascent: s.ascent,
+            descent: s.descent,
+        };
+        let laid = lay_out(&with, &b).unwrap();
+        assert_eq!(laid.lines[0].text, "A long \u{2026}");
+        assert!(close(laid.bounds.0, 96.0), "{}", laid.bounds.0);
+        assert!(!laid.fits);
+
+        let without = lay_out(&stand_in(), &b).unwrap();
+        assert_eq!(without.lines[0].text, "A lon...");
+        assert!(close(without.bounds.0, 96.0), "{}", without.bounds.0);
+        assert!(!without.fits);
     }
 
     /// The wrap breaks between words, then between characters for a word

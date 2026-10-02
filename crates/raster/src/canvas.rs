@@ -23,7 +23,7 @@ use crate::{
     ar_clip_push_rounded, ar_draw_image, ar_fill_gradient, ar_fill_radial_gradient, ar_fill_rect,
     ar_fill_text, ar_font_load, ar_image_free, ar_image_size, ar_image_upload, ar_png,
     ar_stroke_rect, ar_surface_free, ar_surface_new_backend, ar_surface_resize, ar_text_ascent,
-    ar_text_descent, ar_text_line_height, ar_text_width, Surface,
+    ar_text_descent, ar_text_has_glyph, ar_text_line_height, ar_text_width, Surface,
 };
 
 /// Which rasteriser paints.
@@ -77,6 +77,12 @@ impl Font {
     pub fn width(self, size: f32, text: &str) -> Option<f32> {
         let w = ar_text_width(self.0, size, text.as_ptr(), text.len() as u32);
         (w >= 0.0).then_some(w)
+    }
+
+    /// Whether the font has a glyph of its own for `ch`, rather than drawing
+    /// it as `.notdef`. False for an unknown font.
+    pub fn has_glyph(self, ch: char) -> bool {
+        ar_text_has_glyph(self.0, ch as u32) == 1
     }
 
     /// Distance from the top of the line box to the baseline.
