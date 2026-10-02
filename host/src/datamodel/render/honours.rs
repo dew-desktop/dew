@@ -124,6 +124,23 @@ fn gui_object(class: &str, property: &str) -> Honour {
         }
     }
 
+    // `text_layout_of` reads truncation, line spacing and markup, and `node`
+    // the stroke, on the three classes that report `TextBounds`.
+    if matches!(class, "TextLabel" | "TextButton" | "TextBox") {
+        match property {
+            "TextTruncate" | "LineHeight" | "TextStrokeColor3" | "TextStrokeTransparency" => {
+                return Implemented
+            }
+            "RichText" => {
+                return Partial(
+                    "markup is stripped and measured; bold, italic, colour and other tags \
+                     are not drawn",
+                )
+            }
+            _ => {}
+        }
+    }
+
     // `InputActionLabel` draws an image only if a guest gives it an `Image`,
     // which the engine's class does not have, so its tint and transparency
     // reach nothing the engine would draw.
