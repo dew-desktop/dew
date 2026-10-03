@@ -453,6 +453,30 @@ fn instance_arg(value: &LuaValue, method: &str) -> LuaResult<InstanceRef> {
     Ok(other.clone())
 }
 
+/// Store a `StyleRule` value, printing the engine's cast warning when the
+/// stored value changed to one an enum property cannot take. Printed here,
+/// once per change, rather than each time the cascade skips the value.
+fn set_style_property(dom: &mut super::Dom, rule: usize, name: &str, value: Option<Variant>) {
+    let warning = value.as_ref().and_then(|v| {
+        let rule_name = dom.name_of(rule)?;
+        super::style_cast_warning(&rule_name, name, v)
+    });
+    if dom.set_style_property(rule, name, value) {
+        if let Some(warning) = warning {
+            #[cfg(test)]
+            STYLE_WARNINGS.with(|said| said.borrow_mut().push(warning.clone()));
+            eprintln!("[dew] {warning}");
+        }
+    }
+}
+
+// Every cast warning this thread has printed, for a test to count.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static STYLE_WARNINGS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// The method named `key`, already bound to `this`, or `None` when this host has
 /// no such member on this class.
 ///
@@ -792,12 +816,12 @@ pub fn lookup(
         })?,
         "SetProperty" => lua.create_function(
             move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
-                let variant = super::coerce_style_value("SetProperty", &name, &value)?;
+                let variant = super::coerce_style_value("SetProperty", &value)?;
                 let mut dom = this.dom.lock().expect("dom");
                 if dom.node(this.id).is_none() {
                     return Err(dead());
                 }
-                dom.set_style_property(this.id, &name, variant);
+                set_style_property(&mut dom, this.id, &name, variant);
                 Ok(())
             },
         )?,
@@ -808,8 +832,8 @@ pub fn lookup(
             }
             for pair in table.pairs::<String, LuaValue>() {
                 let (name, value) = pair?;
-                let variant = super::coerce_style_value("SetProperties", &name, &value)?;
-                dom.set_style_property(this.id, &name, variant);
+                let variant = super::coerce_style_value("SetProperties", &value)?;
+                set_style_property(&mut dom, this.id, &name, variant);
             }
             Ok(())
         })?,

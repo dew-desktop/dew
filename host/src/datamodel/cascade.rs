@@ -146,41 +146,51 @@ pub fn resolve_full(dom: &Dom, id: usize) -> BTreeMap<String, (Variant, usize)> 
         // by construction (a rule is always a `StyleSheet` child), which is
         // the only place sprint 1 looks for the Attribute a token names.
         let sheet = dom.parent_of(candidate.style_rule);
-        for (name, value) in dom.get_style_properties(candidate.style_rule) {
-            let value = match resolve_token(dom, sheet, value) {
-                Variant::EnumItem(item) => match enum_for(dom, id, &name, item) {
-                    Some(value) => value,
-                    None => continue,
-                },
-                other => other,
+        let Some(props) = dom.style_properties.get(&candidate.style_rule) else {
+            continue;
+        };
+        // `Font` WRITES `FontFace` TOO, as assigning it does, so the two are
+        // one contest: whichever this loop writes last wins. That is the
+        // stronger rule, or within one rule the one set last, so `Font` is
+        // held back until after `FontFace` when it was set after it.
+        let font_last = dom.font_set_last.contains(&candidate.style_rule);
+        let held = font_last.then(|| props.get_key_value("Font")).flatten();
+        let ordered = props
+            .iter()
+            .filter(|(name, _)| !(font_last && name.as_str() == "Font"))
+            .chain(held);
+        for (name, value) in ordered {
+            let Some(value) = applicable(dom, id, name, resolve_token(dom, sheet, value.clone()))
+            else {
+                continue;
             };
-            // `Font` WRITES `FontFace` TOO, as assigning it does, so the two
-            // are one contest: whichever this loop writes last wins, which
-            // is the stronger rule, or `FontFace` when one rule sets both,
-            // since the map yields `Font` first.
             if name == "Font" {
                 if let Some(face) = face_of_font(dom, id, &value) {
                     resolved.insert("FontFace".to_string(), (face, candidate.style_rule));
                 }
             }
-            resolved.insert(name, (value, candidate.style_rule));
+            resolved.insert(name.clone(), (value, candidate.style_rule));
         }
     }
     resolved
 }
 
-/// A rule's typed enum value as `id` would hold it: the bare `Variant::Enum`
-/// an assignment stores when `id`'s class declares `name` as that enum,
-/// nothing when it declares `name` as anything else, and the typed value
-/// unchanged when it does not declare `name` at all.
-fn enum_for(dom: &Dom, id: usize, name: &str, item: rbx_types::EnumItem) -> Option<Variant> {
+/// A rule's value as `id` would hold it, or nothing when `id` cannot take
+/// it. Where `id`'s class declares `name` as an enum, only an item of that
+/// enum applies, turned into the bare `Variant::Enum` an assignment stores;
+/// a string, a number or another enum's item is skipped, as measured in
+/// Studio. An enum item under a name declared as anything else is skipped
+/// too. Every other value, and any value under a name `id` does not
+/// declare, passes unchanged.
+fn applicable(dom: &Dom, id: usize, name: &str, value: Variant) -> Option<Variant> {
     let class = dom.node(id).map(|node| node.class.as_str())?;
-    match super::describe(class, name).map(|d| &d.data_type) {
-        None => Some(Variant::EnumItem(item)),
-        Some(rbx_reflection::DataType::Enum(ty)) if *ty == item.ty => {
+    match (super::describe(class, name).map(|d| &d.data_type), value) {
+        (Some(rbx_reflection::DataType::Enum(ty)), Variant::EnumItem(item)) if *ty == item.ty => {
             Some(Variant::Enum(rbx_types::Enum::from_u32(item.value)))
         }
-        Some(_) => None,
+        (Some(rbx_reflection::DataType::Enum(_)), _) => None,
+        (Some(_), Variant::EnumItem(_)) => None,
+        (_, value) => Some(value),
     }
 }
 
