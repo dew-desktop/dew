@@ -5133,3 +5133,224 @@ mod styled_list_cost {
         );
     }
 }
+
+/// Enum properties set through a `StyleRule`: stored with their type, checked
+/// as an assignment is, and reaching layout and paint.
+#[cfg(test)]
+mod styled_enums {
+    use super::*;
+    use crate::datamodel::{install, install_vocabulary, SharedDom};
+    use mlua::prelude::*;
+
+    fn scene(src: &str) -> (Lua, SharedDom, usize) {
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        lua.load(src).exec().expect("guest");
+        (lua, dom, root)
+    }
+
+    fn run(lua: &Lua, src: &str) {
+        lua.load(src).exec().expect("guest");
+    }
+
+    /// A sheet on `root` holding `rule`, which matches every `TextLabel`.
+    const SHEET: &str = r#"
+        sheet = Instance.new("StyleSheet")
+        sheet.Parent = root
+        rule = Instance.new("StyleRule")
+        rule.Selector = "TextLabel"
+        rule.Parent = sheet
+    "#;
+
+    /// A `TextLabel` that sizes itself to its text, after `setup` has run
+    /// with the label in `t` before it is parented.
+    fn label(setup: &str) -> String {
+        format!(
+            r#"{SHEET}
+            t = Instance.new("TextLabel")
+            t.Text = "The quick brown fox"
+            t.TextSize = 20
+            t.Size = UDim2.fromOffset(0, 30)
+            t.AutomaticSize = Enum.AutomaticSize.X
+            {setup}
+            t.Parent = root
+            "#
+        )
+    }
+
+    fn width(setup: &str) -> f32 {
+        let (_lua, dom, root) = scene(&label(setup));
+        frame_of(&dom, root, 800.0, 100.0).nodes[0].rect.w
+    }
+
+    #[test]
+    fn an_enum_item_set_on_a_rule_reads_back_as_the_same_item() {
+        let (lua, _dom, _root) = scene(SHEET);
+        run(
+            &lua,
+            r#"
+            rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Left)
+            local got = rule:GetProperty("TextXAlignment")
+            assert(typeof(got) == "EnumItem", typeof(got))
+            assert(got == Enum.TextXAlignment.Left, tostring(got))
+            assert(rule:GetProperties().TextXAlignment == Enum.TextXAlignment.Left)
+
+            -- An enum under a name no class declares keeps its own type.
+            rule:SetProperty("Anything", Enum.FillDirection.Vertical)
+            assert(rule:GetProperty("Anything") == Enum.FillDirection.Vertical)
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_rule_checks_an_enum_value_as_assignment_does() {
+        let (lua, _dom, _root) = scene(SHEET);
+        run(
+            &lua,
+            r#"
+            local probe = Instance.new("TextLabel")
+            local function both(value)
+                local direct = pcall(function() probe.TextXAlignment = value end)
+                local styled = pcall(function() rule:SetProperty("TextXAlignment", value) end)
+                return direct, styled
+            end
+
+            -- Another enum's item: refused both ways.
+            local direct, styled = both(Enum.FillDirection.Vertical)
+            assert(not direct and not styled, "wrong enum")
+
+            -- A number naming a member: accepted both ways, as that member.
+            direct, styled = both(Enum.TextXAlignment.Right.Value)
+            assert(direct and styled, "member number")
+            assert(rule:GetProperty("TextXAlignment") == Enum.TextXAlignment.Right)
+
+            -- A number naming nothing: refused both ways.
+            direct, styled = both(999)
+            assert(not direct and not styled, "unknown number")
+
+            -- A name as a string: refused both ways.
+            direct, styled = both("Left")
+            assert(not direct and not styled, "name string")
+
+            -- A token is not a value yet, so the rule takes it.
+            rule:SetProperty("TextXAlignment", "$Align")
+            "#,
+        );
+    }
+
+    #[test]
+    fn a_styled_text_x_alignment_reaches_paint() {
+        let (_lua, dom, root) = scene(&label(
+            r#"rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Left)"#,
+        ));
+        let f = frame_of(&dom, root, 800.0, 100.0);
+        assert_eq!(f.nodes[0].text_align_x, Some(Align::Start));
+    }
+
+    #[test]
+    fn a_rule_changed_after_a_frame_is_painted() {
+        let (lua, dom, root) = scene(&label(
+            r#"rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Left)"#,
+        ));
+        assert_eq!(
+            frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x,
+            Some(Align::Start)
+        );
+        run(
+            &lua,
+            r#"rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Right)"#,
+        );
+        assert_eq!(
+            frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x,
+            Some(Align::End)
+        );
+    }
+
+    #[test]
+    fn a_styled_font_measures_as_an_assigned_one() {
+        let unstyled = width("");
+        let assigned = width("t.Font = Enum.Font.SourceSans");
+        let styled = width(r#"rule:SetProperty("Font", Enum.Font.SourceSans)"#);
+        assert_ne!(assigned, unstyled, "SourceSans should measure differently");
+        assert_eq!(styled, assigned);
+    }
+
+    const MONTSERRAT: &str = r#"Font.new("rbxasset://fonts/families/Montserrat.json")"#;
+
+    #[test]
+    fn font_and_font_face_contest_as_one_property() {
+        let source_sans = width("t.Font = Enum.Font.SourceSans");
+        let montserrat = width(&format!("t.FontFace = {MONTSERRAT}"));
+        assert_ne!(source_sans, montserrat);
+
+        // A stronger rule's `Font` beats a weaker rule's `FontFace`.
+        let stronger_font = width(&format!(
+            r#"rule:SetProperty("FontFace", {MONTSERRAT})
+            local strong = Instance.new("StyleRule")
+            strong.Selector = "TextLabel"
+            strong.Priority = 1
+            strong:SetProperty("Font", Enum.Font.SourceSans)
+            strong.Parent = sheet"#
+        ));
+        assert_eq!(stronger_font, source_sans);
+
+        // And the other way round.
+        let stronger_face = width(&format!(
+            r#"rule:SetProperty("Font", Enum.Font.SourceSans)
+            local strong = Instance.new("StyleRule")
+            strong.Selector = "TextLabel"
+            strong.Priority = 1
+            strong:SetProperty("FontFace", {MONTSERRAT})
+            strong.Parent = sheet"#
+        ));
+        assert_eq!(stronger_face, montserrat);
+
+        // One rule setting both: `FontFace` wins.
+        let both = width(&format!(
+            r#"rule:SetProperty("FontFace", {MONTSERRAT})
+            rule:SetProperty("Font", Enum.Font.SourceSans)"#
+        ));
+        assert_eq!(both, montserrat);
+
+        // An assigned `FontFace` beats a styled `Font`.
+        let assigned_face = width(&format!(
+            r#"rule:SetProperty("Font", Enum.Font.SourceSans)
+            t.FontFace = {MONTSERRAT}"#
+        ));
+        assert_eq!(assigned_face, montserrat);
+    }
+
+    #[test]
+    fn an_enum_under_a_transition_snaps() {
+        let (lua, dom, root) = scene(&label(
+            r#"rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Left)
+            rule:SetPropertyTransition("TextXAlignment", TweenInfo.new(10))"#,
+        ));
+        dom.lock().expect("dom").advance_transitions(root, 0.0);
+        assert_eq!(
+            frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x,
+            Some(Align::Start)
+        );
+        run(
+            &lua,
+            r#"rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Right)"#,
+        );
+        dom.lock().expect("dom").advance_transitions(root, 0.1);
+        assert_eq!(
+            frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x,
+            Some(Align::End)
+        );
+    }
+}

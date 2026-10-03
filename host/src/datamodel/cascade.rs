@@ -147,13 +147,53 @@ pub fn resolve_full(dom: &Dom, id: usize) -> BTreeMap<String, (Variant, usize)> 
         // the only place sprint 1 looks for the Attribute a token names.
         let sheet = dom.parent_of(candidate.style_rule);
         for (name, value) in dom.get_style_properties(candidate.style_rule) {
-            resolved.insert(
-                name,
-                (resolve_token(dom, sheet, value), candidate.style_rule),
-            );
+            let value = match resolve_token(dom, sheet, value) {
+                Variant::EnumItem(item) => match enum_for(dom, id, &name, item) {
+                    Some(value) => value,
+                    None => continue,
+                },
+                other => other,
+            };
+            // `Font` WRITES `FontFace` TOO, as assigning it does, so the two
+            // are one contest: whichever this loop writes last wins, which
+            // is the stronger rule, or `FontFace` when one rule sets both,
+            // since the map yields `Font` first.
+            if name == "Font" {
+                if let Some(face) = face_of_font(dom, id, &value) {
+                    resolved.insert("FontFace".to_string(), (face, candidate.style_rule));
+                }
+            }
+            resolved.insert(name, (value, candidate.style_rule));
         }
     }
     resolved
+}
+
+/// A rule's typed enum value as `id` would hold it: the bare `Variant::Enum`
+/// an assignment stores when `id`'s class declares `name` as that enum,
+/// nothing when it declares `name` as anything else, and the typed value
+/// unchanged when it does not declare `name` at all.
+fn enum_for(dom: &Dom, id: usize, name: &str, item: rbx_types::EnumItem) -> Option<Variant> {
+    let class = dom.node(id).map(|node| node.class.as_str())?;
+    match super::describe(class, name).map(|d| &d.data_type) {
+        None => Some(Variant::EnumItem(item)),
+        Some(rbx_reflection::DataType::Enum(ty)) if *ty == item.ty => {
+            Some(Variant::Enum(rbx_types::Enum::from_u32(item.value)))
+        }
+        Some(_) => None,
+    }
+}
+
+/// The `FontFace` a resolved `Font` stands for on `id`, when `id`'s class
+/// has a `FontFace` for it to set.
+fn face_of_font(dom: &Dom, id: usize, value: &Variant) -> Option<Variant> {
+    let Variant::Enum(raw) = value else {
+        return None;
+    };
+    let class = dom.node(id).map(|node| node.class.as_str())?;
+    super::describe(class, "FontFace")?;
+    let item = super::enums::item_by_value("Font", raw.to_u32())?;
+    crate::fonts::from_enum(item.name).map(Variant::Font)
 }
 
 /// `value`, unless it is a `$Name` token string, in which case the value of

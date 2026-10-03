@@ -226,6 +226,15 @@ pub fn describe(class: &str, property: &str) -> Option<&'static PropertyDescript
     Some(&descriptors()[index])
 }
 
+/// The declared type of every visible row named `property`, whatever its
+/// class.
+pub fn data_types_named(property: &str) -> impl Iterator<Item = &'static DataType<'static>> + '_ {
+    PROPERTIES
+        .iter()
+        .filter(move |p| p.name == property && visible(&p.tier))
+        .map(|p| &p.data_type)
+}
+
 /// The default value for `class.property`, if this registry has one AND it
 /// is visible right now.
 pub fn default_for(class: &str, property: &str) -> Option<Variant> {

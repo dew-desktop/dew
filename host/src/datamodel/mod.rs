@@ -1306,6 +1306,113 @@ pub(crate) fn coerce_variant_value(caller: &str, value: &LuaValue) -> LuaResult<
     }
 }
 
+/// The enum types a property name is declared as, when every class that
+/// declares it, in the reflection database or the extension registry, makes
+/// it an enum. `None` for a name no class declares, or one some class
+/// declares as anything else, since a `StyleRule` value under such a name
+/// cannot be checked without knowing which class it will reach.
+fn enum_types_named(property: &str) -> Option<Vec<&'static str>> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    // `None` in the map marks a name some class declares as a non-enum.
+    static DECLARED: OnceLock<HashMap<&'static str, Option<Vec<&'static str>>>> = OnceLock::new();
+    let declared = DECLARED.get_or_init(|| {
+        let mut out: HashMap<&'static str, Option<Vec<&'static str>>> = HashMap::new();
+        if let Ok(db) = rbx_reflection_database::get() {
+            for class in db.classes.values() {
+                for (name, descriptor) in &class.properties {
+                    let entry = out.entry(name.as_ref()).or_insert_with(|| Some(Vec::new()));
+                    match (&descriptor.data_type, entry.as_mut()) {
+                        (DataType::Enum(ty), Some(types)) => {
+                            if !types.contains(ty) {
+                                types.push(ty);
+                            }
+                        }
+                        _ => *entry = None,
+                    }
+                }
+            }
+        }
+        out
+    });
+    let mut types = match declared.get(property) {
+        Some(None) => return None,
+        Some(Some(types)) => types.clone(),
+        None => Vec::new(),
+    };
+    for data_type in extensions::data_types_named(property) {
+        match data_type {
+            DataType::Enum(ty) if !types.contains(ty) => types.push(ty),
+            DataType::Enum(_) => {}
+            _ => return None,
+        }
+    }
+    (!types.is_empty()).then_some(types)
+}
+
+/// Coerce a value for `StyleRule:SetProperty(name, value)`.
+///
+/// AN ENUM IS STORED WITH ITS TYPE, as `Variant::EnumItem`, because a rule is
+/// not an instance of the class it will style and so has no declared type to
+/// name a bare `Variant::Enum` by. The cascade turns it back into the bare
+/// form an assigned property holds (`cascade::resolve_full`).
+///
+/// CHECKED AS ASSIGNMENT CHECKS IT when `name` is an enum on every class that
+/// has it: an item of another enum is refused, a number is accepted when it
+/// names a member, and a string is refused unless it is a `$` token. Anything
+/// else is stored as [`coerce_variant_value`] stores it.
+pub(crate) fn coerce_style_value(
+    caller: &str,
+    name: &str,
+    value: &LuaValue,
+) -> LuaResult<Option<Variant>> {
+    let declared = enum_types_named(name);
+    let expects = |types: &[&str]| {
+        types
+            .iter()
+            .map(|ty| format!("Enum.{ty}"))
+            .collect::<Vec<_>>()
+            .join(" or ")
+    };
+    if let LuaValue::UserData(ud) = value {
+        if let Ok(item) = ud.borrow::<LuaEnumItem>() {
+            if let Some(types) = &declared {
+                if !types.contains(&item.ty) {
+                    return Err(LuaError::runtime(format!(
+                        "{caller}: {name} expects an {}, got an Enum.{}",
+                        expects(types),
+                        item.ty
+                    )));
+                }
+            }
+            return Ok(Some(Variant::EnumItem(rbx_types::EnumItem {
+                ty: item.ty.to_string(),
+                value: item.value,
+            })));
+        }
+    }
+    if let Some(types) = &declared {
+        match value {
+            LuaValue::String(s) if s.as_bytes().first() == Some(&b'$') => {}
+            LuaValue::String(_) => {
+                return Err(LuaError::runtime(format!(
+                    "{caller}: {name} expects an {}, got string",
+                    expects(types)
+                )))
+            }
+            LuaValue::Integer(_) | LuaValue::Number(_) if types.len() == 1 => {
+                let raw = coerce_enum(value, types[0], "StyleRule", name)?;
+                return Ok(Some(Variant::EnumItem(rbx_types::EnumItem {
+                    ty: types[0].to_string(),
+                    value: raw.to_u32(),
+                })));
+            }
+            _ => {}
+        }
+    }
+    coerce_variant_value(caller, value)
+}
+
 /// Turn a stored `Variant` back into something a guest can read.
 pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> LuaResult<LuaValue> {
     Ok(match value {
@@ -1326,6 +1433,16 @@ pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> Lua
                 }
             }
         }
+        // The typed form a `StyleRule` stores an enum in, naming itself.
+        Variant::EnumItem(item) => match enums::item_by_value(&item.ty, item.value) {
+            Some(found) => found.into_lua(lua)?,
+            None => {
+                return Err(LuaError::runtime(format!(
+                    "Enum.{} has no member numbered {}",
+                    item.ty, item.value
+                )))
+            }
+        },
         Variant::Bool(v) => LuaValue::Boolean(*v),
         Variant::String(v) => lua.create_string(v)?.into_lua(lua)?,
         Variant::Float32(v) => LuaValue::Number(*v as f64),
