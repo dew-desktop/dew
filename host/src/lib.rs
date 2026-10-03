@@ -30,3 +30,8 @@ pub mod gallery;
 pub mod manifest;
 pub mod scope;
 pub mod services;
+
+// `host/build.rs`'s lockfile check, compiled here only so its tests run.
+#[cfg(test)]
+#[path = "../build/locked_packages.rs"]
+mod locked_packages;
