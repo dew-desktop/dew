@@ -204,14 +204,19 @@ fn text_for(dom: &Dom, id: usize, class: &str) -> Option<String> {
 /// THE ONE POINT WHERE A PLACEHOLDER DIFFERS FROM TEXT. The engine uses the
 /// placeholder only when `Text` is exactly empty (a single space is text),
 /// and then measures, wraps, truncates and grows AutomaticSize to it as it
-/// would to `Text`. Here the only difference is the colour, which
-/// [`text_colour_key`] swaps to `PlaceholderColor3`; transparency, stroke,
-/// alignment, wrapping, truncation, `LineHeight`, `RichText` and the face are
-/// `Text`'s own. Whether the engine fades or strokes a placeholder, and
-/// whether it hides one while the box is focused, is not measured, so the
-/// placeholder is shown regardless of focus. The engine's `TextBounds` for a
-/// `RichText` placeholder matches its markup measured as written, which this
-/// does not follow yet.
+/// would to `Text`. It keeps showing it while the box is focused, until `Text`
+/// is non-empty, so focus is not read here. Here the only difference is the
+/// colour, which [`text_colour_key`] swaps to `PlaceholderColor3`;
+/// transparency, stroke, alignment, wrapping, truncation, `LineHeight`,
+/// `RichText` and the face are `Text`'s own, and the engine fades and strokes
+/// a placeholder as it does `Text`.
+///
+/// A DELIBERATE DIVERGENCE: `RichText` markup is applied to a placeholder as it
+/// is to `Text`. The engine draws a placeholder's markup as written:
+/// `"<b>Bold</b> hint"` in LegacyArial at TextSize 20 reports `TextBounds` of
+/// 140 by 20, the raw markup's width (Dew measures it at 136, and the stripped
+/// `"Bold hint"` at 70). Dew keeps the markup applied, and
+/// `render::honours` reports `PlaceholderText` as divergent.
 fn shows_placeholder(dom: &Dom, id: usize, class: &str) -> bool {
     class == "TextBox"
         && text(dom, id, "Text").is_none_or(|t| t.is_empty())
@@ -5797,11 +5802,12 @@ mod placeholder {
         assert_eq!(shown.size, typed.size);
     }
 
-    /// Row 11. With `RichText` on, a placeholder is read as `Text` would be.
-    /// The engine reads 140 by 20, which is the markup measured as written (Dew
-    /// 136) rather than stripped (Dew 70); see `shows_placeholder`.
+    /// Row 11, A DELIBERATE DIVERGENCE. With `RichText` on, a placeholder's
+    /// markup is applied as `Text`'s would be. The engine draws it as written
+    /// and reads 140 by 20, the raw markup (Dew 136) rather than the stripped
+    /// text (Dew 70); see `shows_placeholder`.
     #[test]
-    fn a_rich_text_placeholder_is_read_as_text_would_be() {
+    fn a_rich_text_placeholder_diverges_from_the_engine_by_applying_its_markup() {
         let markup = "<b>Bold</b> hint";
         let Some((lua, _)) = draw(&format!(
             r#"shown = box("Shown", 10)

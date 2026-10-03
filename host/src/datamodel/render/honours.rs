@@ -21,8 +21,8 @@
 //!
 //! A property the renderer never reads is [`Honour::Absent`], including one
 //! that has no paint of its own (`Active`, a modifier's `Name`). Every claim of
-//! [`Honour::Implemented`] or [`Honour::Partial`] is checked against evidence by
-//! `every_claim_has_evidence` below.
+//! [`Honour::Implemented`], [`Honour::Partial`] or [`Honour::Divergent`] is
+//! checked against evidence by `every_claim_has_evidence` below.
 
 use super::{draws_image, draws_text};
 use crate::datamodel::members::class_is_a;
@@ -35,12 +35,15 @@ pub enum Honour {
     Implemented,
     /// Read, with part of its meaning dropped. The text says which part.
     Partial(&'static str),
+    /// Read, and drawn differently from the engine on purpose. The text says
+    /// what Dew does and what the engine does instead.
+    Divergent(&'static str),
     /// Never read. Setting it changes nothing that is drawn.
     Absent,
 }
 
 impl Honour {
-    /// Implemented or partial: the renderer reads it at all.
+    /// Implemented, partial or divergent: the renderer reads it at all.
     pub fn rendered(self) -> bool {
         !matches!(self, Honour::Absent)
     }
@@ -133,9 +136,9 @@ fn gui_object(class: &str, property: &str) -> Honour {
             // placeholder, coloured by `PlaceholderColor3`.
             "PlaceholderColor3" if class == "TextBox" => return Implemented,
             "PlaceholderText" if class == "TextBox" => {
-                return Partial(
-                    "drawn while the box is focused too; whether the engine hides it on \
-                     focus is not measured",
+                return Divergent(
+                    "RichText markup is applied to a placeholder; the engine draws a \
+                     placeholder's markup as written",
                 )
             }
             "TextTruncate" => {
@@ -454,10 +457,15 @@ mod tests {
         assert_eq!(honours("InputActionLabel", "ImageColor3"), Honour::Absent);
         assert_eq!(honours("UIFlexItem", "Parent"), Honour::Implemented);
         assert_eq!(honours("UITableLayout", "Parent"), Honour::Absent);
+        assert!(matches!(
+            honours("TextBox", "PlaceholderText"),
+            Honour::Divergent(_)
+        ));
+        assert_eq!(honours("TextLabel", "PlaceholderText"), Honour::Absent);
     }
 
-    /// A partial answer says what is missing, in words a reader of the scope
-    /// document can act on.
+    /// A partial answer says what is missing, and a divergent one what differs,
+    /// in words a reader of the scope document can act on.
     #[test]
     fn every_partial_says_what_is_missing() {
         let Some(by_class) = scope::in_scope_by_class() else {
@@ -466,10 +474,13 @@ mod tests {
         };
         for (class, props) in &by_class {
             for property in props {
-                if let Honour::Partial(reason) = honours(class, property) {
+                if let Honour::Partial(reason) | Honour::Divergent(reason) =
+                    honours(class, property)
+                {
                     assert!(
                         reason.len() > 30,
-                        "{class}.{property} is partial with no real reason: {reason:?}"
+                        "{class}.{property} is partial or divergent with no real reason: \
+                         {reason:?}"
                     );
                 }
             }

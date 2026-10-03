@@ -399,7 +399,9 @@ pub fn walk(dom: &Dom, root: usize, honours: impl Fn(&str, &str) -> Honour) -> W
         let mut ask = |property: &str| {
             let answer = honours(&class, property);
             let excused = property != "Parent" && gallery::excused(property).is_some();
-            if answer != Honour::Implemented && !excused {
+            // A divergence is read and drawn, Dew's own way on purpose.
+            let read_whole = matches!(answer, Honour::Implemented | Honour::Divergent(_));
+            if !read_whole && !excused {
                 out.gaps
                     .insert((class.clone(), property.to_string()), answer);
             }
