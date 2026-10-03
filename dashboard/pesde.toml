@@ -6,21 +6,18 @@ version = "0.0.1"
 # the rest of the tree by hand; Aether owns exactly one thing here, which tab
 # is active and how a click or a keyboard press changes it.
 #
-# PINNED PAST MILESTONE 60, for `recipe()`/`createSlotRecipe`/`Dialog`/
-# `Slider` -- this sprint only wires a `Dom`-port adapter (`dom.luau`)
-# against the new pin, no `recipe()` call yet. `vide` moves alongside it:
-# aether's own `pesde.toml` at this rev declares a `vide` peer dependency at
-# a newer rev than the one this file previously pinned, and pesde resolves
-# peer dependencies against the consumer's own declared version, not
-# aether's -- an unmatched pin here would link two different vide copies
-# side by side, which is exactly what `[peer_dependencies]` exists to
-# prevent.
+# PINNED FOR `TextInput`'s `Masked` prop, which the password field uses.
+# `vide` is pinned to the rev aether's own `pesde.toml` declares as its
+# `vide` peer dependency. pesde resolves a peer against the consumer's own
+# declared version, so an unmatched pin here would link two vide copies side
+# by side, and a source made against one is invisible to an effect on the
+# other.
 [target]
 environment = "roblox"
 lib = "dashboard.luau"
 
 [dependencies]
-aether = { repo = "project-aether-ui/aether", rev = "d10d08111f8095439144a0ae3a113578d68f934e" }
+aether = { repo = "project-aether-ui/aether", rev = "d08aae3fe482ccfb9af62f14cf910f612f322068" }
 vide = { repo = "es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }
 
 [indices]
