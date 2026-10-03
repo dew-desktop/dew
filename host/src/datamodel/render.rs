@@ -76,6 +76,8 @@ use super::{Dom, SharedDom};
 /// What this file reads, answered per class and property. Changing what the
 /// solver reads and changing that answer belong in one diff.
 pub mod honours;
+#[cfg(test)]
+mod placeholder;
 
 /// A rectangle in absolute screen coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -185,13 +187,45 @@ fn text(dom: &Dom, id: usize, key: &str) -> Option<String> {
     }
 }
 
+/// The string a text element is measured, wrapped, truncated and drawn as.
+/// `ContentText` is not this: it is always derived from `Text`.
 fn text_for(dom: &Dom, id: usize, class: &str) -> Option<String> {
     if class == "InputActionLabel" {
         text(dom, id, "InputAction")
             .filter(|t| !t.is_empty())
             .or_else(|| text(dom, id, "Text").filter(|t| !t.is_empty()))
+    } else if shows_placeholder(dom, id, class) {
+        text(dom, id, "PlaceholderText")
     } else {
         text(dom, id, "Text").filter(|t| !t.is_empty())
+    }
+}
+
+/// Whether a `TextBox` draws its `PlaceholderText` in place of its `Text`.
+///
+/// THE ONE POINT WHERE A PLACEHOLDER DIFFERS FROM TEXT. The engine uses the
+/// placeholder only when `Text` is exactly empty (a single space is text),
+/// and then measures, wraps, truncates and grows AutomaticSize to it as it
+/// would to `Text`. Here the only difference is the colour, which
+/// [`text_colour_key`] swaps to `PlaceholderColor3`; transparency, stroke,
+/// alignment, wrapping, truncation, `LineHeight`, `RichText` and the face are
+/// `Text`'s own. Whether the engine fades or strokes a placeholder, and
+/// whether it hides one while the box is focused, is not measured, so the
+/// placeholder is shown regardless of focus. The engine's `TextBounds` for a
+/// `RichText` placeholder matches its markup measured as written, which this
+/// does not follow yet.
+fn shows_placeholder(dom: &Dom, id: usize, class: &str) -> bool {
+    class == "TextBox"
+        && text(dom, id, "Text").is_none_or(|t| t.is_empty())
+        && text(dom, id, "PlaceholderText").is_some_and(|t| !t.is_empty())
+}
+
+/// The property a text element's glyphs are coloured from.
+fn text_colour_key(dom: &Dom, id: usize, class: &str) -> &'static str {
+    if shows_placeholder(dom, id, class) {
+        "PlaceholderColor3"
+    } else {
+        "TextColor3"
     }
 }
 
@@ -2491,7 +2525,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
         },
         text_align_x: align(dom, id, "TextXAlignment", "TextXAlignment"),
         text_align_y: align(dom, id, "TextYAlignment", "TextYAlignment"),
-        text_colour: colour(dom, id, "TextColor3"),
+        text_colour: colour(dom, id, text_colour_key(dom, id, &class)),
         // TRANSPARENCY IS THE INVERSE OF ALPHA, as it is everywhere in this
         // vocabulary: the engine counts how see-through a thing is and the painter
         // counts how solid it is.

@@ -129,6 +129,15 @@ fn gui_object(class: &str, property: &str) -> Honour {
     if matches!(class, "TextLabel" | "TextButton" | "TextBox") {
         match property {
             "LineHeight" | "TextStrokeColor3" | "TextStrokeTransparency" => return Implemented,
+            // `shows_placeholder`: an empty TextBox measures and draws its
+            // placeholder, coloured by `PlaceholderColor3`.
+            "PlaceholderColor3" if class == "TextBox" => return Implemented,
+            "PlaceholderText" if class == "TextBox" => {
+                return Partial(
+                    "drawn while the box is focused too; whether the engine hides it on \
+                     focus is not measured",
+                )
+            }
             "TextTruncate" => {
                 return Partial("AtEnd is drawn with an ellipsis; SplitWord is drawn as None")
             }

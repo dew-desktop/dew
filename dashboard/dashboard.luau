@@ -164,8 +164,7 @@ local textRecipe = Aether.Core.createRecipe({
 	},
 }, { Dom = dom, Component = "DashboardText" })
 
--- A TextBox, its corner and its outline. Dew does not paint PlaceholderText
--- yet, so `$TextPlaceholder` resolves but shows nothing until it does.
+-- A TextBox, its corner and its outline.
 local textInputRecipe = Aether.Core.createRecipe({
 	base = {
 		BackgroundColor3 = "$SurfaceColor",
