@@ -239,9 +239,13 @@ impl Renderer {
                 // settled -- an in-progress animation is not a tree
                 // mutation `Changed` fires for, so nothing else would mark
                 // it dirty on its own.
+                // AND A CARET THAT BLINKED. A focused `TextBox` owes one
+                // repaint each time its caret shows or hides, twice a second,
+                // and none between.
                 let should_paint = {
                     let mut guard = dom.lock().expect("dom");
-                    guard.take_dirty() || guard.transitions_active()
+                    let caret = guard.caret_due(std::time::Instant::now());
+                    guard.take_dirty() || guard.transitions_active() || caret
                 };
                 if !should_paint {
                     return Ok(false);
@@ -371,19 +375,25 @@ impl Renderer {
                 lua,
                 pointer,
                 ..
-            } => pointer
-                .down(
-                    &input::Surface {
-                        lua,
-                        dom,
-                        root: *root,
-                        size: (*width, *height),
-                    },
-                    self::button(button),
-                    x,
-                    y,
-                )
-                .map_err(|e| e.to_string()),
+            } => {
+                // SHIFT IS READ AT THE PRESS, from the window, because the
+                // press event does not carry it: a Shift+click extends a
+                // `TextBox` selection.
+                pointer.mods.shift = dew_window::shift_held();
+                pointer
+                    .down(
+                        &input::Surface {
+                            lua,
+                            dom,
+                            root: *root,
+                            size: (*width, *height),
+                        },
+                        self::button(button),
+                        x,
+                        y,
+                    )
+                    .map_err(|e| e.to_string())
+            }
         }
     }
 
@@ -459,7 +469,12 @@ impl Renderer {
     }
 
     #[cfg(windows)]
-    fn key(&mut self, name: &str, service_pointer: &services::SharedPointer) -> Result<(), String> {
+    fn key(
+        &mut self,
+        name: &str,
+        mods: input::Mods,
+        service_pointer: &services::SharedPointer,
+    ) -> Result<(), String> {
         // `desktop.Input.InputBegan` HEARS EVERY NAMED KEY, focus or no focus
         // -- the same as the engine's `UserInputService.InputBegan` does.
         // What follows is the DataModel's own, narrower reaction: `TextBox`
@@ -483,6 +498,7 @@ impl Renderer {
                         size: (*width, *height),
                     },
                     name,
+                    mods,
                 )
                 .map_err(|e| e.to_string()),
         }
@@ -1886,7 +1902,11 @@ fn run_applet(
                 // leaves the registry entry for the coordinator to notice
                 // and drop.
                 Event::CloseRequested => return Ok(()),
-                Event::Key { name, .. } => renderer.borrow_mut().key(&name, &service_pointer)?,
+                Event::Key { name, shift, ctrl } => renderer.borrow_mut().key(
+                    &name,
+                    input::Mods { shift, ctrl },
+                    &service_pointer,
+                )?,
                 // WAS A NO-OP UNTIL FOUND LIVE, building the dashboard's own
                 // sign-in form: a `TextBox` could be focused, but typing did
                 // nothing at all. See `input::Renderer::char`'s own doc
