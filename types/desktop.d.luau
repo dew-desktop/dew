@@ -19,7 +19,7 @@
 	type definitions for its own DataModel.
 ]]
 
-type Anchor = "topLeft" | "topRight" | "bottomLeft" | "bottomRight" | "center"
+type Anchor = "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center"
 
 --- A window's tier in the desktop's z-order. `"bottom"` sits below every
 --- normal window and above the wallpaper -- NOT the same as Rainmeter's
@@ -31,7 +31,7 @@ type ZOrder = "bottom" | "normal" | "topmost"
 type WidgetOptions = {
 	width: number?,
 	height: number?,
-	--- Defaults to "topRight". An anchor rather than coordinates, because a
+	--- Defaults to "top-right". An anchor rather than coordinates, because a
 	--- desktop is not one size.
 	anchor: Anchor?,
 	--- Pixels from the anchored corner. Defaults to 24, 24.

@@ -45,6 +45,7 @@ pub mod render;
 mod service_provider;
 pub mod signal;
 mod style;
+mod transition;
 mod vocabulary;
 
 use content::{LuaContent, LuaFont};
@@ -147,6 +148,32 @@ pub struct Dom {
     /// applied to, exactly as `attributes` are arbitrary names an ordinary
     /// instance carries rather than reflected properties of its own class.
     style_properties: BTreeMap<usize, BTreeMap<String, Variant>>,
+    /// The `StyleRule`s whose `Font` was set after their `FontFace`. One rule
+    /// setting both applies whichever was set last, as measured in Studio,
+    /// and the map above keeps no order of its own.
+    font_set_last: BTreeSet<usize>,
+    /// `StyleRule:SetPropertyTransition`'s own table (milestone 29 part
+    /// C4): rule id to property name to the `TweenInfo` a cascade-driven
+    /// change of that property should animate through, instead of
+    /// snapping. The SAME side-table shape `style_properties` already
+    /// uses, for the same reason -- a `TweenInfo` a rule carries is not a
+    /// reflected property of the rule's own class either.
+    style_transitions: BTreeMap<usize, BTreeMap<String, transition::TweenInfoValue>>,
+    /// One entry per `(instance, property)` pair CURRENTLY ANIMATING
+    /// through a transition -- absent once settled, which is what lets
+    /// `Dom::styled_property` tell "still animating" from "just resolve it
+    /// plainly" with one lookup. See `transition.rs`'s own module doc for
+    /// why this lives here rather than being folded into `style_properties`
+    /// or `style_transitions` above: it is per-INSTANCE runtime state, not
+    /// per-rule authored data.
+    active_transitions: BTreeMap<(usize, String), transition::ActiveTransition>,
+    /// The last value the cascade resolved for a `(instance, property)`
+    /// pair THAT HAS A TRANSITION DECLARED ON IT -- what a NEW change gets
+    /// diffed against to notice a change happened at all, and what a fresh
+    /// transition's own start point is read from if nothing is animating
+    /// yet. Bounded by "has a transition declared", not by every property
+    /// the cascade has ever touched.
+    transitioned_targets: BTreeMap<(usize, String), Variant>,
     /// `StyleLink.StyleSheet`: the link's own id to the `StyleSheet` it points
     /// at. AN INSTANCE REFERENCE, WHICH `Node::props` CANNOT HOLD -- `Variant`
     /// (`rbx_types`) has no case for one of this arena's own ids, only the
@@ -155,6 +182,13 @@ pub struct Dom {
     /// lower: a side table, read and written by the same special case in
     /// `Index`/`NewIndex` that already carries `Parent`.
     style_links: BTreeMap<usize, usize>,
+    /// `StyleDerive.StyleSheet`: the same instance-reference problem
+    /// `style_links` solves, for a different real class (milestone 28
+    /// sprint 2 -- `StyleDerive` was "declared, never implemented" before
+    /// this). A `StyleDerive` is parented INSIDE a `StyleSheet` (not
+    /// anywhere in the target's own ancestry, unlike `StyleLink`) and names
+    /// a second `StyleSheet` its own parent composes rules and tokens from.
+    style_derives: BTreeMap<usize, usize>,
     /// The id of `GuiService`'s own pseudo-instance, minted the first time
     /// anything reaches it -- the same construction as
     /// `collection_service_id`, and for the same reason: `SelectionGained`
@@ -165,6 +199,19 @@ pub struct Dom {
     /// `GuiService.SelectedObject`. One value, not a side table keyed by id --
     /// there is one selection, the same as there is one pointer position.
     selected_object: Option<usize>,
+    /// The window's own current size, in pixels. What a `@ViewportDisplaySize*`
+    /// `StyleQuery` reads (milestone 29 part C3) -- set from `main.rs`'s own
+    /// render loop, which already knows it, the same way `dirty` is read
+    /// there and set everywhere else.
+    viewport: (u32, u32),
+    /// The clock's own current reading, in seconds -- what a `StyleRule`
+    /// transition (milestone 29 part C4) times itself against. Set from
+    /// `main.rs`'s own render loop, the same way `viewport` is.
+    now: f64,
+    /// What the cascade resolved for each instance during one render pass,
+    /// or `None` outside one. See `cascade::StyleMemo` for when it is open
+    /// and what empties it.
+    style_memo: cascade::StyleMemo,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -183,9 +230,17 @@ impl Default for Dom {
             instance_tags: BTreeMap::new(),
             collection_service_id: None,
             style_properties: BTreeMap::new(),
+            font_set_last: BTreeSet::new(),
+            style_transitions: BTreeMap::new(),
+            active_transitions: BTreeMap::new(),
+            transitioned_targets: BTreeMap::new(),
             style_links: BTreeMap::new(),
+            style_derives: BTreeMap::new(),
             gui_service_id: None,
             selected_object: None,
+            viewport: (0, 0),
+            now: 0.0,
+            style_memo: cascade::StyleMemo::default(),
         }
     }
 }
@@ -204,6 +259,7 @@ impl Dom {
             connections: Vec::new(),
         }));
         self.dirty = true;
+        self.style_memo.forget();
         self.slots.len() - 1
     }
 
@@ -211,7 +267,11 @@ impl Dom {
         self.slots.get(id).and_then(|s| s.as_ref())
     }
 
+    /// THE ONE DOOR FOR WRITING A NODE, so it is also where a resolved
+    /// cascade is forgotten: whatever is about to change (a property, a name,
+    /// a parent, an attribute) may change what a selector matches.
     fn node_mut(&mut self, id: usize) -> Option<&mut Node> {
+        self.style_memo.forget();
         self.slots.get_mut(id).and_then(|s| s.as_mut())
     }
 
@@ -226,6 +286,20 @@ impl Dom {
         if let Some(node) = self.node_mut(id) {
             node.parent = None;
         }
+    }
+
+    /// Parents a freshly [`insert`](Self::insert)ed `child` under `parent`,
+    /// no cycle check and no signal fired. THIS IS NOT THE `Parent`
+    /// NEWINDEX HANDLER'S JOB DONE TWICE -- a guest-visible reparent goes
+    /// through that instead, which announces `ChildRemoved`/`ChildAdded` to
+    /// anything listening. This is for the engine's own synthesized
+    /// children (`::Modifier`'s auto-spawn, milestone 29 part C2), which
+    /// never had an old parent to leave and never need a cycle check since
+    /// `child` was just inserted.
+    pub fn adopt(&mut self, parent: usize, child: usize) {
+        self.node_mut(parent).expect("checked").children.push(child);
+        self.node_mut(child).expect("checked").parent = Some(parent);
+        self.touch();
     }
 
     // ── What the renderer reads ──────────────────────────────────────────────
@@ -323,6 +397,7 @@ impl Dom {
             // what the cascade resolves for `id` -- the same reason any
             // other property write below marks the tree dirty.
             self.dirty = true;
+            self.style_memo.forget();
         }
         added
     }
@@ -345,6 +420,7 @@ impl Dom {
                 }
             }
             self.dirty = true;
+            self.style_memo.forget();
         }
         removed
     }
@@ -396,8 +472,16 @@ impl Dom {
 
     /// `SetProperty`, with `None` clearing the name the same as `SetAttribute`
     /// does -- a `StyleRule` un-setting a property it changed its mind about
-    /// is the ordinary case, not a special one.
-    fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) {
+    /// is the ordinary case, not a special one. Answers whether the stored
+    /// value changed.
+    fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) -> bool {
+        // Setting `Font` or `FontFace` makes it the later of the two, even
+        // when the value is the same, so the order can change on its own.
+        let reordered = match (name, &value) {
+            ("Font", Some(_)) => self.font_set_last.insert(id),
+            ("FontFace", Some(_)) => self.font_set_last.remove(&id),
+            _ => false,
+        };
         let table = self.style_properties.entry(id).or_default();
         // SAME VALUE, NO CHANGE, NO REPAINT -- the rule every other property
         // write in this file already follows, and a `StyleRule` a mod
@@ -417,9 +501,11 @@ impl Dom {
         if table.is_empty() {
             self.style_properties.remove(&id);
         }
-        if changed {
+        if changed || reordered {
             self.dirty = true;
+            self.style_memo.forget();
         }
+        changed
     }
 
     fn get_style_property(&self, id: usize, name: &str) -> Option<Variant> {
@@ -428,6 +514,29 @@ impl Dom {
 
     fn get_style_properties(&self, id: usize) -> BTreeMap<String, Variant> {
         self.style_properties.get(&id).cloned().unwrap_or_default()
+    }
+
+    /// `StyleRule:SetPropertyTransition`'s own table (milestone 29 part
+    /// C4), the same shape `set_style_property` already has just above.
+    fn set_style_transition(
+        &mut self,
+        id: usize,
+        name: &str,
+        info: Option<transition::TweenInfoValue>,
+    ) {
+        let table = self.style_transitions.entry(id).or_default();
+        match info {
+            Some(info) => {
+                table.insert(name.to_string(), info);
+            }
+            None => {
+                table.remove(name);
+            }
+        }
+    }
+
+    fn get_style_transition(&self, id: usize, name: &str) -> Option<transition::TweenInfoValue> {
+        self.style_transitions.get(&id)?.get(name).copied()
     }
 
     /// `StyleLink.StyleSheet`, or `None` for an unset link or one whose target
@@ -440,12 +549,33 @@ impl Dom {
     }
 
     fn set_style_link(&mut self, id: usize, target: Option<usize>) {
+        self.style_memo.forget();
         match target {
             Some(target) => {
                 self.style_links.insert(id, target);
             }
             None => {
                 self.style_links.remove(&id);
+            }
+        }
+    }
+
+    /// `StyleDerive.StyleSheet`, the same shape as `get_style_link` for the
+    /// same reason -- a dangling id reads as unset.
+    fn get_style_derive(&self, id: usize) -> Option<usize> {
+        let target = *self.style_derives.get(&id)?;
+        self.node(target)?;
+        Some(target)
+    }
+
+    fn set_style_derive(&mut self, id: usize, target: Option<usize>) {
+        self.style_memo.forget();
+        match target {
+            Some(target) => {
+                self.style_derives.insert(id, target);
+            }
+            None => {
+                self.style_derives.remove(&id);
             }
         }
     }
@@ -544,6 +674,7 @@ impl Dom {
     /// Something changed; the next frame has to be drawn.
     pub fn touch(&mut self) {
         self.dirty = true;
+        self.style_memo.forget();
     }
 
     /// Is a repaint owed, and clear the debt.
@@ -553,6 +684,34 @@ impl Dom {
     /// loses a frame that will never be asked for again.
     pub fn take_dirty(&mut self) -> bool {
         std::mem::replace(&mut self.dirty, false)
+    }
+
+    /// The window's own current size, for a `@ViewportDisplaySize*`
+    /// `StyleQuery` to read (milestone 29 part C3).
+    pub fn viewport(&self) -> (u32, u32) {
+        self.viewport
+    }
+
+    /// Set from `main.rs`'s own render loop, which already knows the
+    /// window's size every frame -- does NOT mark the tree dirty on its
+    /// own, since a resize already reaches `Dom` through whatever path
+    /// changed `width`/`height` in the first place. A new size does forget
+    /// the resolved cascade, because a `StyleQuery` gate reads it.
+    pub fn set_viewport(&mut self, width: u32, height: u32) {
+        if self.viewport != (width, height) {
+            self.style_memo.forget();
+        }
+        self.viewport = (width, height);
+    }
+
+    /// A `StyleRule` transition's own clock (milestone 29 part C4) -- NOT
+    /// `services::Clock` (`desktop.Clock`), which is gated on a guest
+    /// having subscribed a listener and would leave every transition
+    /// frozen in a mod that never did. `advance_transitions` is the one
+    /// place that advances this, from the render loop's own per-frame
+    /// `dt`; nothing else writes it.
+    pub fn now(&self) -> f64 {
+        self.now
     }
 
     /// Free `id` and everything under it, and detach it from its parent.
@@ -600,6 +759,7 @@ impl Dom {
             // connections do -- nothing else can reach it by id once the slot
             // above is gone.
             self.style_properties.remove(&current);
+            self.font_set_last.remove(&current);
             // A destroyed `StyleLink` forgets what it pointed at. A destroyed
             // `StyleSheet` a link still names is handled at read time instead
             // -- `get_style_link` already checks the target exists -- because
@@ -607,9 +767,13 @@ impl Dom {
             // a scan over every link for every destroy, for a case reading
             // already answers correctly on its own.
             self.style_links.remove(&current);
+            // A destroyed `StyleDerive` forgets what it composed from, same
+            // reasoning as the `StyleLink` line above.
+            self.style_derives.remove(&current);
             stack.extend(node.children);
         }
         self.dirty = true;
+        self.style_memo.forget();
     }
 
     /// Write a property the HOST computed, bypassing the guest's rules.
@@ -618,8 +782,13 @@ impl Dom {
     /// by whatever laid out the tree. Going through the assignment path would
     /// refuse them, correctly, so the host writes them here instead -- the one
     /// door, named so it is greppable, rather than making the public path lenient.
+    ///
+    /// IT LEAVES THE RESOLVED CASCADE ALONE, which is why it skips `node_mut`.
+    /// What arrives here is output a render pass computed (geometry, text
+    /// metrics, `IsActive`), none of which a selector, token or query reads,
+    /// and a pass writes it between the two solves that share one cascade.
     pub fn set_internal(&mut self, id: usize, key: &str, value: Variant) {
-        if let Some(node) = self.node_mut(id) {
+        if let Some(node) = self.slots.get_mut(id).and_then(|s| s.as_mut()) {
             node.props.insert(key.to_string(), value);
         }
     }
@@ -726,6 +895,13 @@ fn class_exists(class: &str) -> bool {
     rbx_reflection_database::get()
         .map(|db| db.classes.contains_key(class))
         .unwrap_or(false)
+}
+
+/// The default `class.property` reads before anything assigns it: the
+/// extension registry's for a row it carries, otherwise the reflection
+/// database's, walking superclasses.
+pub fn default_value(class: &str, property: &str) -> Option<Variant> {
+    default_for(class, property)
 }
 
 /// The default a property reads before anything assigns it.
@@ -1038,6 +1214,23 @@ fn zero_for(ty: VariantType) -> Option<Variant> {
     })
 }
 
+/// The `Font` a guest value stands for, when it is a `Font` or an
+/// `Enum.Font` item: the value itself, or the face the item names, the same
+/// face assigning it to a label's `Font` gives that label. `None` for anything
+/// else, a string included.
+pub fn font_of(value: &LuaValue) -> Option<rbx_types::Font> {
+    if let Some(font) = LuaFont::from_value(value) {
+        return Some(font);
+    }
+    let LuaValue::UserData(ud) = value else {
+        return None;
+    };
+    let item = ud.borrow::<LuaEnumItem>().ok()?;
+    (item.ty == "Font")
+        .then(|| crate::fonts::from_enum(item.name))
+        .flatten()
+}
+
 /// Turn a Lua value into an enum member of `ty`.
 ///
 /// ACCEPTS A NUMBER AS WELL AS AN `EnumItem`, because the engine does and a guest
@@ -1128,6 +1321,79 @@ pub(crate) fn coerce_variant_value(caller: &str, value: &LuaValue) -> LuaResult<
     }
 }
 
+/// Whether every class that declares `property`, in the reflection database
+/// or the extension registry, makes it an enum. False for a name no class
+/// declares, or one some class declares as anything else, since a
+/// `StyleRule` value under such a name cannot be judged without knowing
+/// which class it will reach.
+fn enum_everywhere(property: &str) -> bool {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+    // `false` in the map marks a name some class declares as a non-enum.
+    static DECLARED: OnceLock<HashMap<&'static str, bool>> = OnceLock::new();
+    let declared = DECLARED.get_or_init(|| {
+        let mut out: HashMap<&'static str, bool> = HashMap::new();
+        if let Ok(db) = rbx_reflection_database::get() {
+            for class in db.classes.values() {
+                for (name, descriptor) in &class.properties {
+                    let is_enum = matches!(descriptor.data_type, DataType::Enum(_));
+                    *out.entry(name.as_ref()).or_insert(true) &= is_enum;
+                }
+            }
+        }
+        out
+    });
+    let mut any = false;
+    if let Some(&all_enum) = declared.get(property) {
+        if !all_enum {
+            return false;
+        }
+        any = true;
+    }
+    for data_type in extensions::data_types_named(property) {
+        if !matches!(data_type, DataType::Enum(_)) {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
+/// Coerce a value for `StyleRule:SetProperty(name, value)`.
+///
+/// A rule stores whatever it is given and reads it back unchanged, as
+/// measured in Studio: an item of another enum, a name string or a number
+/// under an enum property are all kept. Only a value of the property's own
+/// type is applied (`cascade::resolve_full`). AN ENUM IS STORED WITH ITS
+/// TYPE, as `Variant::EnumItem`, because a rule is not an instance of the
+/// class it will style and so has no declared type to name a bare
+/// `Variant::Enum` by.
+pub(crate) fn coerce_style_value(caller: &str, value: &LuaValue) -> LuaResult<Option<Variant>> {
+    if let LuaValue::UserData(ud) = value {
+        if let Ok(item) = ud.borrow::<LuaEnumItem>() {
+            return Ok(Some(Variant::EnumItem(rbx_types::EnumItem {
+                ty: item.ty.to_string(),
+                value: item.value,
+            })));
+        }
+    }
+    coerce_variant_value(caller, value)
+}
+
+/// The warning the engine prints for a `StyleRule` value it cannot cast to
+/// the enum property it names: a string that is not a `$` token, or a
+/// number. An item of another enum is skipped without one.
+pub(crate) fn style_cast_warning(rule: &str, name: &str, value: &Variant) -> Option<String> {
+    let uncastable = match value {
+        Variant::String(s) => !s.starts_with('$'),
+        Variant::Float64(_) => true,
+        _ => false,
+    };
+    (uncastable && enum_everywhere(name)).then(|| {
+        format!("Failed to apply StyleRule property '{name}' from '{rule}': Variant cast failed")
+    })
+}
+
 /// Turn a stored `Variant` back into something a guest can read.
 pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> LuaResult<LuaValue> {
     Ok(match value {
@@ -1148,6 +1414,16 @@ pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> Lua
                 }
             }
         }
+        // The typed form a `StyleRule` stores an enum in, naming itself.
+        Variant::EnumItem(item) => match enums::item_by_value(&item.ty, item.value) {
+            Some(found) => found.into_lua(lua)?,
+            None => {
+                return Err(LuaError::runtime(format!(
+                    "Enum.{} has no member numbered {}",
+                    item.ty, item.value
+                )))
+            }
+        },
         Variant::Bool(v) => LuaValue::Boolean(*v),
         Variant::String(v) => lua.create_string(v)?.into_lua(lua)?,
         Variant::Float32(v) => LuaValue::Number(*v as f64),
@@ -1184,10 +1460,10 @@ pub(crate) fn to_lua(lua: &Lua, value: &Variant, enum_type: Option<&str>) -> Lua
 impl UserData for InstanceRef {
     fn add_fields<F: UserDataFields<Self>>(fields: &mut F) {
         // `typeof(instance) == "Instance"` IS THE CONFORMANCE TEST, not a nicety.
-        // Aether picks its host with `the engineHost.available()`, which is exactly
-        // `typeof(game) == "Instance"` -- so a faithful DataModel here means
-        // Aether's existing host runs on Dew unmodified, with no Dew branch and
-        // no adapter.
+        // Aether picks its host with `DataModel.available()`, which asks whether
+        // what `Instance.new` builds is something `typeof` calls "Instance" -- so
+        // a faithful DataModel here means Aether's existing host runs on Dew
+        // unmodified, with no Dew branch and no adapter.
         //
         // A FIELD, NOT A METHOD. Luau's `typeof` reads `__type` as a STRING off
         // the metatable; registering a function there leaves it unread. And mlua
@@ -1249,6 +1525,16 @@ impl UserData for InstanceRef {
                 // property.
                 "StyleSheet" if node.class == "StyleLink" => {
                     let target = dom.get_style_link(this.id);
+                    drop(dom);
+                    return match target {
+                        Some(target) => handle(lua, &this.dom, target)?.into_lua(lua),
+                        None => Ok(LuaValue::Nil),
+                    };
+                }
+                // `StyleDerive.StyleSheet`, read the same way `StyleLink`'s
+                // own is -- see `Dom::style_derives`'s own doc comment.
+                "StyleSheet" if node.class == "StyleDerive" => {
+                    let target = dom.get_style_derive(this.id);
                     drop(dom);
                     return match target {
                         Some(target) => handle(lua, &this.dom, target)?.into_lua(lua),
@@ -1480,10 +1766,7 @@ impl UserData for InstanceRef {
                     }
                     // `StyleLink.StyleSheet`, WRITTEN THE SAME WAY `Parent` IS:
                     // an `Instance` handle or nil, stored as an id in
-                    // `Dom::style_links` rather than in `node.props`. Guarded
-                    // on `StyleLink` so `StyleDerive.StyleSheet` (declared,
-                    // never implemented) still falls through to the generic
-                    // path's honest "cannot accept yet" refusal below.
+                    // `Dom::style_links` rather than in `node.props`.
                     "StyleSheet" if class == "StyleLink" => {
                         let target = match &value {
                             LuaValue::Nil => None,
@@ -1511,6 +1794,43 @@ impl UserData for InstanceRef {
                             return Ok(());
                         }
                         dom.set_style_link(this.id, target);
+                        dom.touch();
+                        drop(dom);
+                        return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
+                    }
+                    // `StyleDerive.StyleSheet` (milestone 28 sprint 2 --
+                    // previously "declared, never implemented"), the same
+                    // instance-reference shape as `StyleLink.StyleSheet`
+                    // just above, stored in its own side table since a
+                    // `StyleDerive` and a `StyleLink` reaching the same
+                    // target mean different things to the cascade.
+                    "StyleSheet" if class == "StyleDerive" => {
+                        let target = match &value {
+                            LuaValue::Nil => None,
+                            LuaValue::UserData(ud) => Some(ud.borrow::<InstanceRef>()?.id),
+                            other => {
+                                return Err(LuaError::runtime(format!(
+                                    "StyleSheet expects an Instance or nil, got {}",
+                                    other.type_name()
+                                )))
+                            }
+                        };
+                        if let Some(target_id) = target {
+                            if dom.node(target_id).is_none() {
+                                return Err(LuaError::runtime(
+                                    "the new StyleSheet has been destroyed",
+                                ));
+                            }
+                            if dom.class_of(target_id).as_deref() != Some("StyleSheet") {
+                                return Err(LuaError::runtime(
+                                    "StyleDerive.StyleSheet expects a StyleSheet instance",
+                                ));
+                            }
+                        }
+                        if dom.get_style_derive(this.id) == target {
+                            return Ok(());
+                        }
+                        dom.set_style_derive(this.id, target);
                         dom.touch();
                         drop(dom);
                         return signal::property_changed(lua, &this.dom, this.id, "StyleSheet");
@@ -1590,8 +1910,28 @@ impl UserData for InstanceRef {
                             .expect("checked")
                             .props
                             .insert(key.clone(), Variant::Enum(stored));
+                        // `Font` IS A VIEW ONTO `FontFace`. The engine sets the
+                        // face the item stands for, so a label given a `Font`
+                        // draws in it and reads it back from `FontFace`.
+                        let face = (key == "Font")
+                            .then(|| enums::item_by_value("Font", stored.to_u32()))
+                            .flatten()
+                            .and_then(|item| crate::fonts::from_enum(item.name))
+                            .filter(|_| describe(&class, "FontFace").is_some());
+                        let face_changed = face.is_some_and(|face| {
+                            let face = Variant::Font(face);
+                            let changed = dom.property(this.id, "FontFace").as_ref() != Some(&face);
+                            dom.node_mut(this.id)
+                                .expect("checked")
+                                .props
+                                .insert("FontFace".to_string(), face);
+                            changed
+                        });
                         dom.touch();
                         drop(dom);
+                        if face_changed {
+                            signal::property_changed(lua, &this.dom, this.id, "FontFace")?;
+                        }
                         return signal::property_changed(lua, &this.dom, this.id, &key);
                     }
                     other => {
@@ -1757,7 +2097,8 @@ pub fn handle(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<LuaAnyUserData
 pub fn install_vocabulary(lua: &Lua) -> LuaResult<()> {
     vocabulary::install(lua)?;
     enums::install(lua)?;
-    content::install(lua)
+    content::install(lua)?;
+    transition::install(lua)
 }
 
 pub fn install(lua: &Lua, dom: &SharedDom) -> LuaResult<()> {

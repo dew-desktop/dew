@@ -1,0 +1,13 @@
+# Grid layout demo
+#
+# An app launcher whose tiles are placed by one UIGridLayout, with buttons that
+# change the tile size, the number of columns, the corner the grid fills from
+# and the direction it fills in while it runs.
+
+id = "grid-layout-demo"
+name = "Grid layout demo"
+description = "An app launcher in a UIGridLayout, with live controls for tile size, columns and fill order"
+
+# A SURFACE AND NOTHING ELSE. Pointer input reaches a TextButton's Activated
+# without a grant of its own.
+permissions = ["widget"]

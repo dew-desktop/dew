@@ -57,6 +57,10 @@ const CONFORMANCE_ONLY: &[&str] = &[
 pub struct Variant {
     /// The `name` of the node to change.
     pub node: String,
+    /// That node's class, so what moved is reported as a (class, property)
+    /// pair. `Padding` moving on a `UIListLayout` says nothing about
+    /// `Padding` on a `UITableLayout`.
+    pub class: String,
     pub property: String,
     /// The replacement value, in the same typed encoding the tree uses.
     pub value: RegistryKey,
@@ -82,7 +86,7 @@ pub struct Scene {
     pub tree_val: RegistryKey,
     /// Property names set anywhere in the tree.
     pub demonstrates: BTreeSet<String>,
-    /// The finer question: which class each property was set on.
+    /// Which class each property was set on, as (class, property).
     pub demonstrates_by_class: BTreeSet<(String, String)>,
     /// Classes the scene instantiates.
     pub classes: BTreeSet<String>,
@@ -214,6 +218,30 @@ fn walk(
     Ok(())
 }
 
+/// Every (class, property) pair a tree sets, `Name` and `Parent` included.
+///
+/// Shared with the evidence test in `datamodel::render::honours`, which reads
+/// conformance case trees the same way a scene's is read.
+pub fn pairs_in_tree(tree: &Table) -> Result<BTreeSet<(String, String)>, String> {
+    let mut props = BTreeSet::new();
+    let mut by_class = BTreeSet::new();
+    let mut classes = BTreeSet::new();
+    walk(tree, &mut props, &mut by_class, &mut classes)?;
+    Ok(by_class)
+}
+
+/// The class of the first node in a tree named `wanted`.
+fn class_named(node: &Table, wanted: &str) -> Option<String> {
+    if node.get::<Option<String>>("name").ok().flatten().as_deref() == Some(wanted) {
+        return node.get::<Option<String>>("class").ok().flatten();
+    }
+    let children = node.get::<Option<Table>>("children").ok().flatten()?;
+    children
+        .sequence_values::<Table>()
+        .flatten()
+        .find_map(|child| class_named(&child, wanted))
+}
+
 /// Load one scene, refusing anything that belongs to a conformance case.
 pub fn decode_scene(lua: &Lua, path: &Path, pillar: &str) -> Result<Scene, String> {
     let file_stem = path
@@ -300,8 +328,14 @@ pub fn decode_scene(lua: &Lua, path: &Path, pillar: &str) -> Result<Scene, Strin
                 .get::<Option<Value>>("value")
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| format!("{file_stem}: variant '{property}' has no 'value'"))?;
+            let class = class_named(&tree, &node).ok_or_else(|| {
+                format!(
+                    "{file_stem}: variant '{property}' names '{node}', which is not in the tree"
+                )
+            })?;
             variants.push(Variant {
                 node,
+                class,
                 property,
                 value: lua
                     .create_registry_value(value)
@@ -370,6 +404,16 @@ pub struct Painted {
     pub height: usize,
 }
 
+/// The gallery directory a scene sits under, which `mod://` resolves against,
+/// so a scene can name `mod://assets/two_tone.png`.
+fn gallery_root(scene_source: &Path) -> Option<PathBuf> {
+    scene_source
+        .ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == "scenes"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
 /// Build the scene through Dew's own `Instance.new` and property setters and
 /// paint it, optionally with one property overridden.
 ///
@@ -385,10 +429,13 @@ pub fn paint_scene(
     install(lua, &dom).map_err(|e| format!("failed to install DataModel: {e}"))?;
     install_vocabulary(lua).map_err(|e| format!("failed to install vocabulary: {e}"))?;
 
-    let root_id = dom
-        .lock()
-        .map_err(|_| "dom lock")?
-        .insert("ScreenGui".into(), "DewRoot".into());
+    let root_id = {
+        let mut guard = dom.lock().map_err(|_| "dom lock")?;
+        if let Some(root) = gallery_root(&scene.source) {
+            guard.assets.set_root(root);
+        }
+        guard.insert("ScreenGui".into(), "DewRoot".into())
+    };
     let root_handle = handle(lua, &dom, root_id).map_err(|e| format!("root handle: {e}"))?;
 
     let mut tree_table: Table = lua
@@ -442,8 +489,8 @@ pub fn paint_dom(
         Backend::VelloCpu,
     )
     .ok_or("failed to create raster painter")?;
-    if let Some(font) = crate::services::face() {
-        painter = painter.with_font(font);
+    if let Some(face) = crate::services::default_face() {
+        painter = painter.with_face(face);
     }
     painter.paint_frame(&frame, None);
 
@@ -471,10 +518,13 @@ pub fn render_scene(lua: &Lua, scene: &Scene, out: &Path) -> Result<(), String> 
     install(lua, &dom).map_err(|e| format!("failed to install DataModel: {e}"))?;
     install_vocabulary(lua).map_err(|e| format!("failed to install vocabulary: {e}"))?;
 
-    let root_id = dom
-        .lock()
-        .map_err(|_| "dom lock")?
-        .insert("ScreenGui".into(), "DewRoot".into());
+    let root_id = {
+        let mut guard = dom.lock().map_err(|_| "dom lock")?;
+        if let Some(root) = gallery_root(&scene.source) {
+            guard.assets.set_root(root);
+        }
+        guard.insert("ScreenGui".into(), "DewRoot".into())
+    };
     let root_handle = handle(lua, &dom, root_id).map_err(|e| format!("root handle: {e}"))?;
 
     let build_fn: mlua::Function = lua
@@ -496,8 +546,8 @@ pub fn render_scene(lua: &Lua, scene: &Scene, out: &Path) -> Result<(), String> 
         Backend::VelloCpu,
     )
     .ok_or("failed to create raster painter")?;
-    if let Some(font) = crate::services::face() {
-        painter = painter.with_font(font);
+    if let Some(face) = crate::services::default_face() {
+        painter = painter.with_face(face);
     }
     painter.paint_frame(&frame, None);
 
@@ -536,20 +586,23 @@ pub fn pixels_differing(a: &Painted, b: &Painted) -> usize {
 /// entry -- a bare name would be indistinguishable from something nobody got
 /// round to, which is how an exclusion list becomes a place to hide work.
 ///
-/// Kept short on purpose. An excuse written to finish a sprint is the thing this
-/// milestone is against, and sprint 6 re-reads every one of these.
+/// Kept short on purpose. The evidence test in `datamodel::render::honours`
+/// accepts an entry here in place of pixels for a pair the renderer claims, so
+/// an entry that could be shown and is not is a claim nobody checked.
+///
+/// `Name` is not here. A list or grid sorting by `Name` places its children by
+/// it, so a renamed child moves.
 pub const CANNOT_DIFFER: &[(&str, &str)] = &[
     (
-        "Name",
-        "an instance's identity. Two names render identically by design, and a          gallery that made them differ would be drawing the name.",
-    ),
-    (
         "Parent",
-        "reparenting moves an instance in the tree rather than changing how it          paints in place. The pixels move because the LAYOUT moved, which is a          different property's demonstration.",
+        "reparenting moves an instance in the tree rather than changing how it \
+         paints in place, and a variant cannot reparent a node. The pixels a \
+         parent decides are the evidence of the parent's own properties.",
     ),
     (
         "Active",
-        "input routing. It decides whether a GuiObject swallows a click and has          no paint of its own.",
+        "input routing. It decides whether a GuiObject swallows a click and has \
+         no paint of its own.",
     ),
     (
         "InputSink",
@@ -565,19 +618,25 @@ pub fn excused(property: &str) -> Option<&'static str> {
         .map(|(_, reason)| *reason)
 }
 
+/// One (class, property) pair.
+pub type Pair = (String, String);
+
 /// What the gallery demonstrates, against the standard's own denominator.
+///
+/// EVERY SET IS OF (class, property) PAIRS, not names. Counted by name, a
+/// variant that moved `VerticalAlignment` on one horizontal list credited it on
+/// every class carrying the name, including scenes where it was inert.
 #[derive(Default)]
 pub struct Coverage {
-    pub in_scope: BTreeSet<String>,
-    pub demonstrated: BTreeSet<String>,
-    /// Properties whose variant changed the image. The strong claim.
-    pub differential: BTreeSet<String>,
+    pub in_scope: BTreeSet<Pair>,
+    /// Pairs a scene sets.
+    pub demonstrated: BTreeSet<Pair>,
+    /// Pairs whose variant changed the image. The strong claim.
+    pub differential: BTreeSet<Pair>,
     /// In scope, and excused from the differential test with a stated reason.
-    pub excused: BTreeSet<String>,
-    pub missing: Vec<String>,
-    /// (class, property) pairs the scenes set that are in scope for that class.
-    pub pairs_demonstrated: usize,
-    pub pairs_in_scope: usize,
+    pub excused: BTreeSet<Pair>,
+    /// In scope and set by no scene.
+    pub missing: Vec<Pair>,
 }
 
 impl Coverage {
@@ -598,47 +657,62 @@ pub fn coverage(scenes: &[Scene]) -> Coverage {
     coverage_with_moved(scenes, &BTreeSet::new())
 }
 
-/// Run every scene's variants and report which properties moved pixels.
+/// What the differential pass found.
+#[derive(Default)]
+pub struct Differential {
+    /// (class, property) pairs with at least one variant that changed the
+    /// image, each with the scene and node that showed it.
+    pub moved: BTreeMap<Pair, String>,
+    /// Variants that changed nothing, as lines for the report.
+    pub inert: Vec<String>,
+}
+
+/// Run every scene's variants and report which (class, property) pairs moved
+/// pixels.
 ///
 /// ONE VM PER PAINT. `install` puts a DataModel into a Lua state; reusing one
 /// across a base and its variant would let the first tree's arena leak into the
 /// second, and a difference caused by leftover state is not a difference caused
-/// by the property.
+/// by the property. The base is painted once per scene, in its own VM.
 ///
 /// A VARIANT THAT CHANGES NOTHING IS REPORTED, NOT SWALLOWED. That is the whole
 /// signal: it means the property reached the host and did not reach the pixels.
-pub fn differential(scenes: &[Scene]) -> Result<(BTreeSet<String>, Vec<String>), String> {
-    let mut moved: BTreeSet<String> = BTreeSet::new();
-    let mut inert: Vec<String> = Vec::new();
+pub fn differential(scenes: &[Scene]) -> Result<Differential, String> {
+    let mut out = Differential::default();
     for scene in scenes {
         if scene.variants.is_empty() {
             continue;
         }
-        for v in &scene.variants {
-            let lua_base = Lua::new();
-            let base_scene = decode_scene(&lua_base, &scene.source, &scene.pillar)?;
-            let base = paint_scene(&lua_base, &base_scene, None)?;
-
+        let lua_base = Lua::new();
+        let base_scene = decode_scene(&lua_base, &scene.source, &scene.pillar)?;
+        let base = paint_scene(&lua_base, &base_scene, None)?;
+        for (i, v) in scene.variants.iter().enumerate() {
             let lua_var = Lua::new();
             let var_scene = decode_scene(&lua_var, &scene.source, &scene.pillar)?;
+            // BY POSITION, not by node and property: a scene may vary one
+            // property twice, and a lookup by name painted the first value
+            // both times.
             let want = var_scene
                 .variants
-                .iter()
-                .find(|c| c.property == v.property && c.node == v.node)
+                .get(i)
+                .filter(|c| c.property == v.property && c.node == v.node)
                 .ok_or_else(|| format!("{}: variant vanished on reload", scene.file_stem))?;
             let changed = paint_scene(&lua_var, &var_scene, Some(want))?;
 
+            let pair = (v.class.clone(), v.property.clone());
             if pixels_differing(&base, &changed) > 0 {
-                moved.insert(v.property.clone());
+                out.moved.entry(pair).or_insert_with(|| {
+                    format!("{}/{} ({})", scene.pillar, scene.file_stem, v.node)
+                });
             } else {
-                inert.push(format!(
-                    "{}/{}: {} on {} changed no pixels",
-                    scene.pillar, scene.file_stem, v.property, v.node
+                out.inert.push(format!(
+                    "{}/{}: {}.{} on {} changed no pixels",
+                    scene.pillar, scene.file_stem, v.class, v.property, v.node
                 ));
             }
         }
     }
-    Ok((moved, inert))
+    Ok(out)
 }
 
 /// WITHOUT THE SURFACE THIS REPORTS NOTHING, rather than reporting zero.
@@ -646,35 +720,25 @@ pub fn differential(scenes: &[Scene]) -> Result<(BTreeSet<String>, Vec<String>),
 /// The interface surface is generated and gitignored (see NOTICE), so on a fresh
 /// clone there is no denominator. A coverage figure of `0 of 0` would look like a
 /// measurement; an empty `Coverage` and a printed reason is one.
-pub fn coverage_with_moved(scenes: &[Scene], moved: &BTreeSet<String>) -> Coverage {
-    let (Some(in_scope), Some(by_class)) = (
-        crate::scope::in_scope_properties(),
-        crate::scope::in_scope_by_class(),
-    ) else {
+pub fn coverage_with_moved(scenes: &[Scene], moved: &BTreeSet<Pair>) -> Coverage {
+    let Some(by_class) = crate::scope::in_scope_by_class() else {
         return Coverage::default();
     };
-
-    let mut demonstrated: BTreeSet<String> = BTreeSet::new();
-    let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
-    for scene in scenes {
-        for p in &scene.demonstrates {
-            if in_scope.contains(p) {
-                demonstrated.insert(p.clone());
-            }
-        }
-        for (c, p) in &scene.demonstrates_by_class {
-            if by_class.get(c).map(|s| s.contains(p)).unwrap_or(false) {
-                pairs.insert((c.clone(), p.clone()));
-            }
-        }
-    }
-
-    let pairs_in_scope: usize = by_class.values().map(|s| s.len()).sum();
-    let missing: Vec<String> = in_scope.difference(&demonstrated).cloned().collect();
-    let differential: BTreeSet<String> = moved.intersection(&in_scope).cloned().collect();
-    let excused: BTreeSet<String> = in_scope
+    let in_scope: BTreeSet<Pair> = by_class
         .iter()
-        .filter(|p| excused(p).is_some())
+        .flat_map(|(c, props)| props.iter().map(move |p| (c.clone(), p.clone())))
+        .collect();
+
+    let demonstrated: BTreeSet<Pair> = scenes
+        .iter()
+        .flat_map(|scene| scene.demonstrates_by_class.iter().cloned())
+        .filter(|pair| in_scope.contains(pair))
+        .collect();
+    let missing: Vec<Pair> = in_scope.difference(&demonstrated).cloned().collect();
+    let differential: BTreeSet<Pair> = moved.intersection(&in_scope).cloned().collect();
+    let excused: BTreeSet<Pair> = in_scope
+        .iter()
+        .filter(|(_, p)| excused(p).is_some())
         .cloned()
         .collect();
 
@@ -684,8 +748,6 @@ pub fn coverage_with_moved(scenes: &[Scene], moved: &BTreeSet<String>) -> Covera
         differential,
         excused,
         missing,
-        pairs_demonstrated: pairs.len(),
-        pairs_in_scope,
     }
 }
 
@@ -702,7 +764,7 @@ pub fn default_render_dir(scenes_dir: &Path) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("gallery/renders"))
 }
 
-/// Scene and property counts per pillar, for the report.
+/// Scene and (class, property) pair counts per pillar, for the report.
 ///
 /// A pillar nobody has written a scene for is the useful thing to see, so this
 /// reports every pillar DIRECTORY that exists, not only the ones with scenes in
@@ -717,21 +779,21 @@ pub fn by_pillar(scenes_dir: &Path, scenes: &[Scene]) -> BTreeMap<String, (usize
             }
         }
     }
-    let Some(in_scope) = crate::scope::in_scope_properties() else {
+    let Some(by_class) = crate::scope::in_scope_by_class() else {
         return out;
     };
-    let mut props: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut pairs: BTreeMap<String, BTreeSet<Pair>> = BTreeMap::new();
     for scene in scenes {
         let entry = out.entry(scene.pillar.clone()).or_insert((0, 0));
         entry.0 += 1;
-        let set = props.entry(scene.pillar.clone()).or_default();
-        for p in &scene.demonstrates {
-            if in_scope.contains(p) {
-                set.insert(p.clone());
+        let set = pairs.entry(scene.pillar.clone()).or_default();
+        for (c, p) in &scene.demonstrates_by_class {
+            if by_class.get(c).is_some_and(|props| props.contains(p)) {
+                set.insert((c.clone(), p.clone()));
             }
         }
     }
-    for (pillar, set) in props {
+    for (pillar, set) in pairs {
         if let Some(e) = out.get_mut(&pillar) {
             e.1 = set.len();
         }
@@ -834,12 +896,13 @@ mod tests {
     /// The gallery counts against `scope`, not against a list of its own.
     #[test]
     fn coverage_measures_against_the_shared_denominator() {
-        let Some(in_scope) = crate::scope::in_scope_properties() else {
+        let Some(by_class) = crate::scope::in_scope_by_class() else {
             eprintln!("SKIPPED: {}", crate::scope::API_SURFACE_MISSING);
             return;
         };
         let cov = coverage(&[]);
-        assert_eq!(cov.total(), in_scope.len());
+        let pairs: usize = by_class.values().map(|props| props.len()).sum();
+        assert_eq!(cov.total(), pairs);
         assert_eq!(cov.count(), 0, "no scenes demonstrates nothing");
         assert_eq!(cov.missing.len(), cov.total());
     }
@@ -949,7 +1012,9 @@ mod tests {
                 "{name} needs a reason, not a note: {reason:?}"
             );
         }
-        assert!(excused("Name").is_some());
+        assert!(excused("Parent").is_some());
+        // A Name-sorted layout places its children by it, so it can differ.
+        assert!(excused("Name").is_none());
         assert!(excused("BackgroundColor3").is_none());
     }
 

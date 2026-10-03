@@ -24,13 +24,36 @@ const TOLERANCE: f32 = 0.01;
 ///
 /// Features not in this list that are requested via a case's `requires` field
 /// are reported as UNSUPPORTED rather than failed.
+///
+/// `FontFace.BuilderSans` is not here: Builder Sans may not be shipped, so it
+/// is drawn only where a local Studio install provides it.
 pub static SUPPORTS: &[&str] = &[
     "AnchorPoint",
     "ClipsDescendants",
+    "ContentText",
+    "FontFace",
+    "LineHeight",
+    "RichText",
+    "TextBounds",
+    "TextFits",
+    "TextPadding",
     "TextScaled",
+    "TextStroke",
+    "TextTruncate",
     "TextWrapped",
+    "UIAspectRatioConstraint",
     "UICorner",
+    "UIFlexItem",
     "UIGradient.Radial",
+    "UIGridLayout",
+    "UIListLayout.Flex",
+    "UIListLayout.IgnoresAnchorPoint",
+    "UIListLayout.ItemLineAlignment",
+    "UIListLayout.MainAxisAlignment",
+    "UIListLayout.PaddingScale",
+    "UIListLayout.SortOrder",
+    "UIListLayout.Wraps",
+    "UISizeConstraint",
     "UIStroke",
     "Visible",
     "ZIndex",
@@ -52,6 +75,8 @@ pub struct ExpectedNode {
     pub other_numbers: HashMap<String, f32>,
     pub other_strings: HashMap<String, String>,
     pub other_bools: HashMap<String, bool>,
+    /// Keys whose value is not a number, string or boolean; none is compared.
+    pub other_values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,10 +84,20 @@ pub struct Ratio {
     pub of: String,
     pub to: String,
     pub field: String,
+    /// The field read from `to`, parsed from `toField`. `None` means `field`.
+    pub to_field: Option<String>,
     pub expect: Option<f32>,
     pub tolerance: Option<f32>,
     pub min: Option<f32>,
+    pub max: Option<f32>,
     pub integral: Option<bool>,
+}
+
+impl Ratio {
+    /// The field read from the denominator node.
+    pub fn denominator_field(&self) -> &str {
+        self.to_field.as_deref().unwrap_or(&self.field)
+    }
 }
 
 /// A pixel probe at integer surface coordinates (x, y).
@@ -283,11 +318,22 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "case".to_string());
 
+    decode_case_source(lua, &source, &file_stem, &path.to_string_lossy())
+}
+
+/// Decode a case from its source text. `chunk_name` names it in errors.
+pub fn decode_case_source(
+    lua: &Lua,
+    source: &str,
+    file_stem: &str,
+    chunk_name: &str,
+) -> Result<Case, String> {
+    let file_stem = file_stem.to_string();
     let val: Value = lua
-        .load(&source)
-        .set_name(path.to_string_lossy().as_ref())
+        .load(source)
+        .set_name(chunk_name)
         .eval()
-        .map_err(|e| format!("syntax/eval error in {}: {e}", path.display()))?;
+        .map_err(|e| format!("syntax/eval error in {chunk_name}: {e}"))?;
 
     let table = match val {
         Value::Table(t) => t,
@@ -343,6 +389,7 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
             let mut other_numbers = HashMap::new();
             let mut other_strings = HashMap::new();
             let mut other_bools = HashMap::new();
+            let mut other_values = Vec::new();
             let mut x = None;
             let mut y = None;
             let mut w = None;
@@ -351,32 +398,22 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
             for (k, val) in item.pairs::<String, Value>().flatten() {
                 match k.as_str() {
                     "name" => {}
-                    "x" => {
-                        if let Value::Number(n) = val {
-                            x = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            x = Some(n as f32);
-                        }
-                    }
-                    "y" => {
-                        if let Value::Number(n) = val {
-                            y = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            y = Some(n as f32);
-                        }
-                    }
-                    "w" => {
-                        if let Value::Number(n) = val {
-                            w = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            w = Some(n as f32);
-                        }
-                    }
-                    "h" => {
-                        if let Value::Number(n) = val {
-                            h = Some(n as f32);
-                        } else if let Value::Integer(n) = val {
-                            h = Some(n as f32);
+                    "x" | "y" | "w" | "h" => {
+                        let n = match val {
+                            Value::Number(n) => n as f32,
+                            Value::Integer(n) => n as f32,
+                            other => {
+                                return Err(format!(
+                                    "expect entry '{node_name}': '{k}' must be a number, got {}",
+                                    other.type_name()
+                                ))
+                            }
+                        };
+                        match k.as_str() {
+                            "x" => x = Some(n),
+                            "y" => y = Some(n),
+                            "w" => w = Some(n),
+                            _ => h = Some(n),
                         }
                     }
                     _ => match val {
@@ -387,14 +424,12 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
                             other_numbers.insert(k, n as f32);
                         }
                         Value::String(s) => {
-                            if let Ok(s_str) = s.to_str() {
-                                other_strings.insert(k, s_str.to_string());
-                            }
+                            other_strings.insert(k, s.to_string_lossy());
                         }
                         Value::Boolean(b) => {
                             other_bools.insert(k, b);
                         }
-                        _ => {}
+                        _ => other_values.push(k),
                     },
                 }
             }
@@ -408,6 +443,7 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
                 other_numbers,
                 other_strings,
                 other_bools,
+                other_values,
             });
         }
     }
@@ -425,18 +461,24 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
             let field: String = item
                 .get("field")
                 .map_err(|e| format!("ratio entry missing 'field': {e}"))?;
-            let exp_val: Option<f32> = item.get::<f32>("expect").ok();
-            let tolerance: Option<f32> = item.get::<f32>("tolerance").ok();
-            let min: Option<f32> = item.get::<f32>("min").ok();
-            let integral: Option<bool> = item.get::<bool>("integral").ok();
+            // A key that is present with the wrong type is an error rather
+            // than absent, so a mistyped bound cannot drop out of the check.
+            let exp_val: Option<f32> = ratio_key(&item, "expect")?;
+            let tolerance: Option<f32> = ratio_key(&item, "tolerance")?;
+            let min: Option<f32> = ratio_key(&item, "min")?;
+            let max: Option<f32> = ratio_key(&item, "max")?;
+            let to_field: Option<String> = ratio_key(&item, "toField")?;
+            let integral: Option<bool> = ratio_key(&item, "integral")?;
 
             ratios.push(Ratio {
                 of,
                 to,
                 field,
+                to_field,
                 expect: exp_val,
                 tolerance,
                 min,
+                max,
                 integral,
             });
         }
@@ -504,6 +546,129 @@ pub fn decode_case(lua: &Lua, path: &Path) -> Result<Case, String> {
         pixels,
         golden,
         tree_val,
+    })
+}
+
+/// Reads an optional key of a ratio entry: absent is `None`, present with a
+/// value that does not convert to `T` is an error naming the key.
+fn ratio_key<T: FromLua>(item: &Table, key: &str) -> Result<Option<T>, String> {
+    match item.get::<Value>(key) {
+        Ok(Value::Nil) => Ok(None),
+        Ok(_) => item
+            .get::<T>(key)
+            .map(Some)
+            .map_err(|e| format!("ratio entry has an invalid '{key}': {e}")),
+        Err(e) => Err(format!("ratio entry has an invalid '{key}': {e}")),
+    }
+}
+
+/// Reads a ratio's field off a node. Every field a case may name is listed,
+/// and an unknown one is an error, so a ratio never compares a value nobody
+/// measured. `textBoundsX` and `textBoundsY` are read through Luau, as a
+/// script reads `TextBounds`.
+fn read_field(node: &dew_runtime::Node, field: &str, text: &TextMember) -> Result<f32, String> {
+    match field {
+        "textHeight" => Ok(node.text_size),
+        "x" => Ok(node.rect.x),
+        "y" => Ok(node.rect.y),
+        "w" => Ok(node.rect.w),
+        "h" => Ok(node.rect.h),
+        "textBoundsX" | "textBoundsY" => {
+            // A whole number comes back from Luau as an integer.
+            let number = |v: &Value| match v {
+                Value::Number(n) => Some(*n as f32),
+                Value::Integer(n) => Some(*n as f32),
+                _ => None,
+            };
+            let (x, y) = text(&node.name, "TextBounds")?;
+            match (number(&x), number(&y)) {
+                (Some(x), Some(y)) => Ok(if field == "textBoundsX" { x } else { y }),
+                _ => Err(format!("TextBounds read as {x:?}, {y:?}")),
+            }
+        }
+        _ => Err(format!("no measurable field '{field}'")),
+    }
+}
+
+/// Reads a member of the instance a case names, through Luau: the value a
+/// script sees, after the frame that computed it. A `Vector2` comes back as
+/// its two components, anything else as itself and nil.
+type TextMember<'a> = dyn Fn(&str, &str) -> Result<(Value, Value), String> + 'a;
+
+const READ_MEMBER: &str = r#"
+return function(root, name, member)
+    local node = root:FindFirstChild(name, true)
+    if node == nil then
+        error("no instance named " .. name)
+    end
+    local value = node[member]
+    if member == "TextBounds" then
+        return value.X, value.Y
+    end
+    return value, nil
+end
+"#;
+
+/// Compares an expect entry's `textFits` and `contentText` with the members of
+/// the instance it names, read through Luau.
+fn check_text_expect(exp: &ExpectedNode, text: &TextMember) -> Option<String> {
+    if let Some(want) = exp.other_bools.get("textFits") {
+        match text(&exp.name, "TextFits") {
+            Ok((Value::Boolean(got), _)) if got == *want => {}
+            Ok((got, _)) => {
+                return Some(format!(
+                    "{}: textFits: expected {want}, got {got:?}",
+                    exp.name
+                ))
+            }
+            Err(e) => return Some(format!("{}: textFits: {e}", exp.name)),
+        }
+    }
+    if let Some(want) = exp.other_strings.get("contentText") {
+        match text(&exp.name, "ContentText") {
+            Ok((Value::String(got), _)) if got.to_string_lossy() == *want => {}
+            Ok((got, _)) => {
+                return Some(format!(
+                    "{}: contentText: expected {want:?}, got {got:?}",
+                    exp.name
+                ))
+            }
+            Err(e) => return Some(format!("{}: contentText: {e}", exp.name)),
+        }
+    }
+    None
+}
+
+/// Every key an expect entry may name besides `name`, `x`, `y`, `w`, `h`,
+/// `textFits` and `contentText` fails here, naming the key, so an entry never
+/// passes on an assertion nobody checked. `textFits` given a non-boolean, or
+/// `contentText` a non-string, fails too.
+fn unchecked_expect_key(exp: &ExpectedNode) -> Option<String> {
+    let checked = |key: &str, typed: bool| typed && matches!(key, "textFits" | "contentText");
+    let mut keys: Vec<&str> = exp
+        .other_numbers
+        .keys()
+        .map(String::as_str)
+        .chain(
+            exp.other_strings
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !checked(k, *k == "contentText")),
+        )
+        .chain(
+            exp.other_bools
+                .keys()
+                .map(String::as_str)
+                .filter(|k| !checked(k, *k == "textFits")),
+        )
+        .chain(exp.other_values.iter().map(String::as_str))
+        .collect();
+    keys.sort_unstable();
+    let key = keys.first()?;
+    Some(match *key {
+        "textFits" => format!("{}: 'textFits' must be a boolean", exp.name),
+        "contentText" => format!("{}: 'contentText' must be a string", exp.name),
+        _ => format!("{}: this runner reads no expect field '{key}'", exp.name),
     })
 }
 
@@ -606,6 +771,13 @@ pub const TREE_BUILDER: &str = r#"
                 end
             elseif k == "NumberSequenceKeypoint" then
                 return NumberSequenceKeypoint.new(v[2], v[3], v[4])
+            elseif k == "Font" then
+                -- { "Font", family, weight?, style? }, the enum items by name.
+                return Font.new(
+                    v[2],
+                    if v[3] then Enum.FontWeight[v[3]] else nil,
+                    if v[4] then Enum.FontStyle[v[4]] else nil
+                )
             end
             error("unknown encoded type " .. tostring(k))
         end
@@ -757,7 +929,7 @@ pub fn run_case_with_options(
         }
     };
 
-    if let Err(e) = build_fn.call::<Value>((tree_table, root_handle)) {
+    if let Err(e) = build_fn.call::<Value>((tree_table, root_handle.clone())) {
         return CaseResult {
             file_stem: case.file_stem.clone(),
             name: case.name.clone(),
@@ -772,6 +944,14 @@ pub fn run_case_with_options(
 
     // 5. Render the frame through Dew's layout and display list builder
     let frame = frame_of(&dom, root_id, case.surface.width, case.surface.height);
+
+    let reader: Option<mlua::Function> = lua.load(READ_MEMBER).eval().ok();
+    let text_member = |name: &str, member: &str| -> Result<(Value, Value), String> {
+        let reader = reader.as_ref().ok_or("the member reader did not load")?;
+        reader
+            .call::<(Value, Value)>((root_handle.clone(), name, member))
+            .map_err(|e| format!("reading {name}.{member}: {e}"))
+    };
 
     // Index generated nodes by name
     let mut by_name = HashMap::new();
@@ -833,24 +1013,29 @@ pub fn run_case_with_options(
                 return finalize_result(case, detail, Some(remediation));
             }
         }
+        if let Some(detail) = unchecked_expect_key(exp) {
+            return finalize_result(case, detail, None);
+        }
+        if let Some(detail) = check_text_expect(exp, &text_member) {
+            let remediation = diagnose_remediation(case, &detail);
+            return finalize_result(case, detail, Some(remediation));
+        }
     }
 
     // 7. Evaluate ratios
     for r in &case.ratios {
-        let of_node = match by_name.get(&r.of) {
-            Some(n) => *n,
-            None => {
-                let detail = format!(
-                    "ratio needs '{}' and '{}'; one is missing from the display list",
-                    r.of, r.to
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        };
-        let to_node = match by_name.get(&r.to) {
-            Some(n) => *n,
-            None => {
+        let to_field = r.denominator_field();
+        let label = format!("ratio {}.{} / {}.{to_field}", r.of, r.field, r.to);
+
+        // A ratio with no bound asserts nothing, so it cannot pass.
+        if r.integral != Some(true) && r.expect.is_none() && r.min.is_none() && r.max.is_none() {
+            let detail = format!("{label}: no expect, min, max or integral");
+            return finalize_result(case, detail, None);
+        }
+
+        let (of_node, to_node) = match (by_name.get(&r.of), by_name.get(&r.to)) {
+            (Some(of), Some(to)) => (*of, *to),
+            _ => {
                 let detail = format!(
                     "ratio needs '{}' and '{}'; one is missing from the display list",
                     r.of, r.to
@@ -860,73 +1045,47 @@ pub fn run_case_with_options(
             }
         };
 
-        let read_field = |node: &dew_runtime::Node, field: &str| -> Option<f32> {
-            match field {
-                "textHeight" => Some(node.text_size),
-                "x" => Some(node.rect.x),
-                "y" => Some(node.rect.y),
-                "w" => Some(node.rect.w),
-                "h" => Some(node.rect.h),
-                _ => None,
-            }
+        let num = match read_field(of_node, &r.field, &text_member) {
+            Ok(v) => v,
+            Err(e) => return finalize_result(case, format!("node '{}': {e}", r.of), None),
         };
-
-        let num = match read_field(of_node, &r.field) {
-            Some(v) => v,
-            None => {
-                let detail = format!("node '{}' has no measurable field '{}'", r.of, r.field);
-                return finalize_result(case, detail, None);
-            }
-        };
-        let den = match read_field(to_node, &r.field) {
-            Some(v) => v,
-            None => {
-                let detail = format!("node '{}' has no measurable field '{}'", r.to, r.field);
-                return finalize_result(case, detail, None);
-            }
+        let den = match read_field(to_node, to_field, &text_member) {
+            Ok(v) => v,
+            Err(e) => return finalize_result(case, format!("node '{}': {e}", r.to), None),
         };
 
         if den == 0.0 {
-            let detail = format!(
-                "ratio {}.{} / {}.{}: the denominator is zero",
-                r.of, r.field, r.to, r.field
-            );
+            let detail = format!("{label}: the denominator is zero");
             let remediation = diagnose_remediation(case, &detail);
             return finalize_result(case, detail, Some(remediation));
         }
 
         let actual = num / den;
 
-        if let Some(true) = r.integral {
+        let outside = if let Some(true) = r.integral {
             let nearest = (actual + 0.5).floor();
             let slack = r.tolerance.unwrap_or(0.02);
-            if nearest < 1.0 || (actual - nearest).abs() > slack {
-                let detail = format!(
-                    "ratio {}.{} / {}.{}: expected a whole multiple, got {:.4}",
-                    r.of, r.field, r.to, r.field, actual
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        } else if let Some(min_val) = r.min {
-            if actual < min_val {
-                let detail = format!(
-                    "ratio {}.{} / {}.{}: expected at least {:.3}, got {:.3}",
-                    r.of, r.field, r.to, r.field, min_val, actual
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
-        } else if let Some(exp_val) = r.expect {
+            (nearest < 1.0 || (actual - nearest).abs() > slack)
+                .then(|| format!("expected a whole multiple, got {actual:.4}"))
+        } else if r.min.is_some() || r.max.is_some() {
+            let within = r.min.is_none_or(|lo| actual >= lo) && r.max.is_none_or(|hi| actual <= hi);
+            let bound = match (r.min, r.max) {
+                (Some(lo), Some(hi)) => format!("between {lo:.3} and {hi:.3}"),
+                (Some(lo), None) => format!("at least {lo:.3}"),
+                (None, Some(hi)) => format!("at most {hi:.3}"),
+                (None, None) => unreachable!("one bound is set"),
+            };
+            (!within).then(|| format!("expected {bound}, got {actual:.3}"))
+        } else {
+            let exp_val = r.expect.expect("a ratio without a bound returned above");
             let slack = r.tolerance.unwrap_or(0.02);
-            if (actual - exp_val).abs() > slack {
-                let detail = format!(
-                    "ratio {}.{} / {}.{}: expected {:.3} +/- {:.3}, got {:.3}",
-                    r.of, r.field, r.to, r.field, exp_val, slack, actual
-                );
-                let remediation = diagnose_remediation(case, &detail);
-                return finalize_result(case, detail, Some(remediation));
-            }
+            ((actual - exp_val).abs() > slack)
+                .then(|| format!("expected {exp_val:.3} +/- {slack:.3}, got {actual:.3}"))
+        };
+        if let Some(why) = outside {
+            let detail = format!("{label}: {why}");
+            let remediation = diagnose_remediation(case, &detail);
+            return finalize_result(case, detail, Some(remediation));
         }
     }
 
@@ -976,8 +1135,8 @@ pub fn run_case_with_options(
                 return finalize_result(case, "failed to create raster painter".to_string(), None);
             }
         };
-        if let Some(font) = crate::services::face() {
-            painter = painter.with_font(font);
+        if let Some(face) = crate::services::default_face() {
+            painter = painter.with_face(face);
         }
         painter.paint_frame(&frame, None);
 
@@ -1565,33 +1724,137 @@ pub fn print_report(results: &[CaseResult], summary: &SuiteSummary) {
 mod tests {
     use super::*;
 
+    /// What the suite in `dir` must add up to, counted from the case files
+    /// themselves rather than from the runner: how many files the loader would
+    /// pick up, how many name a `requires` feature missing from `SUPPORTS`, and,
+    /// of the rest, how many declare `roblox` and `asserted` provenance. An
+    /// unsupported case is counted only as unsupported, as the tally does.
+    struct ExpectedTally {
+        total: usize,
+        unsupported: usize,
+        roblox: usize,
+        asserted: usize,
+    }
+
+    fn expected_tally(dir: &Path) -> ExpectedTally {
+        let mut tally = ExpectedTally {
+            total: 0,
+            unsupported: 0,
+            roblox: 0,
+            asserted: 0,
+        };
+        let entries = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("could not read {}: {e}", dir.display()));
+        for entry in entries {
+            let path = entry.expect("directory entry").path();
+            // The same filter `run_suite_with_options` applies.
+            if path.extension().map(|ext| ext == "luau") != Some(true) {
+                continue;
+            }
+            tally.total += 1;
+            let source = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("could not read {}: {e}", path.display()));
+            let provenance = declared_provenance(&source)
+                .unwrap_or_else(|| panic!("{} declares no provenance", path.display()));
+            if declared_requires(&source)
+                .iter()
+                .any(|feature| !SUPPORTS.contains(feature))
+            {
+                tally.unsupported += 1;
+                continue;
+            }
+            match provenance {
+                "roblox" => tally.roblox += 1,
+                "asserted" => tally.asserted += 1,
+                _ => {}
+            }
+        }
+        tally
+    }
+
+    /// The text after the first `field =` in a case file, or `None`.
+    fn after_field<'a>(source: &'a str, field: &str) -> Option<&'a str> {
+        let mut rest = source;
+        while let Some(at) = rest.find(field) {
+            rest = &rest[at + field.len()..];
+            if let Some(value) = rest.trim_start().strip_prefix('=') {
+                return Some(value.trim_start());
+            }
+        }
+        None
+    }
+
+    /// The value of the first `provenance = "..."` field in a case file.
+    fn declared_provenance(source: &str) -> Option<&str> {
+        let value = after_field(source, "provenance")?.strip_prefix('"')?;
+        value.find('"').map(|end| &value[..end])
+    }
+
+    /// The quoted names in the first `requires = { ... }` field in a case file,
+    /// read from the text rather than from the loader's parsed `requires`, so a
+    /// loader that dropped the field would show up as a mismatch here.
+    fn declared_requires(source: &str) -> Vec<&str> {
+        let Some(list) = after_field(source, "requires").and_then(|v| v.strip_prefix('{')) else {
+            return Vec::new();
+        };
+        let list = &list[..list.find('}').unwrap_or(list.len())];
+        list.split('"').skip(1).step_by(2).collect()
+    }
+
+    /// The counts are derived rather than written as literals because the cases
+    /// live in the Aether repository, which CI clones at main. A literal would
+    /// couple this test to that repository's case count.
+    fn assert_tally_matches_cases(dir: &Path, summary: &SuiteSummary) {
+        let expected = expected_tally(dir);
+        assert!(
+            expected.total > 0,
+            "no case files found in {}",
+            dir.display()
+        );
+        assert_eq!(
+            summary.total,
+            expected.total,
+            "expected {} cases from {}",
+            expected.total,
+            dir.display()
+        );
+        assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
+        // A case naming a feature this runner does not claim reports unsupported
+        // rather than failing, until the feature joins `SUPPORTS`.
+        assert_eq!(
+            summary.unsupported, expected.unsupported,
+            "expected every case requiring a feature outside SUPPORTS to be unsupported"
+        );
+        assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
+        assert_eq!(summary.divergent, 0, "no documented gaps remain");
+        assert_eq!(
+            summary.verified_against_roblox, expected.roblox,
+            "expected every supported roblox case to be counted as verified"
+        );
+        // An `asserted` case states a belief nobody has checked in Studio, so it
+        // counts as an open question rather than as evidence.
+        assert_eq!(
+            summary.open_questions, expected.asserted,
+            "expected every supported asserted case to be counted as an open question"
+        );
+        // Every case passes, is an asserted case this implementation disagrees
+        // with, or is unsupported; nothing else is allowed to fall through.
+        assert_eq!(
+            summary.passed + summary.disagreed_open + summary.unsupported,
+            summary.total,
+            "expected {} passed plus {} disagreed open questions plus {} unsupported to cover all {} cases",
+            summary.passed,
+            summary.disagreed_open,
+            summary.unsupported,
+            summary.total
+        );
+    }
+
     #[test]
     fn conformance_suite_loads_and_runs() {
         let dir = find_cases_dir(None).expect("cases dir");
         let (results, summary) = run_suite(&dir, None);
-        assert_eq!(
-            summary.total, 24,
-            "expected 24 cases, got {}",
-            summary.total
-        );
-        assert_eq!(summary.undecodable, 0, "expected 0 undecodable cases");
-        assert_eq!(summary.unsupported, 0, "expected 0 unsupported cases");
-        assert_eq!(
-            summary.passed, 24,
-            "expected all 24 executable conformance cases to pass"
-        );
-        assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
-        // TWO SINCE MILESTONE 4 CLOSED THE CLIP RADIUS. The clipping case was a
-        // documented gap; it now asserts the engine's behaviour and Dew matches it,
-        // but the PIXEL half has never been rendered in Studio and compared, so
-        // it counts as a belief rather than as evidence.
-        //
-        // EXACT, AND IT WAS BRIEFLY NOT. While aether#2 was unmerged, CI read the
-        // case from the pinned pesde package and still saw 1, so this was widened
-        // to accept either. An assertion that passes whether the divergence is
-        // closed or open tests neither; the pin is bumped and the number is one
-        // number again.
-        assert_eq!(summary.open_questions, 2, "expected 2 open questions");
+        assert_tally_matches_cases(&dir, &summary);
 
         // Verify the 21 passing cases
         let passing_names: Vec<&str> = results
@@ -1638,7 +1901,10 @@ mod tests {
     #[test]
     fn single_case_filter_works() {
         let dir = find_cases_dir(None).expect("cases dir");
-        let (results, summary) = run_suite(&dir, Some("scale resolves against the parent"));
+        let (results, summary) = run_suite(
+            &dir,
+            Some("scale resolves against the parent, not the surface"),
+        );
         assert_eq!(results.len(), 1);
         assert_eq!(summary.passed, 1);
         assert_eq!(results[0].status, CaseStatus::Pass);
@@ -1659,6 +1925,132 @@ mod tests {
         assert_eq!(summary.passed, 1);
         assert_eq!(summary.failed, 0);
         assert_eq!(results[0].status, CaseStatus::Pass);
+    }
+
+    /// Build the tree of the case file `stem`, lay it out once, and read the
+    /// `AbsoluteContentSize` of the UIListLayout named `Layout` back through
+    /// Luau, the way a guest reads it.
+    fn list_content_size(stem: &str) -> (f32, f32) {
+        read_back(stem, "Layout", &["AbsoluteContentSize"])[0]
+    }
+
+    /// Build the tree of the case file `stem`, lay it out once, and read each
+    /// Vector2 property in `properties` off the panel's child named `layout`
+    /// back through Luau, the way a guest reads it.
+    fn read_back(stem: &str, layout: &str, properties: &[&str]) -> Vec<(f32, f32)> {
+        let dir = find_cases_dir(None).expect("cases dir");
+        let lua = Lua::new();
+        let case = decode_case(&lua, &dir.join(format!("{stem}.luau"))).expect("case decodes");
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("ScreenGui".into(), "DewRoot".into());
+        let root_handle = crate::datamodel::handle(&lua, &dom, root).expect("root handle");
+        let build: Function = lua.load(TREE_BUILDER).eval().expect("tree builder");
+        let tree: Table = lua.registry_value(&case.tree_val).expect("tree");
+        let panel: Value = build.call((tree, root_handle)).expect("tree builds");
+
+        let _ = frame_of(&dom, root, case.surface.width, case.surface.height);
+
+        let read: Function = lua
+            .load(
+                r#"
+                local panel, layout, property = ...
+                local size = panel:FindFirstChild(layout)[property]
+                return size.X, size.Y
+            "#,
+            )
+            .into_function()
+            .expect("reader");
+        properties
+            .iter()
+            .map(|property| {
+                read.call((panel.clone(), layout, *property))
+                    .expect("read back")
+            })
+            .collect()
+    }
+
+    /// The engine's own read-backs for a grid, taken in Studio from the same
+    /// trees with the command bar. The content size is the block of filled
+    /// cells with the padding between them, and the cell count is columns by
+    /// rows: three default cells in 220 make a 2 by 2 block 205 square, and
+    /// five 50 cells capped at two a row make 2 by 3, 105 by 160.
+    #[test]
+    fn a_grid_reports_the_sizes_the_engine_reads_back() {
+        for (stem, content, cell, count) in [
+            (
+                "uigridlayout_defaults",
+                (205.0, 205.0),
+                (100.0, 100.0),
+                (2.0, 2.0),
+            ),
+            (
+                "uigridlayout_fill_direction_max_cells",
+                (105.0, 160.0),
+                (50.0, 50.0),
+                (2.0, 3.0),
+            ),
+        ] {
+            assert_eq!(
+                read_back(
+                    stem,
+                    "Grid",
+                    &[
+                        "AbsoluteContentSize",
+                        "AbsoluteCellSize",
+                        "AbsoluteCellCount"
+                    ]
+                ),
+                vec![content, cell, count],
+                "{stem}"
+            );
+        }
+    }
+
+    /// The engine's own read-backs, taken in Studio from the same trees with
+    /// the command bar. A list's content size counts each child's final size and
+    /// its Padding: a wrapped list is as wide as its widest row and as tall as
+    /// its rows and the gap between them, `Fill` counts the grown children, and
+    /// the three `Space` values count the children without the room spread
+    /// between them.
+    #[test]
+    fn a_list_reports_the_content_size_the_engine_reads_back() {
+        for (stem, expected) in [
+            ("uilistlayout_wraps_horizontal", (145.0, 55.0)),
+            ("uilistlayout_horizontal_flex_none", (120.0, 20.0)),
+            ("uilistlayout_horizontal_flex_fill", (240.0, 20.0)),
+            ("uilistlayout_horizontal_flex_space_around", (120.0, 20.0)),
+            ("uilistlayout_horizontal_flex_space_between", (120.0, 20.0)),
+            ("uilistlayout_horizontal_flex_space_evenly", (120.0, 20.0)),
+        ] {
+            assert_eq!(list_content_size(stem), expected, "{stem}");
+        }
+    }
+
+    /// A flexed or clamped child counts at the size it ended up, by the same
+    /// rule the engine showed for the list's own `Fill` above. These numbers
+    /// follow from that rule and the cases' verified rectangles; none was read
+    /// back in Studio itself.
+    #[test]
+    fn a_list_counts_flexed_and_clamped_children_at_their_final_size() {
+        for (stem, expected) in [
+            ("uiflexitem_grow_takes_the_free_space", (200.0, 20.0)),
+            ("uiflexitem_grow_stops_at_max_size", (100.0, 20.0)),
+            (
+                "uiflexitem_two_shrink_children_share_the_overflow",
+                (150.0, 20.0),
+            ),
+            (
+                "uisizeconstraint_clamped_size_advances_a_list",
+                (100.0, 40.0),
+            ),
+        ] {
+            assert_eq!(list_content_size(stem), expected, "{stem}");
+        }
     }
 
     /// REPOINTED, NOT DELETED, and that is this test working rather than
@@ -1701,14 +2093,132 @@ mod tests {
     fn pixel_runner_full_suite_passes() {
         let dir = find_cases_dir(None).expect("cases dir");
         let (_results, summary) = run_suite_pixel(&dir, None, false, false);
-        assert_eq!(summary.total, 24);
-        assert_eq!(summary.undecodable, 0);
-        assert_eq!(summary.unsupported, 0);
-        assert_eq!(summary.passed, 24);
-        assert_eq!(summary.failed, 0);
-        assert_eq!(summary.divergent, 0, "no documented gaps remain");
-        assert_eq!(summary.verified_against_roblox, 21);
-        assert_eq!(summary.open_questions, 2);
+        assert_tally_matches_cases(&dir, &summary);
+    }
+
+    /// Decode and run a case written inline. Its tree is a 200 x 100 root
+    /// holding `Wide` (100 x 20) and `Square` (20 x 20), and a TextLabel
+    /// `Label`; `assertions` is the rest of the case table. The provenance is
+    /// `roblox`, so a disagreement is a failure rather than an open question.
+    fn run_inline(assertions: &str) -> CaseStatus {
+        let source = format!(
+            r#"return {{
+                name = "inline",
+                provenance = "roblox",
+                surface = {{ width = 200, height = 100 }},
+                tree = {{
+                    class = "Frame",
+                    name = "Root",
+                    props = {{ Size = {{ "UDim2", 1, 0, 1, 0 }} }},
+                    children = {{
+                        {{ class = "Frame", name = "Wide",
+                           props = {{ Size = {{ "UDim2", 0, 100, 0, 20 }} }} }},
+                        {{ class = "Frame", name = "Square",
+                           props = {{ Size = {{ "UDim2", 0, 20, 0, 20 }},
+                                      Position = {{ "UDim2", 0, 0, 0, 40 }} }} }},
+                        {{ class = "TextLabel", name = "Label",
+                           props = {{ Text = "label", TextSize = 20,
+                                      Size = {{ "UDim2", 0, 100, 0, 30 }},
+                                      Position = {{ "UDim2", 0, 0, 0, 60 }} }} }},
+                    }},
+                }},
+                {assertions}
+            }}"#
+        );
+        let lua = Lua::new();
+        let case = decode_case_source(&lua, &source, "inline", "inline").expect("case decodes");
+        run_case(&lua, &case).status
+    }
+
+    fn assert_fails_with(status: CaseStatus, needle: &str) {
+        match status {
+            CaseStatus::Fail { ref detail, .. } if detail.contains(needle) => {}
+            other => panic!("expected a failure mentioning {needle:?}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_max_only_ratio_is_enforced() {
+        // Wide.w / Square.w is 5.
+        let within =
+            run_inline(r#"ratios = { { of = "Wide", to = "Square", field = "w", max = 5.5 } },"#);
+        assert_eq!(within, CaseStatus::Pass);
+        let above =
+            run_inline(r#"ratios = { { of = "Wide", to = "Square", field = "w", max = 4 } },"#);
+        assert_fails_with(above, "at most 4.000");
+        // `min` and `max` together are both checked.
+        let between = run_inline(
+            r#"ratios = { { of = "Wide", to = "Square", field = "w", min = 1, max = 4 } },"#,
+        );
+        assert_fails_with(between, "between 1.000 and 4.000");
+    }
+
+    #[test]
+    fn to_field_reads_the_other_field() {
+        // Wide.w / Wide.h is 5; without `toField` the ratio would be w / w = 1.
+        let status = run_inline(
+            r#"ratios = { { of = "Wide", to = "Wide", field = "w", toField = "h", expect = 5 } },"#,
+        );
+        assert_eq!(status, CaseStatus::Pass);
+        let wrong = run_inline(
+            r#"ratios = { { of = "Wide", to = "Wide", field = "w", toField = "h", expect = 1 } },"#,
+        );
+        assert_fails_with(wrong, "ratio Wide.w / Wide.h");
+    }
+
+    #[test]
+    fn a_ratio_with_no_bound_fails() {
+        let status = run_inline(r#"ratios = { { of = "Wide", to = "Square", field = "w" } },"#);
+        assert_fails_with(status, "no expect, min, max or integral");
+    }
+
+    #[test]
+    fn an_unknown_expect_key_fails() {
+        let status = run_inline(r#"expect = { { name = "Wide", w = 100, colour = "red" } },"#);
+        assert_fails_with(status, "reads no expect field 'colour'");
+    }
+
+    /// `Label` is "label" at TextSize 20 in a 100 x 30 box: one line of 30,
+    /// narrower than the box, so it fits.
+    #[test]
+    fn content_text_and_text_fits_are_compared() {
+        if crate::services::face().is_none() {
+            return;
+        }
+        let content = run_inline(r#"expect = { { name = "Label", contentText = "label" } },"#);
+        assert_eq!(content, CaseStatus::Pass);
+        let wrong = run_inline(r#"expect = { { name = "Label", contentText = "lab" } },"#);
+        assert_fails_with(wrong, "contentText: expected \"lab\"");
+        let fits = run_inline(r#"expect = { { name = "Label", textFits = true } },"#);
+        assert_eq!(fits, CaseStatus::Pass);
+        let not = run_inline(r#"expect = { { name = "Label", textFits = false } },"#);
+        assert_fails_with(not, "textFits: expected false");
+        let typed = run_inline(r#"expect = { { name = "Label", textFits = "yes" } },"#);
+        assert_fails_with(typed, "'textFits' must be a boolean");
+    }
+
+    #[test]
+    fn text_bounds_are_compared() {
+        if crate::services::face().is_none() {
+            return;
+        }
+        // One line in the default face is 1.5 x 20 = 30, the box's height.
+        let height = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsY", toField = "h", expect = 1 } },"#,
+        );
+        assert_eq!(height, CaseStatus::Pass);
+        let width = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsX", toField = "w", max = 0.99 } },"#,
+        );
+        assert_eq!(width, CaseStatus::Pass);
+        let wrong = run_inline(
+            r#"ratios = { { of = "Label", to = "Label", field = "textBoundsY", toField = "h", expect = 2 } },"#,
+        );
+        assert_fails_with(wrong, "ratio Label.textBoundsY / Label.h");
+        let unknown = run_inline(
+            r#"ratios = { { of = "Wide", to = "Square", field = "depth", expect = 1 } },"#,
+        );
+        assert_fails_with(unknown, "no measurable field 'depth'");
     }
 
     const TALLY_LUAU_ORACLE: &str = r#"--!strict

@@ -27,3 +27,44 @@ This host builds on open source Rust and Luau packages, each under its own
 licence. `cargo tree` and the `pesde.toml` manifests list them. The rendering,
 runtime and window crates in `crates/` are this project's own work and are covered
 by `LICENSE`.
+
+### Luau packages built into dew
+
+The bundled dashboard and quick panel are built into the `dew` executable
+together with the Luau packages they require, as `pesde install` places them in
+each applet's `roblox_packages/`. Dew writes them to disk unmodified beside the
+applet that requires them. They are not covered by `LICENSE`. Each is under the
+MIT License. Its full text is a file in the package (`vide/LICENSE.md`,
+`aether/LICENSE`), so it is embedded and written with the code it covers.
+
+| Package | Bundled with | Copyright | Licence |
+| :--- | :--- | :--- | :--- |
+| vide, installed from the `es9-dev/vide` fork | dashboard, quick panel | Copyright (c) 2022 centau | MIT License |
+| aether | dashboard | Copyright (c) 2026 es9 | MIT License |
+| virtual | dashboard | Copyright (c) 2026 es9 | MIT License |
+
+`virtual` is a package from the aether repository, installed as an aether
+dependency. Its manifest declares the MIT License and it carries no licence
+file of its own; the aether repository's `LICENSE` covers it.
+
+## Fonts
+
+The font files in `host/fonts/` are not covered by `LICENSE`. Each stays under
+its own licence, and the full text of each is in `host/fonts/LICENSES/`. They
+are built into the `dew` executable unmodified, so the text can be drawn the
+way the engine draws it.
+
+| Family | Files | Copyright | Licence |
+| :--- | :--- | :--- | :--- |
+| Arimo | `Arimo-Regular.ttf`, `Arimo-Bold.ttf` | Copyright 2020 The Arimo Project Authors (https://github.com/googlefonts/arimo) | SIL Open Font License 1.1 |
+| Source Sans Pro | `SourceSansPro-Light.ttf`, `-Regular.ttf`, `-It.ttf`, `-Semibold.ttf`, `-Bold.ttf` | Copyright 2010, 2012, 2014 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name 'Source' | SIL Open Font License 1.1 |
+| Montserrat | `Montserrat-Regular.ttf`, `-Medium.ttf`, `-Bold.ttf`, `-Black.ttf` | Copyright 2011 The Montserrat Project Authors (https://github.com/JulietaUla/Montserrat) | SIL Open Font License 1.1 |
+| Roboto Mono | `RobotoMono-Regular.ttf` | Copyright 2015 The Roboto Mono Project Authors (https://github.com/googlefonts/robotomono) | Apache License 2.0 |
+
+`host/fonts/families/` holds family files in the engine's font family format,
+naming which face file serves each weight and style. Like the interface surface
+above, they record facts about an interface and are used for compatibility.
+
+Builder Sans, Builder Mono and Builder Extended are not distributed with Dew.
+When a Roblox Studio install is present on the same machine, Dew reads those
+faces from it.

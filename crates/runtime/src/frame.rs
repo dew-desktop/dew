@@ -21,6 +21,7 @@
 //! host does not draw — which is exactly the class of divergence this crate
 //! exists to prevent.
 
+use crate::text::TextLayout;
 use mlua::prelude::*;
 
 /// 0-255 per channel, as Live.luau's `rgb()` emits them.
@@ -353,6 +354,14 @@ pub struct Node {
     /// does not emit it, so a display list built in Luau paints unwrapped
     /// until Aether's own `buildNode` grows a matching key.
     pub text_wrap: bool,
+    /// The lines this node's text is drawn as, already broken and placed.
+    ///
+    /// HOST FIELD, LIKE `image`. Dew lays a label out once with
+    /// `crate::text::lay_out`, reports `TextBounds` and `TextFits` from the
+    /// result, and hands the same lines to the painter, so what is drawn is
+    /// what was measured. A display list built in Luau carries none, and the
+    /// painter lays such a node out itself through the same function.
+    pub text_layout: Option<TextLayout>,
     /// What this node draws as an image, if anything.
     ///
     /// NOT DECODED FROM LUA, and it is the first field of which that is true —
@@ -364,6 +373,16 @@ pub struct Node {
     /// NOT DECODED FROM LUA, like `image` -- see [`BlendMode`] and
     /// [`Frame::HOST_FIELDS`].
     pub blend_mode: BlendMode,
+    pub text_stroke_colour: Option<Rgb>,
+    pub text_stroke_alpha: f32,
+    /// A `UIStroke` that outlines this node's glyphs rather than its box.
+    ///
+    /// HOST FIELD, BESIDE `stroke` RATHER THAN IN IT. A text object can carry
+    /// both a box stroke and a glyph stroke only through two `UIStroke`s, and
+    /// `stroke` is the one Live.luau emits; a node from a Luau display list
+    /// has none. `thickness` is how far the outline reaches past the glyph
+    /// edge, in pixels.
+    pub glyph_stroke: Option<Stroke>,
 }
 
 #[derive(Debug, Clone)]
@@ -429,7 +448,15 @@ impl Frame {
     ///
     /// `text_wrap` IS HERE FOR A DIFFERENT REASON: it CAN be emitted from Lua in
     /// principle, and simply is not yet -- see its doc comment on `Node`.
-    pub const HOST_FIELDS: &'static [&'static str] = &["image", "text_wrap", "blend_mode"];
+    pub const HOST_FIELDS: &'static [&'static str] = &[
+        "image",
+        "text_wrap",
+        "text_layout",
+        "blend_mode",
+        "text_stroke_colour",
+        "text_stroke_alpha",
+        "glyph_stroke",
+    ];
 }
 
 /// What changed since the last delta.
@@ -541,8 +568,13 @@ impl Node {
             image: None,
             // NOT READ FROM THE TABLE EITHER, for now -- see `Node::text_wrap`.
             text_wrap: false,
+            // NOR THIS: the painter lays a Luau node out itself.
+            text_layout: None,
             // NOR THIS -- see `BlendMode`'s own doc comment.
             blend_mode: BlendMode::Alpha,
+            text_stroke_colour: None,
+            text_stroke_alpha: 0.0,
+            glyph_stroke: None,
         })
     }
 }
@@ -648,7 +680,11 @@ mod tests {
             text_alpha: 1.0,
             image: None,
             text_wrap: false,
+            text_layout: None,
             blend_mode: BlendMode::Alpha,
+            text_stroke_colour: None,
+            text_stroke_alpha: 0.0,
+            glyph_stroke: None,
         };
         let Node {
             id: _,
@@ -669,7 +705,11 @@ mod tests {
             text_alpha: _,
             image: _,
             text_wrap: _,
+            text_layout: _,
             blend_mode: _,
+            text_stroke_colour: _,
+            text_stroke_alpha: _,
+            glyph_stroke: _,
         } = node;
 
         // `rect` is four keys and the rest are one each; the names are Live.luau's
@@ -696,7 +736,11 @@ mod tests {
             "textAlpha",
             "image",
             "text_wrap",
+            "text_layout",
             "blend_mode",
+            "text_stroke_colour",
+            "text_stroke_alpha",
+            "glyph_stroke",
         ];
         for key in named {
             assert!(

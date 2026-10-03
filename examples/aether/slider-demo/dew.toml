@@ -1,0 +1,15 @@
+# Slider demo
+#
+# Milestone 60 sprint B4's own live consumer: a real Slider primitive
+# (createSlider's own clamp/step pipeline, composed with a real track and a
+# real thumb through createDraggable) dragged with a real mouse, proving the
+# thumb moves proportionally and the released position holds.
+
+id = "slider-demo"
+name = "Slider demo"
+description = "A Slider primitive dragged live, proving proportional movement and no snap-back"
+
+# NO PERMISSIONS BEYOND A SURFACE. Pointer arrives through Aether's own
+# Deps.Host.Services, which needs no separate grant -- the same as every
+# other Aether example under this directory.
+permissions = ["widget"]

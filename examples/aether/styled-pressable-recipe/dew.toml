@@ -1,0 +1,16 @@
+# Styled Pressable, Recipe
+
+# The same scenario as examples/aether/styled-pressable -- two themes, a
+# Pressable's BackgroundColor3 and its UICorner's CornerRadius both
+# themed live -- but the button's own styling is authored through
+# createRecipe()/recipe.Bind()/recipe.SetThemeSource instead of by hand
+# with Instance.new("StyleRule")/("StyleDerive"). Milestone 60 sprint A5's
+# own live consumer.
+
+id = "styled-pressable-recipe"
+name = "Styled Pressable, Recipe"
+description = "The styled-pressable scenario authored through createRecipe instead of by hand"
+
+# NO PERMISSIONS BEYOND A SURFACE. It reads and writes only its own
+# in-memory StyleSheet tree.
+permissions = ["widget"]

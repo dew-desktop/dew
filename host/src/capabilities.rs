@@ -473,6 +473,7 @@ pub fn build(
                             row.set("description", entry.description)?;
                             row.set("enabled", entry.enabled)?;
                             row.set("running", entry.running)?;
+                            row.set("bundled", entry.bundled)?;
                             list.set((i + 1) as i64, row)?;
                         }
                         Ok(list)

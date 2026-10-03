@@ -1,0 +1,14 @@
+{
+  "name": "GridLayoutDemo",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "GridLayoutDemo": { "$path": "grid-layout-demo.luau" }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "GridLayoutDemo": { "$path": "roblox.client.luau" }
+      }
+    }
+  }
+}

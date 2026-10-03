@@ -72,7 +72,11 @@ fn node(image: Option<Image>) -> Node {
         text_alpha: 1.0,
         image,
         text_wrap: false,
+        text_layout: None,
         blend_mode: BlendMode::Alpha,
+        text_stroke_colour: None,
+        text_stroke_alpha: 0.0,
+        glyph_stroke: None,
     }
 }
 
@@ -388,7 +392,11 @@ fn a_rounded_clip_masks_the_corner_and_keeps_the_middle() {
         text_alpha: 1.0,
         image: None,
         text_wrap: false,
+        text_layout: None,
         blend_mode: BlendMode::Alpha,
+        text_stroke_colour: None,
+        text_stroke_alpha: 0.0,
+        glyph_stroke: None,
     };
     let mut painter = painted(bar);
     let canvas = painter.canvas_mut();

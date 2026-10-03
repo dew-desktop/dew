@@ -52,6 +52,7 @@
 //! partial one. So it stays on the backlog in `docs/datamodel_scope.md`, where a
 //! method this host does not implement belongs, and it arrives with the scheduler.
 
+use super::transition::LuaTweenInfo;
 use super::{handle, signal, InstanceRef};
 use mlua::prelude::*;
 use rbx_types::Variant;
@@ -316,6 +317,34 @@ const MEMBERS: &[Member] = &[
         name: "GetProperties",
         introduced_on: "StyleRule",
     },
+    // -- `StyleRule:SetPropertyTransition` (milestone 29 part C4) --------
+    //
+    // A DIFFERENT SIDE TABLE FROM `SetProperty`'s OWN, keyed the same way
+    // (rule id, property name) but holding a `TweenInfo` rather than a
+    // property value -- see `Dom::style_transitions`'s own doc comment.
+    Member {
+        name: "SetPropertyTransition",
+        introduced_on: "StyleRule",
+    },
+    Member {
+        name: "GetPropertyTransition",
+        introduced_on: "StyleRule",
+    },
+    // -- `GuiState`, writable (milestone 29 part B) --------------------------
+    //
+    // REAL ROBLOX MAKES THIS ENGINE-COMPUTED AND READ-ONLY, and the generic
+    // property path already refuses a write for exactly that reason (its own
+    // `descriptor.scriptability` check). Native hit-testing cannot compute it
+    // FOR AN AETHER PRIMITIVE regardless: `input.rs`'s own `sinks()` gates all
+    // hit-testing on `Active == true`, which Aether's own `PointerRouter`
+    // never sets, by its own stated rule. So this is a deliberate divergence
+    // -- `GuiState` here is a plain writable value, the same shape an
+    // Attribute already is, set by whichever real arbiter a guest is using
+    // (`PointerRouter`, if one is Aether's) rather than derived by this host.
+    Member {
+        name: "SetGuiState",
+        introduced_on: "GuiObject",
+    },
 ];
 
 /// Does `class` match `ancestor`, or descend from it?
@@ -422,6 +451,30 @@ fn instance_arg(value: &LuaValue, method: &str) -> LuaResult<InstanceRef> {
     };
     let other = ud.borrow::<InstanceRef>().map_err(|_| wrong())?;
     Ok(other.clone())
+}
+
+/// Store a `StyleRule` value, printing the engine's cast warning when the
+/// stored value changed to one an enum property cannot take. Printed here,
+/// once per change, rather than each time the cascade skips the value.
+fn set_style_property(dom: &mut super::Dom, rule: usize, name: &str, value: Option<Variant>) {
+    let warning = value.as_ref().and_then(|v| {
+        let rule_name = dom.name_of(rule)?;
+        super::style_cast_warning(&rule_name, name, v)
+    });
+    if dom.set_style_property(rule, name, value) {
+        if let Some(warning) = warning {
+            #[cfg(test)]
+            STYLE_WARNINGS.with(|said| said.borrow_mut().push(warning.clone()));
+            eprintln!("[dew] {warning}");
+        }
+    }
+}
+
+// Every cast warning this thread has printed, for a test to count.
+#[cfg(test)]
+thread_local! {
+    pub(crate) static STYLE_WARNINGS: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The method named `key`, already bound to `this`, or `None` when this host has
@@ -763,12 +816,12 @@ pub fn lookup(
         })?,
         "SetProperty" => lua.create_function(
             move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
-                let variant = super::coerce_variant_value("SetProperty", &value)?;
+                let variant = super::coerce_style_value("SetProperty", &value)?;
                 let mut dom = this.dom.lock().expect("dom");
                 if dom.node(this.id).is_none() {
                     return Err(dead());
                 }
-                dom.set_style_property(this.id, &name, variant);
+                set_style_property(&mut dom, this.id, &name, variant);
                 Ok(())
             },
         )?,
@@ -779,8 +832,8 @@ pub fn lookup(
             }
             for pair in table.pairs::<String, LuaValue>() {
                 let (name, value) = pair?;
-                let variant = super::coerce_variant_value("SetProperties", &value)?;
-                dom.set_style_property(this.id, &name, variant);
+                let variant = super::coerce_style_value("SetProperties", &value)?;
+                set_style_property(&mut dom, this.id, &name, variant);
             }
             Ok(())
         })?,
@@ -808,6 +861,67 @@ pub fn lookup(
                 out.set(k, super::to_lua(lua, &v, None)?)?;
             }
             Ok(out)
+        })?,
+        // `StyleRule:SetPropertyTransition` (milestone 29 part C4): a
+        // `TweenInfo` a cascade-driven change of `name` should animate
+        // through, in `Dom::style_transitions` -- a DIFFERENT side table
+        // from `SetProperty`'s own, since a `TweenInfo` is not a property
+        // value the cascade would ever write onto a matching instance.
+        "SetPropertyTransition" => lua.create_function(
+            move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
+                let info = match &value {
+                    LuaValue::Nil => None,
+                    other => Some(LuaTweenInfo::from_value(other).ok_or_else(|| {
+                        LuaError::runtime(format!(
+                            "SetPropertyTransition expects a TweenInfo or nil, got {}",
+                            other.type_name()
+                        ))
+                    })?),
+                };
+                let mut dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                dom.set_style_transition(this.id, &name, info);
+                Ok(())
+            },
+        )?,
+        "GetPropertyTransition" => {
+            lua.create_function(move |_lua, (_, name): (LuaValue, String)| {
+                let dom = this.dom.lock().expect("dom");
+                if dom.node(this.id).is_none() {
+                    return Err(dead());
+                }
+                match dom.get_style_transition(this.id, &name) {
+                    Some(info) => LuaTweenInfo(info).into_lua(_lua),
+                    None => Ok(LuaValue::Nil),
+                }
+            })?
+        }
+        // `GuiState`, WRITTEN DIRECTLY INTO `node.props` -- the same table
+        // the generic property read already consults first, so `f.GuiState`
+        // reads back exactly what this stored with no separate side table.
+        // The generic NewIndex path is not reused: it refuses this specific
+        // write on purpose (`descriptor.scriptability`), which is right for
+        // an ordinary reflected property and exactly what this method exists
+        // to go around, the same relationship `SetProperty` already has to
+        // an ordinary property write.
+        "SetGuiState" => lua.create_function(move |lua, (_, value): (LuaValue, LuaValue)| {
+            let mut dom = this.dom.lock().expect("dom");
+            let Some(class) = dom.class_of(this.id) else {
+                return Err(dead());
+            };
+            let stored = super::coerce_enum(&value, "GuiState", &class, "GuiState")?;
+            if dom.property(this.id, "GuiState") == Some(Variant::Enum(stored)) {
+                return Ok(());
+            }
+            dom.node_mut(this.id)
+                .expect("checked")
+                .props
+                .insert("GuiState".to_string(), Variant::Enum(stored));
+            dom.touch();
+            drop(dom);
+            signal::property_changed(lua, &this.dom, this.id, "GuiState")
         })?,
         "CaptureFocus" => lua.create_function(move |lua, _: LuaValue| {
             let dom = this.dom.lock().expect("dom");

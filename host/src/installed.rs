@@ -23,9 +23,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn dew_dir() -> Option<PathBuf> {
-    let dir = dirs::data_local_dir()?.join("Dew");
+    let dir = data_root()?.join("Dew");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+#[cfg(not(test))]
+fn data_root() -> Option<PathBuf> {
+    dirs::data_local_dir()
+}
+
+// A TEST BUILD NEVER SEES THE USER'S DATA. Everything this file and its
+// callers write under `dew_dir` lands in a scratch root instead, so running
+// the suite cannot rewrite a real install while a real service reads it.
+#[cfg(test)]
+fn data_root() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join("dew-host-tests"))
 }
 
 fn applets_dir() -> Option<PathBuf> {
@@ -39,7 +52,7 @@ fn applets_dir() -> Option<PathBuf> {
 /// file. `applets::load` checks a loading applet's directory against this
 /// one before granting any `Capability::Host` permission it declared
 /// (ADR-017) -- a mod under `Applets/` cannot get one no matter what its own
-/// `dew.toml` claims. Nothing ships into it until milestone 23's dashboard.
+/// `dew.toml` claims. Only `bundled.rs` writes into it.
 pub(crate) fn bundled_applets_dir() -> Option<PathBuf> {
     let dir = dew_dir()?.join("Bundled");
     std::fs::create_dir_all(&dir).ok()?;
@@ -118,6 +131,9 @@ pub struct Entry {
     pub id: String,
     pub dir: PathBuf,
     pub enabled: bool,
+    /// Shipped with Dew (`bundled.rs`) rather than installed by the user:
+    /// listed and toggled like any other, never uninstalled.
+    pub bundled: bool,
 }
 
 /// Every installed applet, enabled or not. `id` and `dir` come from scanning
@@ -125,23 +141,42 @@ pub struct Entry {
 /// `true` for a directory the state file has no opinion about -- a store
 /// that only ever writes an entry at install time still has to make sense of
 /// a directory placed there by hand.
+///
+/// THE LISTED BUNDLED APPLETS JOIN THE LIST, from their bundled copy, once
+/// `bundled::ensure` has written one. Their enabled bit lives in the same
+/// `installed.json` but defaults to `false`: Dew's own extras are opted into,
+/// not imposed. A folder under `Applets/` named like a bundled applet is
+/// skipped, so it can never stand in for one.
 pub fn list() -> Vec<Entry> {
-    let Some(dir) = applets_dir() else {
-        return Vec::new();
-    };
-    let Ok(read) = std::fs::read_dir(&dir) else {
-        return Vec::new();
-    };
     let state = read_state();
     let mut out = Vec::new();
-    for entry in read.flatten() {
-        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-            let id = entry.file_name().to_string_lossy().into_owned();
-            let enabled = state.get(&id).copied().unwrap_or(true);
+    if let Some(read) = applets_dir().and_then(|dir| std::fs::read_dir(dir).ok()) {
+        for entry in read.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if crate::bundled::is_bundled_id(&id) {
+                    continue;
+                }
+                let enabled = state.get(&id).copied().unwrap_or(true);
+                out.push(Entry {
+                    dir: entry.path(),
+                    id,
+                    enabled,
+                    bundled: false,
+                });
+            }
+        }
+    }
+    for id in crate::bundled::listed_ids() {
+        let Some(dir) = crate::bundled::installed_dir(id) else {
+            continue;
+        };
+        if dir.join("dew.toml").is_file() {
             out.push(Entry {
-                dir: entry.path(),
-                id,
-                enabled,
+                id: id.to_string(),
+                dir,
+                enabled: state.get(id).copied().unwrap_or(false),
+                bundled: true,
             });
         }
     }
@@ -175,6 +210,11 @@ pub fn install(source: &Path, force: bool) -> Result<String, String> {
         return Err(format!(
             "{}: manifest id {id:?} cannot be used as a directory name",
             source.display()
+        ));
+    }
+    if crate::bundled::is_bundled_id(&id) {
+        return Err(format!(
+            "'{id}' is the id of an applet that ships with Dew and cannot be installed over"
         ));
     }
 
@@ -220,10 +260,7 @@ pub fn set_enabled(id: &str, enabled: bool) -> Result<(), String> {
     if !valid_id(id) {
         return Err(format!("{id:?} is not a valid installed applet id"));
     }
-    let dest = applets_dir()
-        .ok_or("could not find a per-user data directory")?
-        .join(id);
-    if !dest.is_dir() {
+    if !list().iter().any(|e| e.id == id) {
         return Err(format!("no applet installed with id '{id}'"));
     }
 
@@ -245,6 +282,9 @@ pub fn uninstall(id: &str) -> Result<(), String> {
     if !valid_id(id) {
         return Err(format!("{id:?} is not a valid installed applet id"));
     }
+    if crate::bundled::is_bundled_id(id) {
+        return Err(crate::bundled::uninstall_refusal(id));
+    }
     let dest = applets_dir()
         .ok_or("could not find a per-user data directory to uninstall from")?
         .join(id);
@@ -261,6 +301,24 @@ pub fn uninstall(id: &str) -> Result<(), String> {
     crate::coordinator::notify_library_changed();
 
     Ok(())
+}
+
+/// The enabled bit `installed.json` holds for `id`, if any. For a test that
+/// changes a real applet's bit and must put it back.
+#[cfg(test)]
+pub(crate) fn enabled_bit(id: &str) -> Option<bool> {
+    read_state().get(id).copied()
+}
+
+/// Put `id`'s enabled bit back to what [`enabled_bit`] read.
+#[cfg(test)]
+pub(crate) fn restore_enabled_bit(id: &str, bit: Option<bool>) {
+    let mut state = read_state();
+    match bit {
+        Some(bit) => state.insert(id.to_string(), bit),
+        None => state.remove(id),
+    };
+    write_state(&state);
 }
 
 #[cfg(test)]

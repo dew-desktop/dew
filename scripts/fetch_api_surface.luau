@@ -29,9 +29,8 @@
 	WHY IT IS PINNED RATHER THAN LIVE
 	The build this writes is the build the standard is measured against, and it
 	must be a fact rather than a moving target. `docs/datamodel_scope.md` and
-	`conformance/cases/*.luau` already disagreed about which the engine they describe
-	-- 0.728.0.7280895 against 0.736.0.7361346, eight builds apart inside one
-	standard -- because the property half tracked whatever the Rust crate shipped
+	`conformance/cases/*.luau` once disagreed about which the engine they describe
+	-- two builds eight apart inside one standard -- because the property half tracked whatever the Rust crate shipped
 	and nobody was told when it moved. Recording the version here is what lets
 	`datamodel-surface` say so out loud.
 ]]
@@ -46,8 +45,8 @@ local serde = require("@lune/serde")
 --- that produced it. Both come from the same ref in one commit, which is what
 --- makes the pair coherent rather than two fetches that might straddle a
 --- release.
---- Pinned to commit 2f099c9d2db0061c81728bad66f91140f2b20fed for upstream build
---- 0.736.0.7361346, which is what all verified conformance cases cite.
+--- Pinned to commit fcd6994996bb655bef047c69f456463d94faa569 for upstream build
+--- 0.741.19.7411056, which is what all verified conformance cases cite.
 ---
 --- THE PATH IS A THIRD PARTY'S REPOSITORY NAME, and it is spelled the way that
 --- repository is actually spelled because a URL is an address rather than a
@@ -59,7 +58,7 @@ local serde = require("@lune/serde")
 ---
 --- Nothing fetched here is committed. `OUT` is gitignored, so the data stays
 --- local and this repository redistributes none of it. See NOTICE.
-local TRACKER = "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/2f099c9d2db0061c81728bad66f91140f2b20fed"
+local TRACKER = "https://raw.githubusercontent.com/MaximumADHD/Roblox-Client-Tracker/fcd6994996bb655bef047c69f456463d94faa569"
 local OUT = "host/datamodel/api_surface.json"
 
 --- The classes the standard covers. `GuiObject` descendants are found by walking
@@ -154,7 +153,7 @@ end
 ---
 --- `Security` gates that, and it is two shapes in one file: a string for
 --- functions and events, a `{ Read, Write }` table for properties. Only `None`
---- is reachable from ordinary Luau, so `the engineScriptSecurity` and
+--- is reachable from ordinary Luau, so `RobloxScriptSecurity` and
 --- `PluginSecurity` members are dropped -- a standard that demanded
 --- `SetTextFromInput` of an implementation would be describing the engine's
 --- internals rather than describing a UI.

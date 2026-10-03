@@ -7,10 +7,34 @@
 //!
 //! Run with `cargo run --bin datamodel-surface`.
 
+use dew_host::datamodel::render::honours::{honours, Honour};
 use dew_host::scope::{
     ApiClass, ApiSurface, API_SURFACE_MISSING, INPUT_DEVICE, MODIFIERS, NOT_UI, OUT_OF_SCOPE,
 };
 use std::collections::{BTreeMap, BTreeSet};
+
+/// One class's row: its in-scope properties, and three different questions
+/// asked of each.
+struct ClassRow {
+    name: String,
+    in_scope: usize,
+    /// `datamodel::accepts`: would an assignment be stored.
+    accepted: usize,
+    /// `render::honours`: does Dew's renderer read it, whole.
+    implemented: Vec<String>,
+    /// `render::honours`: read, with what is missing.
+    partial: Vec<(String, &'static str)>,
+    /// `render::honours`: never read.
+    absent: Vec<String>,
+    /// By name, in `AETHER_PIPELINE`.
+    pipeline: usize,
+}
+
+impl ClassRow {
+    fn rendered(&self) -> usize {
+        self.implemented.len() + self.partial.len()
+    }
+}
 
 // ── The method and event surface ─────────────────────────────────────────────
 
@@ -142,9 +166,15 @@ const INPUT_DEVICE_MEMBERS: &[&str] = &[
 // -- it said 35 of 138 while the host implemented none of it, because the names
 // in it were Aether's.
 
-/// What `Aether/src/host/Layout.luau` declares it reads, verbatim from
-/// `Layout.Inputs`. Kept here rather than parsed: a hand-copied list that drifts
-/// is visible in a diff, and a parser that silently matches nothing is not.
+/// What Aether's pipeline honours: the first two groups are Aether's
+/// `src/core/Layout.luau` `Layout.Inputs`, verbatim, and the third is what its
+/// display list carries. Kept here rather than parsed: a hand-copied list that
+/// drifts is visible in a diff, and a parser that silently matches nothing is
+/// not.
+///
+/// NOT A DEW FIGURE EITHER. What Dew's renderer honours is asked of
+/// `dew_host::datamodel::render::honours`, per class; this list is by name and
+/// describes Aether.
 ///
 /// NOT A CONFORMANCE FIGURE. Aether is a headless framework that runs on top of
 /// a host, the way Ark UI runs on top of a DOM; it is not an implementation of
@@ -153,6 +183,7 @@ const INPUT_DEVICE_MEMBERS: &[&str] = &[
 /// work only, and one it does not needs host work AND rendering work. That is a
 /// genuinely different cost, and it is the most useful thing this list can say.
 const AETHER_PIPELINE: &[&str] = &[
+    // `Layout.Inputs.Properties`.
     "AnchorPoint",
     "AutomaticSize",
     "CanvasPosition",
@@ -167,12 +198,17 @@ const AETHER_PIPELINE: &[&str] = &[
     "Scale",
     "Size",
     "Text",
+    "TextScaled",
     "TextSize",
+    "TextWrapped",
     "Visible",
-    // Read through accessors rather than by name, so absent from Layout.Inputs'
-    // Properties list but no less implemented.
+    // `Layout.Inputs.Accessors`, as the property each one reads: `Clips`,
+    // `ZIndex`, `Parent` and `ClassOf`. `Children` and `Raw` read no property
+    // of their own.
     "ClipsDescendants",
     "ZIndex",
+    "Parent",
+    "ClassName",
     // Carried by the display list rather than by layout.
     "BackgroundColor3",
     "BackgroundTransparency",
@@ -189,11 +225,6 @@ const AETHER_PIPELINE: &[&str] = &[
     "Transparency",
     "Rotation",
     "Offset",
-    // Read through accessors rather than by name, so absent from Layout.Inputs'
-    // Properties list but no less honoured by the pipeline.
-    "Parent",
-    "Name",
-    "ClassName",
 ];
 
 fn main() {
@@ -254,7 +285,7 @@ fn main() {
     }
 
     let mut all_props: BTreeSet<&str> = BTreeSet::new();
-    let mut per_class: Vec<(String, usize, usize)> = Vec::new();
+    let mut per_class: Vec<ClassRow> = Vec::new();
 
     for name in ui_classes.keys() {
         if OUT_OF_SCOPE.contains(name) {
@@ -287,17 +318,43 @@ fn main() {
             }
         }
 
-        // The per-class column reports what AETHER'S PIPELINE honours, which is a
-        // different question from what the host accepts and is labelled as such
-        // at every print site so the two are never read as one number.
-        let covered = props.iter().filter(|p| pipeline.contains(*p)).count();
         for p in &props {
             all_props.insert(p);
         }
-        per_class.push((name.to_string(), covered, props.len()));
+
+        // THREE QUESTIONS PER CLASS, over the properties in scope for it, each
+        // labelled at every print site so no two are read as one number:
+        // whether the host stores it, whether Dew's renderer reads it on THIS
+        // class, and whether Aether's pipeline names it.
+        let mut row = ClassRow {
+            name: name.to_string(),
+            in_scope: 0,
+            accepted: 0,
+            implemented: Vec::new(),
+            partial: Vec::new(),
+            absent: Vec::new(),
+            pipeline: 0,
+        };
+        for property in props.iter().filter(|p| !dew_host::scope::excluded(p)) {
+            row.in_scope += 1;
+            if dew_host::datamodel::accepts(name, property) {
+                row.accepted += 1;
+            }
+            if pipeline.contains(property) {
+                row.pipeline += 1;
+            }
+            match honours(name, property) {
+                Honour::Implemented => row.implemented.push(property.to_string()),
+                Honour::Partial(reason) => row.partial.push((property.to_string(), reason)),
+                Honour::Absent => row.absent.push(property.to_string()),
+            }
+        }
+        per_class.push(row);
     }
 
-    per_class.sort_by_key(|a| std::cmp::Reverse(a.2));
+    // EVERY CLASS IS PRINTED. This took the first twenty, which left the
+    // padding, scale and constraint classes out of the document altogether.
+    per_class.sort_by(|a, b| b.in_scope.cmp(&a.in_scope).then(a.name.cmp(&b.name)));
     let not_ui: BTreeSet<&str> = NOT_UI.iter().copied().collect();
     let input_device: BTreeSet<&str> = INPUT_DEVICE.iter().copied().collect();
 
@@ -494,9 +551,30 @@ fn main() {
         all_props.len()
     );
 
-    println!("{:<28} {:>10}  OF", "CLASS", "RENDERABLE");
-    for (name, covered, total) in per_class.iter().take(18) {
-        println!("{name:<28} {covered:>9}  {total}");
+    println!(
+        "{:<26} {:>8} {:>8} {:>8} {:>8} {:>8}",
+        "CLASS", "IN SCOPE", "ACCEPTED", "RENDERED", "PARTIAL", "AETHER"
+    );
+    for row in &per_class {
+        println!(
+            "{:<26} {:>8} {:>8} {:>8} {:>8} {:>8}",
+            row.name,
+            row.in_scope,
+            row.accepted,
+            row.rendered(),
+            row.partial.len(),
+            row.pipeline
+        );
+    }
+    println!("  ACCEPTED: the host stores an assignment (datamodel::accepts)");
+    println!(
+        "  RENDERED: Dew's renderer reads it on this class (render::honours), PARTIAL included"
+    );
+    println!("  AETHER:   named in Aether's pipeline (AETHER_PIPELINE), by name");
+    for row in &per_class {
+        for (property, reason) in &row.partial {
+            println!("  partial  {}.{property}: {reason}", row.name);
+        }
     }
 
     println!();
@@ -504,7 +582,13 @@ fn main() {
         "IN SCOPE:  {covered_total} of {in_scope_total} accepted by the Dew host ({:.0}%)",
         100.0 * covered_total as f64 / in_scope_total as f64
     );
-    println!("PIPELINE:  {pipeline_covered} of those are honoured by Aether's renderer already");
+    println!(
+        "RENDERED:  {} of {} (class, property) pairs read by Dew's renderer, {} partially",
+        per_class.iter().map(ClassRow::rendered).sum::<usize>(),
+        per_class.iter().map(|row| row.in_scope).sum::<usize>(),
+        per_class.iter().map(|row| row.partial.len()).sum::<usize>()
+    );
+    println!("PIPELINE:  {pipeline_covered} of those names are honoured by Aether's pipeline");
     if !disagreed.is_empty() {
         println!(
             "SPLIT:     {} name(s) the host takes on one class and refuses on another: {}",
@@ -585,7 +669,7 @@ API BACKLOG ({}) -- no Dew guest can reach any of these:",
 fn emit_markdown(
     version: &str,
     ui_classes: &BTreeMap<&str, &ApiClass>,
-    per_class: &[(String, usize, usize)],
+    per_class: &[ClassRow],
     covered: usize,
     in_scope: usize,
     excluded: &[&str],
@@ -635,22 +719,76 @@ fn emit_markdown(
         ui_classes.len() - OUT_OF_SCOPE.len()
     );
     println!();
-    println!("Of those {in_scope}, **{pipeline_covered} are already honoured by Aether's");
-    println!("renderer**. That is not a conformance figure; it splits the backlog by cost.");
+    let pairs: usize = per_class.iter().map(|row| row.in_scope).sum();
+    let rendered: usize = per_class.iter().map(ClassRow::rendered).sum();
+    let partial: usize = per_class.iter().map(|row| row.partial.len()).sum();
+    println!("Counted per class rather than by name, those properties make {pairs} (class,");
+    println!(
+        "property) pairs. **{rendered} of the {pairs} are rendered by Dew**, {partial} of them"
+    );
+    println!("partially; see the two sections below.");
+    println!();
+    println!("Of the {in_scope} names, **{pipeline_covered} are honoured by Aether's pipeline**.");
+    println!("That is not a conformance figure; it splits the backlog by cost.");
     println!();
 
-    println!(
-        "## Coverage by class
-"
-    );
-    println!("The middle column is what AETHER'S RENDERER honours, not what the host accepts.");
-    println!("The two are different questions and the gap between them is the backlog: a");
-    println!("property the host stores but the pipeline ignores is stored and not drawn.");
+    println!("## Coverage by class");
     println!();
-    println!("| Class | Renderable | In the class |");
-    println!("| :--- | ---: | ---: |");
-    for (name, c, t) in per_class.iter().take(20) {
-        println!("| `{name}` | {c} | {t} |");
+    println!("Three different questions, asked of every property in scope for each class:");
+    println!();
+    println!("- **Accepted by the host**: an assignment to it is stored. Asked of");
+    println!("  `dew_host::datamodel::accepts`.");
+    println!("- **Rendered by Dew**: Dew's renderer reads it on an instance of THIS class,");
+    println!("  so changing it changes what is drawn or where. Asked of");
+    println!("  `dew_host::datamodel::render::honours`, which answers per class. Partial");
+    println!("  answers are counted here and shown in their own column, with what is");
+    println!("  missing listed below. A property with no paint of its own counts as not");
+    println!("  rendered. A test holds every claim to a gallery variant that moved pixels,");
+    println!("  a passing engine-verified conformance case, or a stated excuse.");
+    println!("- **Honoured by Aether's pipeline**: named by Aether's `Layout.Inputs` or its");
+    println!("  display list, by NAME and not by class. It describes Aether, not Dew, and");
+    println!("  splits the backlog by cost.");
+    println!();
+    println!(
+        "| Class | In scope | Accepted by the host | Rendered by Dew | of which partial | Honoured by Aether's pipeline |"
+    );
+    println!("| :--- | ---: | ---: | ---: | ---: | ---: |");
+    for row in per_class {
+        println!(
+            "| `{}` | {} | {} | {} | {} | {} |",
+            row.name,
+            row.in_scope,
+            row.accepted,
+            row.rendered(),
+            row.partial.len(),
+            row.pipeline
+        );
+    }
+    println!();
+    println!("## Rendered by Dew, by class");
+    println!();
+    println!("What `render::honours` answers for each in-scope property, so every count in");
+    println!("the table above can be traced to the names behind it.");
+    let ticked = |names: &[String]| {
+        names
+            .iter()
+            .map(|p| format!("`{p}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    for row in per_class {
+        println!();
+        println!("### `{}`", row.name);
+        println!();
+        if !row.implemented.is_empty() {
+            println!("- **Rendered:** {}", ticked(&row.implemented));
+        }
+        for (property, reason) in &row.partial {
+            println!("- **Partial,** `{property}`: {reason}");
+        }
+        if !row.absent.is_empty() {
+            println!("- **Not rendered:** {}", ticked(&row.absent));
+        }
     }
 
     println!(

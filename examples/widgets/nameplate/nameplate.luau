@@ -26,7 +26,7 @@ local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 local root = widget({
 	width = 340,
 	height = 148,
-	anchor = "topRight",
+	anchor = "top-right",
 	offset = { x = 24, y = 24 },
 })
 

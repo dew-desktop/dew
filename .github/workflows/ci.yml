@@ -132,6 +132,9 @@ jobs:
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
+              # The compatibility table in it is generated and checked by
+              # the build job, so a hand edit to it has to reach that job.
+              examples/README.md) ;;
               docs/*|scripts/*) continue ;;
               *.md) continue ;;
             esac
@@ -181,6 +184,25 @@ jobs:
       # before anything is built.
       - name: Check that Dew's host depends on no framework
         run: lune run scripts/verify_boundaries.luau
+
+      # AN EXAMPLE THAT RUNS ON ROBLOX TOO carries a `default.project.json`, and
+      # this builds each one into a place file. It proves the project maps its
+      # files into a place; it does not run them, which needs Studio.
+      - name: Build every example that has a Rojo project
+        shell: bash
+        run: |
+          found=0
+          while IFS= read -r project; do
+            dir=$(dirname "$project")
+            echo "rojo build $dir"
+            rojo build "$dir" -o "$RUNNER_TEMP/$(basename "$dir").rbxl"
+            found=$((found + 1))
+          done < <(find examples -name default.project.json -not -path "*/roblox_packages/*" | sort)
+          if [ "$found" -eq 0 ]; then
+            echo "no example has a default.project.json, so this step checked nothing"
+            exit 1
+          fi
+          echo "built $found Rojo project(s)"
 
 
   build:
@@ -358,13 +380,14 @@ jobs:
           # `dashboard/` ONE LEVEL SHALLOWER, on purpose -- it is the bundled
           # dashboard applet (milestone 23), not an example, so it lives at
           # the repo root rather than under `examples/`. Same install, same
-          # redirect check, just not the same glob depth.
+          # redirect check, just not the same glob depth. `quickpanel/` is
+          # the other bundled applet and sits beside it for the same reason.
           #
           # ONE LEVEL DEEPER ALSO COVERED: `examples/host/widget-behaviors/`
           # is a container of several small applets (draggable, snap-to-edges,
           # ...), not an applet itself, so its own examples sit one glob
           # level below where `examples/*/*/pesde.toml` alone would find them.
-          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml; do
+          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml quickpanel/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
@@ -398,7 +421,7 @@ jobs:
       - name: Run the Rust tests, and fail if the suite shrank
         shell: bash
         run: |
-          FLOOR=352
+          FLOOR=605
           out=$(cargo test --workspace 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
           total=$(echo "$out" | awk '/^test result:/ {p += $4} END {print p+0}')
@@ -422,6 +445,15 @@ jobs:
       # is why there is no glob here for a shell to decline to expand.
       - name: Run every command the CLI documents
         run: lune run scripts/smoke.luau --no-build
+
+      # THE BUNDLED APPLETS' OWN SUITES. Smoke mounts only `examples/`, and a
+      # bundled applet cannot mount from a checkout at all (its host-only
+      # permissions are refused outside the bundled directory), so each one's
+      # `.test.luau` against fakes is what exercises it here.
+      - name: Run the quick panel's tests
+        run: cargo run --quiet --manifest-path host/Cargo.toml --bin dew -- test quickpanel
+      - name: Run the dashboard's tests
+        run: cargo run --quiet --manifest-path host/Cargo.toml --bin dew -- test dashboard
 
       # FMT AND CLIPPY HERE RATHER THAN IN A JOB OF THEIR OWN.
       #
@@ -447,6 +479,14 @@ jobs:
       # instead of silently going stale.
       - name: Check the generated DataModel editor types are current
         run: cargo run --manifest-path host/Cargo.toml --bin generate-datamodel-types -- --check
+
+      # THE EXAMPLES COMPATIBILITY TABLE IS GENERATED TOO. `dew compat --check`
+      # loads every example the way `dew snapshot` does, rebuilds the table in
+      # `examples/README.md` in memory and fails when the committed one
+      # differs. It needs the packages installed above, which is why it runs in
+      # this job.
+      - name: Check the examples compatibility table is current
+        run: cargo run --manifest-path host/Cargo.toml -- compat --check
 
   linux:
     name: Linux, build and render headlessly
@@ -575,13 +615,14 @@ jobs:
           # `dashboard/` ONE LEVEL SHALLOWER, on purpose -- it is the bundled
           # dashboard applet (milestone 23), not an example, so it lives at
           # the repo root rather than under `examples/`. Same install, same
-          # redirect check, just not the same glob depth.
+          # redirect check, just not the same glob depth. `quickpanel/` is
+          # the other bundled applet and sits beside it for the same reason.
           #
           # ONE LEVEL DEEPER ALSO COVERED: `examples/host/widget-behaviors/`
           # is a container of several small applets (draggable, snap-to-edges,
           # ...), not an applet itself, so its own examples sit one glob
           # level below where `examples/*/*/pesde.toml` alone would find them.
-          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml; do
+          for m in examples/*/*/pesde.toml examples/*/*/*/pesde.toml dashboard/pesde.toml quickpanel/pesde.toml; do
             test -f "$m" || continue
             d=$(dirname "$m")
             (cd "$d" && pesde install)
@@ -727,6 +768,29 @@ jobs:
             echo "::error::Tag $GITHUB_REF_NAME's version ($core) does not match host/Cargo.toml's version ($cargo_version). Bump host/Cargo.toml's version in the commit a release tag points at before tagging it."
             exit 1
           }
+
+      # Pinned to the same pesde as the `build` job, installed the same way.
+      - name: Install pesde
+        shell: pwsh
+        run: |
+          # PWSH, NOT BASH. A bash step writing $HOME/.pesde-bin into
+          # GITHUB_PATH writes a POSIX path, which later pwsh steps cannot
+          # resolve. pesde installed correctly and was still "not
+          # recognized" one step later.
+          $url = "https://github.com/pesde-pkg/pesde/releases/download/v0.7.3%2Bregistry.0.2.3/pesde-0.7.3-windows-x86_64.zip"
+          Invoke-WebRequest -Uri $url -OutFile pesde.zip
+          Expand-Archive -Path pesde.zip -DestinationPath "$env:RUNNER_TEMP/pesde" -Force
+          "$env:RUNNER_TEMP/pesde" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      # THE BUNDLED APPLETS ARE BUILT INTO dew.exe WITH THEIR PACKAGES, and
+      # `roblox_packages/` is gitignored, so it is installed before the build.
+      # `host/build.rs` fails the build when it was not.
+      - name: Install the bundled applets' packages
+        shell: bash
+        run: |
+          for d in dashboard quickpanel; do
+            (cd "$d" && pesde install)
+          done
 
       - name: Build dew.exe in release profile
         run: cargo build --manifest-path host/Cargo.toml --release --bin dew

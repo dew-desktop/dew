@@ -19,6 +19,8 @@ return {
 		{ node = "Ramp", prop = "Color", value = { "ColorSequence", { "Color3", 0, 1, 0 }, { "Color3", 1, 1, 0 } } },
 		{ node = "Ramp", prop = "Rotation", value = 90 },
 		{ node = "Ramp", prop = "Enabled", value = false },
+		{ node = "Ramp", prop = "Transparency", value = { "NumberSequence", 0, 1 } },
+		{ node = "Ramp", prop = "Type", value = { "Enum", "GradientType", "Radial" } },
 		{ node = "Edge", prop = "Color", value = { "Color3", 1, 0, 1 } },
 		{ node = "Edge", prop = "Thickness", value = 8 },
 		{ node = "Edge", prop = "Transparency", value = 1 },

@@ -22,9 +22,12 @@ use dew_host::datamodel;
 use dew_host::manifest;
 mod applets;
 #[cfg(windows)]
+mod bundled;
+#[cfg(windows)]
 mod coordinator;
 #[cfg(windows)]
 mod dashboard;
+mod examples_compat;
 #[cfg(windows)]
 mod installed;
 #[cfg(windows)]
@@ -106,14 +109,14 @@ fn painter(width: u32, height: u32) -> Result<RasterPainter, String> {
     // would silently vanish.
     let mut painter = RasterPainter::new(width, height, Backend::VelloCpu)
         .ok_or("could not create a drawing surface")?;
-    // THE FACE COMES FROM `services::face`, WHICH IS ALSO WHAT MEASURES. This
+    // THE FACE COMES FROM `services::default_face`, WHICH IS ALSO WHAT MEASURES. This
     // used to call `Font::load` here, and once a guest can ask "how wide is this
     // string" that is no longer merely wasteful -- `Font::load` hands back a fresh
     // id per call, so the painter and the measurement would have been two
     // registrations of the same file, and a measurement that does not describe the
     // pixels is worse than no measurement. One memo, one id, one face.
-    if let Some(font) = services::face() {
-        painter = painter.with_font(font);
+    if let Some(face) = services::default_face() {
+        painter = painter.with_face(face);
     }
     Ok(painter)
 }
@@ -231,10 +234,41 @@ impl Renderer {
                 pointer,
                 ..
             } => {
-                let _ = dt;
-                if !dom.lock().expect("dom").take_dirty() {
+                // A TRANSITION IN FLIGHT (milestone 29 part C4) KEEPS
+                // PAINTING even on a frame `take_dirty` alone would call
+                // settled -- an in-progress animation is not a tree
+                // mutation `Changed` fires for, so nothing else would mark
+                // it dirty on its own.
+                let should_paint = {
+                    let mut guard = dom.lock().expect("dom");
+                    guard.take_dirty() || guard.transitions_active()
+                };
+                if !should_paint {
                     return Ok(false);
                 }
+                // VIEWPORT FIRST -- a `@ViewportDisplaySize*` query (part
+                // C3) reads this, and `apply_modifiers` just below may
+                // itself depend on a query gate that reads it too.
+                // `Dom::now` is set by `advance_transitions` below, the one
+                // call that owns it (see that method's own doc comment).
+                {
+                    let mut guard = dom.lock().expect("dom");
+                    guard.set_viewport(*width as u32, *height as u32);
+                    guard.refresh_style_queries(*root);
+                }
+                // `::MODIFIER` AUTO-SPAWN, BEFORE THIS FRAME'S OWN PAINT --
+                // milestone 29 part C2. Idempotent, so running it every
+                // painted frame costs nothing once a modifier's own child
+                // already exists; a child it creates just now still needs
+                // to reach THIS frame's `frame_of`, not next one.
+                dom.lock().expect("dom").apply_modifiers(*root);
+                // ADVANCE ANY TRANSITION (part C4) BEFORE THIS FRAME'S OWN
+                // PAINT, same reasoning as `apply_modifiers` just above --
+                // a newly-started or newly-finished animation still needs
+                // to reach THIS frame's `frame_of`. `dt` is the render
+                // loop's own real per-frame delta, not `services::Clock`
+                // (see `advance_transitions`'s own doc comment for why).
+                dom.lock().expect("dom").advance_transitions(*root, dt);
                 let frame = datamodel::render::frame_of(dom, *root, *width, *height);
                 dew_runtime::Painter::paint_frame(painter, &frame, *background);
 
@@ -559,6 +593,22 @@ impl Renderer {
 /// Aether-mod concern, and no version of it would be what a standalone script
 /// parents into.
 fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPainter), String> {
+    let (_vm, dom, root) = load_script(path, &mut |_| {})?;
+    let frame = datamodel::render::frame_of(&dom, root, width as f32, height as f32);
+    let drawn = frame.nodes.len();
+    let mut surface = painter(width, height)?;
+    dew_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
+    Ok((format!("{drawn} node(s)"), surface))
+}
+
+/// Run a standalone script and hand back the tree it built under `DewRoot`.
+///
+/// `before_exec` sees the VM once the host has installed everything and before
+/// the script's own Luau runs.
+fn load_script(
+    path: &str,
+    before_exec: &mut dyn FnMut(&Lua),
+) -> Result<(dew_runtime::Vm, datamodel::SharedDom, usize), String> {
     let script = PathBuf::from(path);
     let dir = script
         .parent()
@@ -608,6 +658,8 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .set("DewRoot", root_handle)
         .map_err(|e| e.to_string())?;
 
+    before_exec(vm.lua());
+
     let source =
         std::fs::read_to_string(&script).map_err(|e| format!("{}: {e}", script.display()))?;
     vm.lua()
@@ -616,11 +668,7 @@ fn run_script(path: &str, width: u32, height: u32) -> Result<(String, RasterPain
         .exec()
         .map_err(|e| format!("{}: {e}", script.display()))?;
 
-    let frame = datamodel::render::frame_of(&dom, root, width as f32, height as f32);
-    let drawn = frame.nodes.len();
-    let mut surface = painter(width, height)?;
-    dew_runtime::Painter::paint_frame(&mut surface, &frame, Some(BACKGROUND));
-    Ok((format!("{drawn} node(s)"), surface))
+    Ok((vm, dom, root))
 }
 
 fn create_renderer(
@@ -722,6 +770,11 @@ pub enum Command {
         generate_goldens: bool,
         run_unsupported: bool,
     },
+    /// Regenerate the examples compatibility table, or with `check` fail when
+    /// the committed one differs from a regeneration.
+    Compat {
+        check: bool,
+    },
     Help {
         subcommand: Option<String>,
     },
@@ -776,6 +829,7 @@ pub fn parse_args<I: Iterator<Item = String>>(
         "init" | "scaffold" => parse_init(&args_vec[1..]),
         "test" => parse_test(&args_vec[1..]),
         "conformance" => parse_conformance(&args_vec[1..]),
+        "compat" => parse_compat(&args_vec[1..]),
         "help" | "--help" | "-h" => Ok(Command::Help {
             subcommand: args_vec.get(1).cloned(),
         }),
@@ -1204,6 +1258,17 @@ fn parse_conformance(args: &[String]) -> Result<Command, String> {
         generate_goldens,
         run_unsupported,
     })
+}
+
+fn parse_compat(args: &[String]) -> Result<Command, String> {
+    let mut check = false;
+    for arg in args {
+        match arg.as_str() {
+            "--check" => check = true,
+            _ => return Err(format!("unrecognised argument '{arg}'")),
+        }
+    }
+    Ok(Command::Compat { check })
 }
 
 fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, String> {
@@ -3041,6 +3106,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  init <NAME>      Scaffold a new applet");
             println!("  test             Run Luau test suites against Dew's DataModel");
             println!("  conformance      Run the layout conformance suite");
+            println!("  compat [--check] Regenerate the examples compatibility table, or check it");
             println!("  help [COMMAND]   Show help for a command");
             println!();
             println!("Options:");
@@ -3138,6 +3204,7 @@ fn run() -> Result<(), String> {
             generate_goldens,
             run_unsupported,
         } => execute_conformance(filter, dir, pixel, generate_goldens, run_unsupported),
+        Command::Compat { check } => examples_compat::execute(check),
         Command::Help { subcommand } => {
             execute_help(subcommand);
             Ok(())
@@ -3265,8 +3332,19 @@ fn install_test_surface(
     //  `services` for where the pointer is and connects to the input service for
     //  what happened; driving one without the other leaves half of it reading a
     //  pointer that never moved.
+    //
+    //  ONE POINTER FOR THE WHOLE SUITE, as the window loop keeps one. A release
+    //  completes a click only on the element its press landed on, and the
+    //  pointer is what remembers where that was; a fresh one per call forgot
+    //  every press, so a plain `GuiButton` never fired `Activated` here.
+    let shared = Arc::new(Mutex::new(dew_host::datamodel::input::Pointer::default()));
+    //  THE SIZE THE LAST `Settle` LAID OUT AT, which the pointer hit-tests
+    //  at. At any other size it finds elements where the test never saw them.
+    let settled = Arc::new(Mutex::new((0.0f32, 0.0f32)));
     let pointer = lua.create_table()?;
     let surface_dom = dom.clone();
+    let moving = shared.clone();
+    let moving_size = settled.clone();
     pointer.set(
         "Move",
         lua.create_function(move |lua, (x, y): (f32, f32)| {
@@ -3275,16 +3353,17 @@ fn install_test_surface(
                 lua,
                 dom: &surface_dom,
                 root,
-                size: (0.0, 0.0),
+                size: *moving_size.lock().expect("size"),
             };
-            let mut p = dew_host::datamodel::input::Pointer::default();
-            let _ = p.moved(&surface, x, y);
+            let _ = moving.lock().expect("pointer").moved(&surface, x, y);
             Ok(())
         })?,
     )?;
 
     for (name, down) in [("Down", true), ("Up", false)] {
         let surface_dom = dom.clone();
+        let pressing = shared.clone();
+        let pressing_size = settled.clone();
         pointer.set(
             name,
             lua.create_function(move |lua, (x, y, button): (f32, f32, Option<usize>)| {
@@ -3295,14 +3374,14 @@ fn install_test_surface(
                     lua,
                     dom: &surface_dom,
                     root,
-                    size: (0.0, 0.0),
+                    size: *pressing_size.lock().expect("size"),
                 };
                 let kind = match button {
                     1 => dew_host::datamodel::input::Button::Right,
                     2 => dew_host::datamodel::input::Button::Middle,
                     _ => dew_host::datamodel::input::Button::Left,
                 };
-                let mut p = dew_host::datamodel::input::Pointer::default();
+                let mut p = pressing.lock().expect("pointer");
                 let _ = if down {
                     p.down(&surface, kind, x, y)
                 } else {
@@ -3332,6 +3411,7 @@ fn install_test_surface(
                 ),
                 None => (0.0, 0.0),
             };
+            *settled.lock().expect("size") = (w, h);
             let mut guard = settle_dom.lock().expect("dom");
             dew_host::datamodel::render::commit_geometry(&mut guard, root, w, h);
             Ok(())
@@ -4044,5 +4124,42 @@ mod tests {
             Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("conformance")),
             _ => panic!("expected Help command"),
         }
+    }
+
+    /// `DewTest.Pointer` hit-tests at the size the last `Settle` laid out at.
+    /// A button placed by scale sits at the middle of that size, and only
+    /// there, so a click on it lands only when the pointer uses that size.
+    #[test]
+    fn the_test_pointer_hits_at_the_settled_size() {
+        let lua = mlua::Lua::new();
+        let dom = datamodel::SharedDom::default();
+        datamodel::install(&lua, &dom).expect("install");
+        datamodel::install_vocabulary(&lua).expect("vocabulary");
+        let state: crate::capabilities::Shared =
+            Arc::new(Mutex::new(crate::capabilities::HostState::default()));
+        install_test_surface(&lua, &dom, &state).expect("test surface");
+
+        let clicked: bool = lua
+            .load(
+                r#"
+                local button = Instance.new("TextButton")
+                button.AnchorPoint = Vector2.new(0.5, 0.5)
+                button.Position = UDim2.fromScale(0.5, 0.5)
+                button.Size = UDim2.fromOffset(80, 40)
+                button.Parent = DewTest.Root
+                local clicked = false
+                button.Activated:Connect(function()
+                    clicked = true
+                end)
+                DewTest.Settle({ width = 400, height = 300 })
+                DewTest.Pointer.Move(200, 150)
+                DewTest.Pointer.Down(200, 150)
+                DewTest.Pointer.Up(200, 150)
+                return clicked
+            "#,
+            )
+            .eval()
+            .expect("click");
+        assert!(clicked, "a click at the button's centre did not reach it");
     }
 }

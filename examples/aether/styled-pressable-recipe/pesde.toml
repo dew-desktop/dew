@@ -1,0 +1,19 @@
+name = "dew_examples/styled_pressable_recipe"
+version = "0.0.1"
+description = "The styled-pressable scenario authored through createRecipe instead of by hand"
+
+# A DEMO INSTALLS ITS OWN FRAMEWORK, per ADR-008, the same as
+# examples/aether/pressable already does.
+[target]
+environment = "roblox"
+lib = "styled-pressable-recipe.luau"
+
+[dependencies]
+aether = { repo = "project-aether-ui/aether", rev = "5481f63bc286ff283858d67aa25d557e788efcb2" }
+vide = { repo = "es9-dev/vide", rev = "7dca1bb7bad3201d2b4c308fcd82b7d97306cd79" }
+
+[indices]
+default = "https://github.com/pesde-pkg/index"
+
+[wally_indices]
+default = "https://github.com/UpliftGames/wally-index"

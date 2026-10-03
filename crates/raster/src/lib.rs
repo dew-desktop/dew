@@ -149,6 +149,31 @@ pub extern "C" fn ar_text_ascent(font: u32, size: f32) -> f32 {
     })
 }
 
+/// Descent for a size, in pixels below the baseline, as a positive number.
+/// Negative when the font id is unknown.
+#[no_mangle]
+pub extern "C" fn ar_text_descent(font: u32, size: f32) -> f32 {
+    with_fonts(|f| match f.layout(font, size, "") {
+        Some(run) => run.descent,
+        None => -1.0,
+    })
+}
+
+/// Whether the font maps a character to a glyph of its own: 1 when it does, 0
+/// when the character would draw as `.notdef`, negative when the font id is
+/// unknown or `ch` is not a character.
+#[no_mangle]
+pub extern "C" fn ar_text_has_glyph(font: u32, ch: u32) -> i32 {
+    let Some(ch) = char::from_u32(ch) else {
+        return -1;
+    };
+    with_fonts(|f| match f.has_glyph(font, ch) {
+        Some(true) => 1,
+        Some(false) => 0,
+        None => -1,
+    })
+}
+
 fn utf8<'a>(ptr: *const u8, len: u32) -> Option<&'a str> {
     if ptr.is_null() {
         return None;
@@ -356,7 +381,7 @@ fn blend_mode_of(blend: u8) -> tiny_skia::BlendMode {
 /// with its own blend type (`Mix` combined with `Compose`) rather than
 /// tiny-skia's flat enum. `dew snapshot` and every example render THROUGH
 /// THIS BRANCH, not tiny-skia's -- vello_cpu is the only backend with text, so
-/// it is the one every real applet uses (`RasterPainter::with_font` requires
+/// it is the one every real applet uses (`RasterPainter::with_face` requires
 /// it). A blend implementation that only reached `blend_mode_of` above would
 /// compile, pass a tiny-skia-only unit test, and still paint every real
 /// applet identically regardless of `BlendingMode`.

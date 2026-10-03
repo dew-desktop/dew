@@ -56,29 +56,100 @@
 //! expected to be revisited only if the standard ever does specify one.
 
 use dew_raster::Font;
+use dew_runtime::text::{self, Face};
 use mlua::prelude::*;
 use mlua::WeakLua;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 // -- Text --------------------------------------------------------------------
 
-/// The face this host measures AND draws with, loaded once.
+/// Load a face file into the rasteriser, once per path.
 ///
-/// ONE FACE, ONE ID, and the memo is the point rather than a micro-optimisation.
-/// `Font::load` pushes the file into the rasteriser's process-wide store and
-/// hands back a fresh id every time it is called, so a measurement path that
-/// loaded its own would hold a second copy of a multi-megabyte file AND could
-/// measure in a face the painter is not drawing in. `main.rs` takes its painter
-/// font from here for that second reason: a measurement that does not describe
-/// the pixels is worse than no measurement at all.
+/// ONE LOAD PER FILE, AND THE MEMO IS THE POINT rather than a
+/// micro-optimisation. `Font::load` pushes the file into the rasteriser's
+/// process-wide store and hands back a fresh id every time it is called, so a
+/// path loaded twice is a multi-megabyte file held twice, and a measurement
+/// that loaded its own copy could measure in a face the painter is not drawing
+/// in. A failed load is remembered too, so a bad file is read once.
+fn load(path: &Path) -> Option<Font> {
+    static LOADED: OnceLock<Mutex<HashMap<PathBuf, Option<Font>>>> = OnceLock::new();
+    let mut loaded = LOADED.get_or_init(Default::default).lock().ok()?;
+    *loaded
+        .entry(path.to_path_buf())
+        .or_insert_with(|| Font::load(&path.to_string_lossy(), 0))
+}
+
+/// The face a `Font` value draws in, as the line model takes it.
+///
+/// Resolved by `fonts::resolve_font` to a face file and an em scale, and built
+/// from that file's own metrics. When nothing resolves, which means the
+/// shipped faces could not be written to disk, the system font stands in at
+/// the scale the family would have had.
+///
+/// Memoised per family, weight and style: every label asks on every frame,
+/// and resolving reads the disk.
+pub fn face_for(font: &rbx_types::Font) -> Option<Face<Font>> {
+    type Faces = HashMap<String, HashMap<(u16, bool), Option<Face<Font>>>>;
+    static FACES: OnceLock<Mutex<Faces>> = OnceLock::new();
+    let key = (
+        font.weight.as_u16(),
+        font.style == rbx_types::FontStyle::Italic,
+    );
+    let faces = FACES.get_or_init(Default::default);
+    if let Some(known) = faces
+        .lock()
+        .ok()?
+        .get(font.family.as_str())
+        .and_then(|by_face| by_face.get(&key))
+    {
+        return *known;
+    }
+    let face = match crate::fonts::resolve_font(font) {
+        Some(resolved) => load(&resolved.path).map(|f| Face::from_font(f, resolved.em_scale)),
+        None => {
+            let legacy = crate::fonts::family_stem(&font.family)
+                .is_some_and(|stem| stem.starts_with("Legacy"));
+            let em_scale = if legacy {
+                crate::fonts::LEGACY_EM_SCALE
+            } else {
+                1.0
+            };
+            dew_runtime::font::system_font()
+                .and_then(|path| load(&path))
+                .map(|f| Face::from_font(f, em_scale))
+        }
+    };
+    faces
+        .lock()
+        .ok()?
+        .entry(font.family.clone())
+        .or_default()
+        .insert(key, face);
+    face
+}
+
+/// The `FontFace` a new text object has: LegacyArial, Regular.
+pub fn default_font() -> rbx_types::Font {
+    rbx_types::Font::new(
+        &format!("{}LegacyArial.json", crate::fonts::FAMILY_PREFIX),
+        rbx_types::FontWeight::Regular,
+        rbx_types::FontStyle::Normal,
+    )
+}
+
+/// The face of a text object nothing has given a `FontFace`: Arimo, drawn at
+/// 1.5 x TextSize, as the engine draws LegacyArial. `desktop.Text.Measure`
+/// measures in it, and a painter draws a node with no layout of its own in it.
+pub fn default_face() -> Option<Face<Font>> {
+    face_for(&default_font())
+}
+
+/// The font file of [`default_face`].
 pub fn face() -> Option<Font> {
-    static FACE: OnceLock<Option<Font>> = OnceLock::new();
-    *FACE.get_or_init(|| {
-        let path = dew_runtime::font::system_font()?;
-        Font::load(&path.to_string_lossy(), 0)
-    })
+    default_face().map(|face| face.font)
 }
 
 /// Measure a string in the face this host draws with.
@@ -96,135 +167,58 @@ pub fn face() -> Option<Font> {
 /// every label in it were blank. An error is recoverable and a collapse is not:
 /// Aether's `Text.Measure` catches a failing provider and falls back to its
 /// bundled advance table, which is approximate and visible, which is right.
-/// LINE HEIGHT IS 1.5x TEXTSIZE per line, and that is a rule of the DataModel
-/// layout standard (`LAYOUT.md` section 7) rather than of the underlying font:
-/// in Studio and in conformance, a single line of text in an auto-sized element
-/// resolves to exactly 1.5 x TextSize, while raw font typographic metrics
-/// vary by font.
+///
+/// THE LINE MODEL ANSWERS, `dew_runtime::text::measure`, which is also what
+/// lays out and paints every label. A line is one effective em tall, 1.5 x
+/// TextSize in the default face (`LAYOUT.md` section 7), and the height is
+/// that times the number of lines. This measures in [`default_face`]; a label
+/// with a `FontFace` is measured in its own by the renderer.
+pub fn face_for_name(name: &str) -> Option<Face<Font>> {
+    if let Some(font) = crate::fonts::from_enum(name) {
+        return face_for(&font);
+    }
+    let stem = crate::fonts::family_stem(name).unwrap_or(name);
+    let uri = format!("{}{stem}.json", crate::fonts::FAMILY_PREFIX);
+    let font = rbx_types::Font::new(
+        &uri,
+        rbx_types::FontWeight::Regular,
+        rbx_types::FontStyle::Normal,
+    );
+    face_for(&font)
+}
+
 pub fn measure(text: &str, size: f32) -> Result<(f32, f32), String> {
-    let Some(font) = face() else {
-        return Err("this host has no font, so it cannot measure text".into());
-    };
-    let width = if text.is_empty() {
-        0.0
-    } else {
-        let mut max_w = 0.0_f32;
-        for line in text.split('\n') {
-            let w = font
-                .width(size, line)
-                .ok_or("the measuring face did not parse")?;
-            max_w = max_w.max(w);
-        }
-        max_w
-    };
-    let lines = text.split('\n').count().max(1) as f32;
-    let height = lines * size * 1.5;
-    Ok((width, height))
+    measure_in(text, size, None)
+}
+
+pub fn measure_in(text: &str, size: f32, face: Option<Face<Font>>) -> Result<(f32, f32), String> {
+    let face = face
+        .or_else(default_face)
+        .ok_or("this host has no font, so it cannot measure text")?;
+    text::measure(&face, text, size, None).ok_or_else(|| "the measuring face did not parse".into())
 }
 
 /// Measure a string with word wrapping against an available width constraint.
 ///
-/// When `TextWrapped = true`, breaks at word boundaries against `max_width`,
-/// and at glyph/character boundaries when a single word exceeds `max_width`.
-/// Multi-line inputs separated by '\n' are preserved as distinct paragraphs.
-/// Total height is resolved line count * size * 1.5.
+/// Breaks at word boundaries against `max_width`, and between characters when a
+/// single word exceeds it. Paragraphs separated by '\n' stay distinct. Every
+/// line is counted: this is the size the text needs, not what a box of some
+/// height would show. A `max_width` of zero or less does not wrap.
 pub fn measure_wrapped(text: &str, size: f32, max_width: f32) -> Result<(f32, f32), String> {
-    let Some(font) = face() else {
-        return Err("this host has no font, so it cannot measure text".into());
-    };
-    if text.is_empty() {
-        return Ok((0.0, size * 1.5));
-    }
-    if max_width <= 0.0 {
-        return measure(text, size);
-    }
+    measure_wrapped_in(text, size, max_width, None)
+}
 
-    let mut total_lines = 0usize;
-    let mut max_observed_w = 0.0_f32;
-
-    for paragraph in text.split('\n') {
-        if paragraph.is_empty() {
-            total_lines += 1;
-            continue;
-        }
-
-        let mut current_line = String::new();
-        let words: Vec<&str> = paragraph.split(' ').collect();
-
-        for word in words {
-            if word.is_empty() {
-                continue;
-            }
-
-            let word_w = font
-                .width(size, word)
-                .ok_or("the measuring face did not parse")?;
-
-            if word_w <= max_width {
-                if current_line.is_empty() {
-                    current_line.push_str(word);
-                } else {
-                    let mut candidate = current_line.clone();
-                    candidate.push(' ');
-                    candidate.push_str(word);
-                    let cand_w = font
-                        .width(size, &candidate)
-                        .ok_or("the measuring face did not parse")?;
-                    if cand_w <= max_width {
-                        current_line = candidate;
-                    } else {
-                        let line_w = font
-                            .width(size, &current_line)
-                            .ok_or("the measuring face did not parse")?;
-                        max_observed_w = max_observed_w.max(line_w);
-                        total_lines += 1;
-                        current_line.clear();
-                        current_line.push_str(word);
-                    }
-                }
-            } else {
-                if !current_line.is_empty() {
-                    let line_w = font
-                        .width(size, &current_line)
-                        .ok_or("the measuring face did not parse")?;
-                    max_observed_w = max_observed_w.max(line_w);
-                    total_lines += 1;
-                    current_line.clear();
-                }
-
-                for ch in word.chars() {
-                    let mut candidate = current_line.clone();
-                    candidate.push(ch);
-                    let cand_w = font
-                        .width(size, &candidate)
-                        .ok_or("the measuring face did not parse")?;
-                    if cand_w <= max_width || current_line.is_empty() {
-                        current_line = candidate;
-                    } else {
-                        let line_w = font
-                            .width(size, &current_line)
-                            .ok_or("the measuring face did not parse")?;
-                        max_observed_w = max_observed_w.max(line_w);
-                        total_lines += 1;
-                        current_line.clear();
-                        current_line.push(ch);
-                    }
-                }
-            }
-        }
-
-        if !current_line.is_empty() {
-            let line_w = font
-                .width(size, &current_line)
-                .ok_or("the measuring face did not parse")?;
-            max_observed_w = max_observed_w.max(line_w);
-            total_lines += 1;
-        }
-    }
-
-    let line_count = total_lines.max(1) as f32;
-    let height = line_count * size * 1.5;
-    Ok((max_observed_w, height))
+pub fn measure_wrapped_in(
+    text: &str,
+    size: f32,
+    max_width: f32,
+    face: Option<Face<Font>>,
+) -> Result<(f32, f32), String> {
+    let face = face
+        .or_else(default_face)
+        .ok_or("this host has no font, so it cannot measure text")?;
+    text::measure(&face, text, size, Some(max_width))
+        .ok_or_else(|| "the measuring face did not parse".into())
 }
 
 // -- The clock ---------------------------------------------------------------
@@ -784,28 +778,16 @@ fn install_core(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     let text = lua.create_table()?;
     text.set(
         "Measure",
-        // THE THIRD ARGUMENT IS ACCEPTED AND REPORTED, NOT IGNORED. Aether's
-        // `Host.Text` contract passes a font name and this host has one face, so
-        // the honest answer is to measure in the face it will draw with and SAY
-        // that the name selected nothing. Sprint 4's rule: `Slice` and `Tile` are
-        // stretched and reported by name, because silently doing the wrong thing
-        // was that sprint's named failure mode. Taking the argument and dropping
-        // it quietly would make a mod look styled when it is not.
-        lua.create_function(|_, (text, size, font): (String, f32, Option<String>)| {
-            if let Some(name) = font {
-                note_once_font(&name);
-            }
-            measure(&text, size).map_err(LuaError::runtime)
+        lua.create_function(|_, (text, size, font): (String, f32, LuaValue)| {
+            measure_in(&text, size, face_for_value(&font)).map_err(LuaError::runtime)
         })?,
     )?;
     text.set(
         "MeasureWrapped",
         lua.create_function(
-            |_, (text, size, max_width, font): (String, f32, f32, Option<String>)| {
-                if let Some(name) = font {
-                    note_once_font(&name);
-                }
-                measure_wrapped(&text, size, max_width).map_err(LuaError::runtime)
+            |_, (text, size, max_width, font): (String, f32, f32, LuaValue)| {
+                measure_wrapped_in(&text, size, max_width, face_for_value(&font))
+                    .map_err(LuaError::runtime)
             },
         )?,
     )?;
@@ -885,6 +867,29 @@ fn install_core(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
 /// print thousands of lines a second and bury itself. `Assets::note_once` keeps
 /// its set on the `Dom` because assets are per mod; a face is per process, so
 /// this set is too.
+/// The face a `desktop.Text` call's font argument names: a `Font`, an
+/// `Enum.Font` item, or a name. Nil, or a value that names no face, measures
+/// in [`default_face`].
+fn face_for_value(font: &LuaValue) -> Option<Face<Font>> {
+    if font.is_nil() {
+        return None;
+    }
+    let face = match crate::datamodel::font_of(font) {
+        Some(font) => face_for(&font),
+        None => font
+            .as_string()
+            .and_then(|name| face_for_name(&name.to_string_lossy())),
+    };
+    if face.is_none() {
+        let named = font
+            .as_string()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_else(|| font.type_name().to_string());
+        note_once_font(&named);
+    }
+    face
+}
+
 fn note_once_font(name: &str) {
     static SAID: Mutex<Option<BTreeSet<String>>> = Mutex::new(None);
     let mut guard = SAID.lock().expect("said");
@@ -1301,6 +1306,41 @@ mod tests {
         let (lua, _clock) = vm();
         let got: String = lua.load("return desktop.Clock.Name").eval().expect("name");
         assert_eq!(got, "DewFrame");
+    }
+
+    /// `desktop.Text.Measure` measures in the face its font argument names,
+    /// whichever of the forms a label's `Font` or `FontFace` takes it in.
+    #[test]
+    fn a_font_argument_selects_the_face_measured_in() {
+        if !has_face() {
+            return;
+        }
+        let lua = Lua::new();
+        let clock: SharedClock = Arc::new(Mutex::new(Clock::default()));
+        install(&lua, &clock).expect("install");
+        crate::datamodel::install(&lua, &crate::datamodel::SharedDom::default())
+            .expect("datamodel");
+        crate::datamodel::install_vocabulary(&lua).expect("vocabulary");
+        let (code, sans, code_by_name, mono, mono_by_name): (f32, f32, f32, f32, f32) = lua
+            .load(
+                r#"
+                local text = "Hello world"
+                local mono = Font.new("rbxasset://fonts/families/RobotoMono.json")
+                return desktop.Text.Measure(text, 14, Enum.Font.Code),
+                    desktop.Text.Measure(text, 14, Enum.Font.SourceSans),
+                    desktop.Text.Measure(text, 14, "Code"),
+                    desktop.Text.Measure(text, 14, mono),
+                    desktop.Text.Measure(text, 14, "RobotoMono")
+            "#,
+            )
+            .eval()
+            .expect("measure");
+        assert_ne!(code, sans, "two families measured the same width");
+        assert_eq!(
+            code, code_by_name,
+            "an Enum.Font item and its name disagree"
+        );
+        assert_eq!(mono, mono_by_name, "a Font and its family name disagree");
     }
 }
 

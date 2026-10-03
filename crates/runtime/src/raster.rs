@@ -14,15 +14,16 @@
 
 use crate::frame::{Align, BlendMode, Delta, Gradient, Image, Node, Rect, Rgb};
 use crate::painter::Painter;
+use crate::text::{lay_out, Block, Face};
 use dew_raster::{Backend, Bitmap, Canvas, Font};
 use std::collections::HashMap;
 
 pub struct RasterPainter {
     canvas: Canvas,
-    /// The face used for every run. One font for now, deliberately: the display
-    /// list carries no font name yet, so pretending to select one would be a
-    /// second place for text to diverge between hosts.
-    font: Option<Font>,
+    /// The face for a text node that carries no layout of its own, which is a
+    /// node from a Luau display list. A node the host laid out is drawn in the
+    /// face its [`crate::text::TextLayout`] names.
+    face: Option<Face<Font>>,
     /// Images already uploaded to the rasteriser, by `frame::Bitmap::id`.
     ///
     /// THE DISPLAY LIST CARRIES PIXELS AND THE RASTERISER WANTS THEM
@@ -48,7 +49,7 @@ impl RasterPainter {
     pub fn new(width: u32, height: u32, backend: Backend) -> Option<Self> {
         Some(RasterPainter {
             canvas: Canvas::new(width, height, backend)?,
-            font: None,
+            face: None,
             uploaded: HashMap::new(),
         })
     }
@@ -68,7 +69,7 @@ impl RasterPainter {
         self.canvas.resize(width, height)
     }
 
-    /// Use this font for text.
+    /// Use this face for text that arrives without a layout.
     ///
     /// TEXT ALSO NEEDS THE RIGHT BACKEND. tiny-skia is a shape backend with no
     /// text at all, so a run on one is dropped however good the font is; pair a
@@ -76,8 +77,8 @@ impl RasterPainter {
     ///
     /// Without a font, text nodes are SKIPPED rather than drawn in a substitute face — a missing glyph run is visible in a snapshot,
     /// whereas a silently substituted font looks like a rendering bug in Aether.
-    pub fn with_font(mut self, font: Font) -> Self {
-        self.font = Some(font);
+    pub fn with_face(mut self, face: Face<Font>) -> Self {
+        self.face = Some(face);
         self
     }
 
@@ -119,6 +120,44 @@ fn alpha_at(stops: &[crate::frame::AlphaStop], at: f32) -> Option<f32> {
     Some(last.alpha)
 }
 
+/// Where to stamp copies of a run so together they outline its glyphs out to
+/// `width` pixels.
+///
+/// A ring every pixel out to `width`, so a stem thinner than the outline
+/// leaves no gap. A ring within one pixel is the eight neighbours of a square;
+/// a wider one is a circle with a point every pixel of its circumference. At
+/// a width of exactly one this is the eight neighbours and nothing else.
+fn outline_offsets(width: f32) -> Vec<(f32, f32)> {
+    const SQUARE: [(f32, f32); 8] = [
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-1.0, -1.0),
+        (-1.0, 1.0),
+        (1.0, -1.0),
+        (1.0, 1.0),
+    ];
+    if width.is_nan() || width <= 0.0 {
+        return Vec::new();
+    }
+    let rings = width.ceil() as usize;
+    let mut offsets = Vec::new();
+    for ring in 1..=rings {
+        let r = width * ring as f32 / rings as f32;
+        if r <= 1.0 {
+            offsets.extend(SQUARE.iter().map(|&(dx, dy)| (dx * r, dy * r)));
+        } else {
+            let points = ((std::f32::consts::TAU * r).ceil() as usize).max(8);
+            offsets.extend((0..points).map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / points as f32;
+                (r * angle.cos(), r * angle.sin())
+            }));
+        }
+    }
+    offsets
+}
+
 fn rgba(c: Rgb, alpha: f32) -> (u8, u8, u8, u8) {
     (c.0, c.1, c.2, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
@@ -133,69 +172,6 @@ fn blend_code(blend: BlendMode) -> u8 {
         BlendMode::Additive => 1,
         BlendMode::Multiply => 2,
     }
-}
-
-/// Break `text` into the lines `TextWrapped` paints, against the same face
-/// `fill_text` draws with -- measurement and painting share `font.width`
-/// rather than a second guess at glyph advances, for the reason `dew_raster`
-/// gives its own layout function: two measures of the same string that can
-/// drift apart is how a wrap that fits at layout time still overflows on
-/// screen.
-///
-/// Paragraphs split on `\n` and survive as their own (possibly empty) line.
-/// Within a paragraph, words are packed greedily against `max_width`; a
-/// single word wider than `max_width` on its own is broken at character
-/// boundaries rather than left to overflow.
-fn wrap_lines(font: Font, text: &str, size: f32, max_width: f32) -> Vec<String> {
-    if max_width <= 0.0 {
-        return text.split('\n').map(str::to_string).collect();
-    }
-
-    let mut lines = Vec::new();
-    for paragraph in text.split('\n') {
-        let before = lines.len();
-        let mut current = String::new();
-
-        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
-            let word_w = font.width(size, word).unwrap_or(0.0);
-            if word_w > max_width {
-                if !current.is_empty() {
-                    lines.push(std::mem::take(&mut current));
-                }
-                for ch in word.chars() {
-                    let candidate = format!("{current}{ch}");
-                    if current.is_empty()
-                        || font.width(size, &candidate).unwrap_or(0.0) <= max_width
-                    {
-                        current = candidate;
-                    } else {
-                        lines.push(std::mem::take(&mut current));
-                        current = ch.to_string();
-                    }
-                }
-                continue;
-            }
-
-            let candidate = if current.is_empty() {
-                word.to_string()
-            } else {
-                format!("{current} {word}")
-            };
-            if current.is_empty() || font.width(size, &candidate).unwrap_or(0.0) <= max_width {
-                current = candidate;
-            } else {
-                lines.push(std::mem::take(&mut current));
-                current = word.to_string();
-            }
-        }
-
-        // A PARAGRAPH THAT NEVER PUSHED A LINE still owes one -- an empty
-        // paragraph between two blank lines is a blank line, not nothing.
-        if !current.is_empty() || lines.len() == before {
-            lines.push(current);
-        }
-    }
-    lines
 }
 
 impl Painter for RasterPainter {
@@ -255,68 +231,99 @@ impl Painter for RasterPainter {
     }
 
     fn draw_text(&mut self, node: &Node) {
-        let (Some(font), Some(text)) = (self.font, node.text.as_deref()) else {
+        let Some(text) = node.text.as_deref() else {
             return;
         };
         if text.is_empty() {
             return;
         }
 
-        let colour = node.text_colour.unwrap_or(Rgb(255, 255, 255));
-        let size = node.text_size;
-
-        // UNWRAPPED IS STILL THE COMMON CASE, so it keeps the single-run path
-        // rather than going through `wrap_lines` for one line every time.
-        if !node.text_wrap {
-            let width = font.width(size, text).unwrap_or(0.0);
-            let x = match node.text_align_x.unwrap_or(Align::Center) {
-                Align::Start => node.rect.x,
-                Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
-                Align::End => node.rect.x + node.rect.w - width,
-            };
-            let y = match node.text_align_y.unwrap_or(Align::Center) {
-                Align::Start => node.rect.y,
-                Align::Center => node.rect.y + (node.rect.h - size) / 2.0,
-                Align::End => node.rect.y + node.rect.h - size,
-            };
-            self.canvas
-                .fill_text(font, size, x, y, rgba(colour, node.text_alpha), text);
-            return;
-        }
-
-        // ONE LINE HEIGHT, EVERYWHERE THIS HOST TALKS ABOUT WRAPPED TEXT: 1.5x
-        // TextSize is `LAYOUT.md` section 7's rule, and `measure_wrapped` sizes
-        // the box this rect came from by the same number. Painting to a
-        // different rhythm than the box was grown by is how a wrap that
-        // measures correctly still clips or overlaps on screen.
-        let line_height = size * 1.5;
-        let lines = wrap_lines(font, text, size, node.rect.w);
-        let total_h = lines.len() as f32 * line_height;
-
-        // `fill_text` takes the TOP-LEFT and converts to a baseline itself. An
-        // earlier draft here added `font.ascent(size)` on top of that, which the
-        // ABI's own comment warns against by name — every run landed about a line
-        // too low. The rule lives in one place; this supplies a box, not a
-        // baseline.
-        let start_y = match node.text_align_y.unwrap_or(Align::Center) {
-            Align::Start => node.rect.y,
-            Align::Center => node.rect.y + (node.rect.h - total_h) / 2.0,
-            Align::End => node.rect.y + node.rect.h - total_h,
+        // THE LINES THE HOST LAID OUT, drawn where it put them. A node from a
+        // Luau display list carries none and is laid out here by the same
+        // function, in its own rect, so there is still one placement rule.
+        let computed;
+        let layout = match &node.text_layout {
+            Some(layout) => layout,
+            None => {
+                let Some(face) = self.face else {
+                    return;
+                };
+                computed = lay_out(
+                    &face,
+                    &Block {
+                        text,
+                        text_size: node.text_size,
+                        content: node.rect,
+                        wrap: node.text_wrap,
+                        align_x: node.text_align_x.unwrap_or(Align::Center),
+                        align_y: node.text_align_y.unwrap_or(Align::Center),
+                        truncate: false,
+                        line_height: 1.0,
+                    },
+                );
+                match &computed {
+                    Some(layout) => layout,
+                    None => return,
+                }
+            }
         };
 
-        for (i, line) in lines.iter().enumerate() {
-            if line.is_empty() {
+        // THE FACE THE LINES WERE MEASURED IN. Drawing them in any other would
+        // put glyphs of one width where the breaks and alignment assumed
+        // another.
+        let Some(font) = layout
+            .face
+            .and_then(Font::from_id)
+            .or(self.face.map(|face| face.font))
+        else {
+            return;
+        };
+        let colour = rgba(
+            node.text_colour.unwrap_or(Rgb(255, 255, 255)),
+            node.text_alpha,
+        );
+        // OUTLINES UNDER THE FILL, the wider `UIStroke` one first so a
+        // `TextStroke` on the same node stays visible inside it.
+        let mut outlines = Vec::new();
+        if let Some(stroke) = &node.glyph_stroke {
+            if let Some(colour) = stroke.colour {
+                if stroke.alpha > 0.0 && stroke.thickness > 0.0 {
+                    outlines.push((
+                        rgba(colour, stroke.alpha),
+                        outline_offsets(stroke.thickness),
+                    ));
+                }
+            }
+        }
+        if node.text_stroke_alpha > 0.0 {
+            outlines.push((
+                rgba(
+                    node.text_stroke_colour.unwrap_or(Rgb(0, 0, 0)),
+                    node.text_stroke_alpha,
+                ),
+                outline_offsets(1.0),
+            ));
+        }
+        for line in &layout.lines {
+            if line.text.is_empty() {
                 continue;
             }
-            let width = font.width(size, line).unwrap_or(0.0);
-            let x = match node.text_align_x.unwrap_or(Align::Center) {
-                Align::Start => node.rect.x,
-                Align::Center => node.rect.x + (node.rect.w - width) / 2.0,
-                Align::End => node.rect.x + node.rect.w - width,
-            };
-            let y = start_y + i as f32 * line_height;
+            for (sc, offsets) in &outlines {
+                for &(dx, dy) in offsets {
+                    self.canvas.fill_text(
+                        font,
+                        layout.glyph_px,
+                        line.x + dx,
+                        line.y + dy,
+                        *sc,
+                        &line.text,
+                    );
+                }
+            }
+            // `fill_text` takes the TOP-LEFT and converts to a baseline itself;
+            // `Line` already holds that top-left.
             self.canvas
-                .fill_text(font, size, x, y, rgba(colour, node.text_alpha), line);
+                .fill_text(font, layout.glyph_px, line.x, line.y, colour, &line.text);
         }
     }
 
@@ -514,6 +521,35 @@ impl Painter for RasterPainter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One pixel is the eight neighbours a `TextStroke` has always used.
+    #[test]
+    fn a_one_pixel_outline_is_the_eight_neighbours() {
+        let offsets = outline_offsets(1.0);
+        assert_eq!(offsets.len(), 8);
+        assert!(offsets
+            .iter()
+            .all(|&(dx, dy)| dx.abs().max(dy.abs()) == 1.0));
+    }
+
+    /// A wider outline reaches its width and no further, with no gap between
+    /// neighbouring stamps on its outer ring wider than a pixel.
+    #[test]
+    fn a_wider_outline_reaches_its_width() {
+        let offsets = outline_offsets(3.0);
+        let reach = offsets
+            .iter()
+            .map(|&(dx, dy)| (dx * dx + dy * dy).sqrt())
+            .fold(0.0_f32, f32::max);
+        assert!((reach - 3.0).abs() < 1e-4, "reach {reach}");
+        let outer: Vec<_> = offsets
+            .iter()
+            .filter(|&&(dx, dy)| ((dx * dx + dy * dy).sqrt() - 3.0).abs() < 1e-4)
+            .collect();
+        let gap = std::f32::consts::TAU * 3.0 / outer.len() as f32;
+        assert!(gap <= 1.0, "gap {gap}");
+        assert!(outline_offsets(0.0).is_empty());
+    }
 
     /// THE ACTUAL DEFECT BEHIND A RESIZED WINDOW STRETCHING ITS CONTENT
     /// instead of redrawing it: `host/src/main.rs`'s `Event::Resized` used
