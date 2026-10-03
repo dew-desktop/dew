@@ -24,6 +24,7 @@ local create = vide.create
 
 local Aether = require("./roblox_packages/aether")
 local Tabs = Aether.Tabs
+local TextInput = Aether.TextInput
 
 local window = assert(desktop.Window, "dew.toml must grant `window`")
 local marketplace = assert(dew.Marketplace, "dew.toml must grant `discover` and `install`")
@@ -59,7 +60,7 @@ design:SetAttribute("ControlRadius", UDim.new(0, 6))
 design:SetAttribute("TextPrimary", Color3.fromRGB(233, 239, 249))
 -- Subtitles, descriptions, ids and field labels.
 design:SetAttribute("TextSecondary", Color3.fromRGB(146, 162, 188))
--- TextBox placeholder text.
+-- Placeholder text in a field.
 design:SetAttribute("TextPlaceholder", Color3.fromRGB(110, 122, 140))
 -- The default button tone, icon tiles and the active count pill.
 design:SetAttribute("AccentColor", Color3.fromRGB(38, 52, 74))
@@ -164,16 +165,21 @@ local textRecipe = Aether.Core.createRecipe({
 	},
 }, { Dom = dom, Component = "DashboardText" })
 
--- A TextBox, its corner and its outline.
-local textInputRecipe = Aether.Core.createRecipe({
-	base = {
-		BackgroundColor3 = "$SurfaceColor",
-		TextColor3 = "$TextPrimary",
-		PlaceholderColor3 = "$TextPlaceholder",
-		CornerRadius = "$ControlRadius",
-		Color = "$TabActiveColor",
-	},
-}, { Dom = dom, Component = "DashboardTextInput" })
+-- A text field, its corner and its outline.
+local TEXT_INPUT = {
+	BackgroundColor3 = "$SurfaceColor",
+	TextColor3 = "$TextPrimary",
+	PlaceholderColor3 = "$TextPlaceholder",
+	CornerRadius = "$ControlRadius",
+	Color = "$TabActiveColor",
+}
+local textInputRecipe = Aether.Core.createRecipe({ base = TEXT_INPUT }, { Dom = dom, Component = "DashboardTextInput" })
+
+-- The value a `$Name` token stands for in the Design sheet. For a property an
+-- element writes itself, which no rule can then override.
+local function token(name: string): any
+	return design:GetAttribute(string.sub(name, 2))
+end
 
 --------------------------------------------------------------------------
 -- BUILDING BLOCKS. None takes a Position.
@@ -962,10 +968,6 @@ end)
 
 --------------------------------------------------------------------------
 -- ACCOUNT: who is signed in, signing out, and signing in.
---
--- KNOWN LIMITATION: the password field is a plain TextBox and is not
--- masked. The DataModel's TextBox has no masking property, and doing it by
--- hand means intercepting every keystroke.
 --------------------------------------------------------------------------
 
 local _, accountSubtitle = header(accountTab, "Account")
@@ -1036,34 +1038,62 @@ local signInSection = card(3, "SIGN IN")
 paragraph(signInSection, "Hint", 1, 13, "primary").Text =
 	"Sign in with your Dew account to install applets from the Store and publish your own."
 
-local function textField(parent: Instance, name: string, placeholder: string): TextBox
-	local box = Instance.new("TextBox")
-	box.Name = name
-	box.PlaceholderText = placeholder
-	box.FontFace = REGULAR
-	box.TextSize = 14
-	box.TextXAlignment = Enum.TextXAlignment.Left
-	box.ClearTextOnFocus = false
+-- A field's slot, padding, corner and outline, the same for the email
+-- TextBox and the password TextInput.
+local function fieldChrome(field: GuiObject)
 	-- Text longer than the field is clipped at its edge.
-	box.ClipsDescendants = true
-	box.Text = ""
-	box.Parent = parent
-	fieldSlot(box, FIELD_HEIGHT)
-	pad(box, 10, 0, 10, 0)
-	textInputRecipe.Bind(box, {})
-	textInputRecipe.Bind(corner(box), {})
+	field.ClipsDescendants = true
+	field.BackgroundTransparency = 0
+	fieldSlot(field, FIELD_HEIGHT)
+	pad(field, 10, 0, 10, 0)
+	textInputRecipe.Bind(field, {})
+	textInputRecipe.Bind(corner(field), {})
 	local stroke = Instance.new("UIStroke")
 	-- Around the field, not the glyphs it holds.
 	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-	stroke.Parent = box
+	stroke.Parent = field
 	textInputRecipe.Bind(stroke, {})
-	return box
 end
 
 local emailLine, emailLabel = formLine(signInSection, 2, "EmailLabel", "Email", FIELD_HEIGHT)
-local emailBox = textField(emailLine, "Email", "you@example.com")
+local emailBox = Instance.new("TextBox")
+emailBox.Name = "Email"
+emailBox.PlaceholderText = "you@example.com"
+emailBox.FontFace = REGULAR
+emailBox.TextSize = 14
+emailBox.TextXAlignment = Enum.TextXAlignment.Left
+emailBox.ClearTextOnFocus = false
+emailBox.Text = ""
+emailBox.Parent = emailLine
+fieldChrome(emailBox)
+
+-- THE PASSWORD IS AETHER'S TextInput, which draws a bullet per character and
+-- hands the real text to `OnChanged`. `password` holds it, and clearing the
+-- source clears the field while it is not focused.
 local passwordLine, passwordLabel = formLine(signInSection, 3, "PasswordLabel", "Password", FIELD_HEIGHT)
-local passwordBox = textField(passwordLine, "Password", "Password")
+local password = source("")
+local passwordField: Frame
+vide.root(function()
+	passwordField = TextInput({
+		Name = "Password",
+		Parent = passwordLine,
+		Value = password,
+		OnChanged = function(text: string)
+			password(text)
+		end,
+		Masked = true,
+		PlaceholderText = "Password",
+		-- `Font` is the enum TextInput sets on its label; Arimo is the face
+		-- REGULAR names.
+		Font = Enum.Font.Arimo,
+		TextSize = 14,
+		-- TextInput writes its label's colours itself, so they come from the
+		-- recipe's tokens rather than its rule.
+		TextColor3 = token(TEXT_INPUT.TextColor3),
+		PlaceholderColor3 = token(TEXT_INPUT.PlaceholderColor3),
+	}) :: Frame
+	fieldChrome(passwordField)
+end)
 local signInActions = frame(signInSection, "Actions", 4, UDim2.new(1, 0, 0, BUTTON_HEIGHT))
 list(signInActions, Enum.FillDirection.Horizontal, 8)
 local signInError = paragraph(signInSection, "SignInError", 5, 13, "error")
@@ -1091,8 +1121,8 @@ vide.root(function()
 			return
 		end
 		local email = emailBox.Text
-		local password = passwordBox.Text
-		if email == "" or password == "" then
+		local typed = password()
+		if email == "" or typed == "" then
 			setMessage(signInError, "Enter an email and password")
 			return
 		end
@@ -1101,11 +1131,11 @@ vide.root(function()
 		signInLabel.Text = "Signing in..."
 		setMessage(signInError, "")
 
-		account.SignIn(email, password, function(result)
+		account.SignIn(email, typed, function(result)
 			signInInFlight = false
 			signInLabel.Text = "Sign in"
 			if result.ok then
-				passwordBox.Text = ""
+				password("")
 				refreshAccount()
 			else
 				setMessage(signInError, result.error)
@@ -1127,7 +1157,7 @@ refreshAccount = function()
 	emailLabel.Visible = not signedIn
 	emailBox.Visible = not signedIn
 	passwordLabel.Visible = not signedIn
-	passwordBox.Visible = not signedIn
+	passwordField.Visible = not signedIn
 	signInButton.Visible = not signedIn
 	if signedIn then
 		setMessage(signInError, "")

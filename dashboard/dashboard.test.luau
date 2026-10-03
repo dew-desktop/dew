@@ -16,7 +16,8 @@
 	3. Store against a fake `Discover`/`Install`: a package's row, Install
 	   calling the fake with the right package, and Refresh discovering again.
 	4. Account: the sign-in form while signed out, signing in and out, and
-	   the account card following the session.
+	   the account card following the session. A typed password paints only
+	   bullets, and the sign-in handler still receives the real text.
 	5. Fit: at four window widths, in every section and both account states,
 	   every visible element lies inside its parent and every piece of text
 	   that does not truncate fits its box.
@@ -33,7 +34,8 @@
 	  no seam for a fixture. This suite proves the dashboard's wiring only.
 	- Keyboard and gamepad selection through the sidebar's `SelectionRouter`
 	  wiring; only pointer clicks are driven.
-	- The password field is not masked (see the dashboard's Account section).
+	- Real keystrokes. `DewTest` has no keyboard, so typing is a write to the
+	  focused TextBox's `Text`, which is what Dew's own key delivery does.
 
 		cargo run -- test dashboard
 ]=]
@@ -62,6 +64,7 @@ local recorded = {
 	uninstall = {} :: { string },
 	installed = {} :: { { owner: string, id: string } },
 	discovered = 0,
+	password = nil :: string?,
 }
 
 -- `SetEnabled` and `Uninstall` fire `OnChange` synchronously, as the real
@@ -128,7 +131,8 @@ local fakeAccount = {
 	SignOut = function()
 		session = nil
 	end,
-	SignIn = function(email: string, _password: string, callback: (any) -> ())
+	SignIn = function(email: string, password: string, callback: (any) -> ())
+		recorded.password = password
 		session = { email = email, userId = "9e4b6c20-7f31-4d8a-b5e6-2a1c0f93d7e4" }
 		callback({ ok = true })
 	end,
@@ -455,11 +459,81 @@ local function testSignedOutShowsTheSignInForm()
 	assert(not find(accountTab(), "SignOut").Visible, "signed out should hide Sign out")
 end
 
-local function signIn(email: string)
+--- The TextBox under `from`, itself included, that holds keyboard focus.
+local function focusedTextBox(from: any): any
+	if from:IsA("TextBox") and from:IsFocused() then
+		return from
+	end
+	for _, child in ipairs(from:GetChildren()) do
+		local found = focusedTextBox(child)
+		if found then
+			return found
+		end
+	end
+	return nil
+end
+
+--- Clicks `field`, then types `text` into whichever TextBox that focused.
+local function typeInto(field: any, text: string)
+	press(field)
+	local box = focusedTextBox(root)
+	assert(box ~= nil, `clicking {field.Name} should focus a TextBox`)
+	box.Text = text
+	settle()
+end
+
+local function signIn(email: string, password: string?)
 	press(find(root, "TabAccount"))
-	find(accountTab(), "Email").Text = email
-	find(accountTab(), "Password").Text = "hunter2"
+	typeInto(find(accountTab(), "Email"), email)
+	typeInto(find(accountTab(), "Password"), password or "hunter2")
 	press(find(accountTab(), "SignIn"))
+end
+
+--- Is `node` drawn: visible itself and under nothing hidden.
+local function drawn(node: any): boolean
+	while node and node ~= root do
+		if node:IsA("GuiObject") and not node.Visible then
+			return false
+		end
+		node = node.Parent
+	end
+	return true
+end
+
+--- Every drawn text object under `from` whose Text contains `needle`.
+local function drawnTextsHolding(from: any, needle: string, results: { string }?): { string }
+	results = results or {}
+	for _, child in ipairs(from:GetChildren()) do
+		local isText = child:IsA("TextBox") or child:IsA("TextLabel") or child:IsA("TextButton")
+		if isText and drawn(child) and string.find(child.Text, needle, 1, true) then
+			table.insert(results :: { string }, `{child.Parent.Name}.{child.Name} ({child.ClassName})`)
+		end
+		drawnTextsHolding(child, needle, results)
+	end
+	return results :: { string }
+end
+
+local BULLET = "\u{2022}"
+
+local function testATypedPasswordPaintsOnlyBullets()
+	press(find(root, "TabAccount"))
+	local field = find(accountTab(), "Password")
+	typeInto(field, "hunter2")
+	local label = find(field, "DisplayLabel")
+	assert(label ~= nil, "the password field should paint its text through a DisplayLabel")
+	assert(label.Text == string.rep(BULLET, 7), `seven typed characters should paint seven bullets, got "{label.Text}"`)
+	local leaks = drawnTextsHolding(root, "hunter2")
+	assert(#leaks == 0, `no drawn text may hold the typed password, found: {table.concat(leaks, ", ")}`)
+	press(find(root, "TabLibrary"))
+end
+
+local function testSignInReceivesTheRealPasswordAndClearsTheField()
+	signIn("person@example.com", "correct horse")
+	assert(recorded.password == "correct horse", `SignIn should receive the typed text, got "{tostring(recorded.password)}"`)
+	press(find(accountTab(), "SignOut"))
+	local label = find(find(accountTab(), "Password"), "DisplayLabel")
+	assert(label ~= nil and label.Text == "Password", "after signing in, the password field is empty again and shows its placeholder")
+	press(find(root, "TabLibrary"))
 end
 
 local function testSigningInSwitchesToSignedInChrome()
@@ -568,6 +642,8 @@ T.test("Store's Refresh discovers again", testStoreRefreshDiscoversAgain, "math"
 T.test("signed out shows the sign-in form", testSignedOutShowsTheSignInForm, "math")
 T.test("signing in switches to signed-in chrome", testSigningInSwitchesToSignedInChrome, "math")
 T.test("signing out returns to the sign-in form", testSigningOutReturnsToTheSignInForm, "math")
+T.test("a typed password paints only bullets", testATypedPasswordPaintsOnlyBullets, "math")
+T.test("sign in receives the real password and clears the field", testSignInReceivesTheRealPasswordAndClearsTheField, "math")
 T.test("nothing overflows at any tested width", testNothingOverflowsAtAnyTestedWidth, "math")
 
 return T.run("dashboard")
