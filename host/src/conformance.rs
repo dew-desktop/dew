@@ -33,6 +33,7 @@ pub static SUPPORTS: &[&str] = &[
     "ContentText",
     "FontFace",
     "LineHeight",
+    "PlaceholderText",
     "RichText",
     "TextBounds",
     "TextFits",
@@ -1727,13 +1728,15 @@ mod tests {
     /// What the suite in `dir` must add up to, counted from the case files
     /// themselves rather than from the runner: how many files the loader would
     /// pick up, how many name a `requires` feature missing from `SUPPORTS`, and,
-    /// of the rest, how many declare `roblox` and `asserted` provenance. An
-    /// unsupported case is counted only as unsupported, as the tally does.
+    /// of the rest, how many declare `roblox`, `asserted` and `divergent`
+    /// provenance. An unsupported case is counted only as unsupported, as the
+    /// tally does.
     struct ExpectedTally {
         total: usize,
         unsupported: usize,
         roblox: usize,
         asserted: usize,
+        divergent: usize,
     }
 
     fn expected_tally(dir: &Path) -> ExpectedTally {
@@ -1742,6 +1745,7 @@ mod tests {
             unsupported: 0,
             roblox: 0,
             asserted: 0,
+            divergent: 0,
         };
         let entries = std::fs::read_dir(dir)
             .unwrap_or_else(|e| panic!("could not read {}: {e}", dir.display()));
@@ -1766,6 +1770,7 @@ mod tests {
             match provenance {
                 "roblox" => tally.roblox += 1,
                 "asserted" => tally.asserted += 1,
+                "divergent" => tally.divergent += 1,
                 _ => {}
             }
         }
@@ -1826,7 +1831,12 @@ mod tests {
             "expected every case requiring a feature outside SUPPORTS to be unsupported"
         );
         assert_eq!(summary.failed, 0, "expected 0 failing conformance cases");
-        assert_eq!(summary.divergent, 0, "no documented gaps remain");
+        // A `divergent` case records a deliberate difference from the engine,
+        // and passing it means this host still behaves as the case describes.
+        assert_eq!(
+            summary.divergent, expected.divergent,
+            "expected every supported divergent case to pass as a documented gap"
+        );
         assert_eq!(
             summary.verified_against_roblox, expected.roblox,
             "expected every supported roblox case to be counted as verified"

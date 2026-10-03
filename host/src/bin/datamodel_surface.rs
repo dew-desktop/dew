@@ -24,6 +24,9 @@ struct ClassRow {
     implemented: Vec<String>,
     /// `render::honours`: read, with what is missing.
     partial: Vec<(String, &'static str)>,
+    /// `render::honours`: read, and drawn differently from the engine on
+    /// purpose, with how.
+    divergent: Vec<(String, &'static str)>,
     /// `render::honours`: never read.
     absent: Vec<String>,
     /// By name, in `AETHER_PIPELINE`.
@@ -32,7 +35,7 @@ struct ClassRow {
 
 impl ClassRow {
     fn rendered(&self) -> usize {
-        self.implemented.len() + self.partial.len()
+        self.implemented.len() + self.partial.len() + self.divergent.len()
     }
 }
 
@@ -332,6 +335,7 @@ fn main() {
             accepted: 0,
             implemented: Vec::new(),
             partial: Vec::new(),
+            divergent: Vec::new(),
             absent: Vec::new(),
             pipeline: 0,
         };
@@ -346,6 +350,7 @@ fn main() {
             match honours(name, property) {
                 Honour::Implemented => row.implemented.push(property.to_string()),
                 Honour::Partial(reason) => row.partial.push((property.to_string(), reason)),
+                Honour::Divergent(reason) => row.divergent.push((property.to_string(), reason)),
                 Honour::Absent => row.absent.push(property.to_string()),
             }
         }
@@ -568,12 +573,16 @@ fn main() {
     }
     println!("  ACCEPTED: the host stores an assignment (datamodel::accepts)");
     println!(
-        "  RENDERED: Dew's renderer reads it on this class (render::honours), PARTIAL included"
+        "  RENDERED: Dew's renderer reads it on this class (render::honours), PARTIAL and \
+         divergent included"
     );
     println!("  AETHER:   named in Aether's pipeline (AETHER_PIPELINE), by name");
     for row in &per_class {
         for (property, reason) in &row.partial {
             println!("  partial  {}.{property}: {reason}", row.name);
+        }
+        for (property, reason) in &row.divergent {
+            println!("  diverges {}.{property}: {reason}", row.name);
         }
     }
 
@@ -583,10 +592,15 @@ fn main() {
         100.0 * covered_total as f64 / in_scope_total as f64
     );
     println!(
-        "RENDERED:  {} of {} (class, property) pairs read by Dew's renderer, {} partially",
+        "RENDERED:  {} of {} (class, property) pairs read by Dew's renderer, {} partially, \
+         {} diverging from the engine on purpose",
         per_class.iter().map(ClassRow::rendered).sum::<usize>(),
         per_class.iter().map(|row| row.in_scope).sum::<usize>(),
-        per_class.iter().map(|row| row.partial.len()).sum::<usize>()
+        per_class.iter().map(|row| row.partial.len()).sum::<usize>(),
+        per_class
+            .iter()
+            .map(|row| row.divergent.len())
+            .sum::<usize>()
     );
     println!("PIPELINE:  {pipeline_covered} of those names are honoured by Aether's pipeline");
     if !disagreed.is_empty() {
@@ -722,11 +736,13 @@ fn emit_markdown(
     let pairs: usize = per_class.iter().map(|row| row.in_scope).sum();
     let rendered: usize = per_class.iter().map(ClassRow::rendered).sum();
     let partial: usize = per_class.iter().map(|row| row.partial.len()).sum();
+    let divergent: usize = per_class.iter().map(|row| row.divergent.len()).sum();
     println!("Counted per class rather than by name, those properties make {pairs} (class,");
     println!(
         "property) pairs. **{rendered} of the {pairs} are rendered by Dew**, {partial} of them"
     );
-    println!("partially; see the two sections below.");
+    println!("partially and {divergent} differently from the engine on purpose; see the two");
+    println!("sections below.");
     println!();
     println!("Of the {in_scope} names, **{pipeline_covered} are honoured by Aether's pipeline**.");
     println!("That is not a conformance figure; it splits the backlog by cost.");
@@ -742,9 +758,11 @@ fn emit_markdown(
     println!("  so changing it changes what is drawn or where. Asked of");
     println!("  `dew_host::datamodel::render::honours`, which answers per class. Partial");
     println!("  answers are counted here and shown in their own column, with what is");
-    println!("  missing listed below. A property with no paint of its own counts as not");
-    println!("  rendered. A test holds every claim to a gallery variant that moved pixels,");
-    println!("  a passing engine-verified conformance case, or a stated excuse.");
+    println!("  missing listed below. A deliberate divergence from the engine is counted");
+    println!("  here too, and listed below with what Dew does and what the engine does.");
+    println!("  A property with no paint of its own counts as not rendered. A test holds");
+    println!("  every claim to a gallery variant that moved pixels, a passing");
+    println!("  engine-verified conformance case, or a stated excuse.");
     println!("- **Honoured by Aether's pipeline**: named by Aether's `Layout.Inputs` or its");
     println!("  display list, by NAME and not by class. It describes Aether, not Dew, and");
     println!("  splits the backlog by cost.");
@@ -785,6 +803,9 @@ fn emit_markdown(
         }
         for (property, reason) in &row.partial {
             println!("- **Partial,** `{property}`: {reason}");
+        }
+        for (property, reason) in &row.divergent {
+            println!("- **Diverges from the engine,** `{property}`: {reason}");
         }
         if !row.absent.is_empty() {
             println!("- **Not rendered:** {}", ticked(&row.absent));
