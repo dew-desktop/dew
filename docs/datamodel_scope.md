@@ -22,7 +22,7 @@ without Aether**.
 excluded by decision, and 25 classes under `GuiObject` are in scope.
 
 Counted per class rather than by name, those properties make 471 (class,
-property) pairs. **261 of the 471 are rendered by Dew**, 25 of them
+property) pairs. **262 of the 471 are rendered by Dew**, 24 of them
 partially; see the two sections below.
 
 Of the 139 names, **36 are honoured by Aether's pipeline**.
@@ -60,7 +60,7 @@ Three different questions, asked of every property in scope for each class:
 | `GuiLabel` | 20 | 20 | 12 | 0 | 12 |
 | `GuiObject` | 20 | 20 | 12 | 0 | 12 |
 | `UIPageLayout` | 13 | 13 | 0 | 0 | 3 |
-| `UIStroke` | 12 | 12 | 4 | 3 | 5 |
+| `UIStroke` | 12 | 12 | 5 | 2 | 5 |
 | `UIListLayout` | 11 | 11 | 10 | 0 | 3 |
 | `UIGradient` | 10 | 10 | 6 | 0 | 6 |
 | `UIGridLayout` | 10 | 10 | 9 | 0 | 2 |
@@ -160,11 +160,10 @@ the table above can be traced to the names behind it.
 
 ### `UIStroke`
 
-- **Rendered:** `Parent`
-- **Partial,** `Color`: always drawn around the parent's box; on a text parent the engine's default outlines the glyphs
-- **Partial,** `Thickness`: always drawn around the parent's box; on a text parent the engine's default outlines the glyphs
-- **Partial,** `Transparency`: always drawn around the parent's box; on a text parent the engine's default outlines the glyphs
-- **Not rendered:** `ApplyStrokeMode`, `BorderOffset`, `BorderStrokePosition`, `Enabled`, `LineJoinMode`, `Name`, `StrokeSizingMode`, `ZIndex`
+- **Rendered:** `ApplyStrokeMode`, `Color`, `Parent`
+- **Partial,** `Thickness`: around glyphs, drawn as copies of the text stamped out to the thickness, so joins are always round
+- **Partial,** `Transparency`: around glyphs, the stamped copies overlap, so a translucent outline reads more solid than the engine's
+- **Not rendered:** `BorderOffset`, `BorderStrokePosition`, `Enabled`, `LineJoinMode`, `Name`, `StrokeSizingMode`, `ZIndex`
 
 ### `UIListLayout`
 

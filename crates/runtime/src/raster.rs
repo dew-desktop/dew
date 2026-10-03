@@ -120,6 +120,44 @@ fn alpha_at(stops: &[crate::frame::AlphaStop], at: f32) -> Option<f32> {
     Some(last.alpha)
 }
 
+/// Where to stamp copies of a run so together they outline its glyphs out to
+/// `width` pixels.
+///
+/// A ring every pixel out to `width`, so a stem thinner than the outline
+/// leaves no gap. A ring within one pixel is the eight neighbours of a square;
+/// a wider one is a circle with a point every pixel of its circumference. At
+/// a width of exactly one this is the eight neighbours and nothing else.
+fn outline_offsets(width: f32) -> Vec<(f32, f32)> {
+    const SQUARE: [(f32, f32); 8] = [
+        (-1.0, 0.0),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-1.0, -1.0),
+        (-1.0, 1.0),
+        (1.0, -1.0),
+        (1.0, 1.0),
+    ];
+    if width.is_nan() || width <= 0.0 {
+        return Vec::new();
+    }
+    let rings = width.ceil() as usize;
+    let mut offsets = Vec::new();
+    for ring in 1..=rings {
+        let r = width * ring as f32 / rings as f32;
+        if r <= 1.0 {
+            offsets.extend(SQUARE.iter().map(|&(dx, dy)| (dx * r, dy * r)));
+        } else {
+            let points = ((std::f32::consts::TAU * r).ceil() as usize).max(8);
+            offsets.extend((0..points).map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / points as f32;
+                (r * angle.cos(), r * angle.sin())
+            }));
+        }
+    }
+    offsets
+}
+
 fn rgba(c: Rgb, alpha: f32) -> (u8, u8, u8, u8) {
     (c.0, c.1, c.2, (alpha.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
@@ -244,35 +282,40 @@ impl Painter for RasterPainter {
             node.text_colour.unwrap_or(Rgb(255, 255, 255)),
             node.text_alpha,
         );
-        let stroke_colour = if node.text_stroke_alpha > 0.0 {
-            Some(rgba(
-                node.text_stroke_colour.unwrap_or(Rgb(0, 0, 0)),
-                node.text_stroke_alpha,
-            ))
-        } else {
-            None
-        };
+        // OUTLINES UNDER THE FILL, the wider `UIStroke` one first so a
+        // `TextStroke` on the same node stays visible inside it.
+        let mut outlines = Vec::new();
+        if let Some(stroke) = &node.glyph_stroke {
+            if let Some(colour) = stroke.colour {
+                if stroke.alpha > 0.0 && stroke.thickness > 0.0 {
+                    outlines.push((
+                        rgba(colour, stroke.alpha),
+                        outline_offsets(stroke.thickness),
+                    ));
+                }
+            }
+        }
+        if node.text_stroke_alpha > 0.0 {
+            outlines.push((
+                rgba(
+                    node.text_stroke_colour.unwrap_or(Rgb(0, 0, 0)),
+                    node.text_stroke_alpha,
+                ),
+                outline_offsets(1.0),
+            ));
+        }
         for line in &layout.lines {
             if line.text.is_empty() {
                 continue;
             }
-            if let Some(sc) = stroke_colour {
-                for &(dx, dy) in &[
-                    (-1.0, 0.0),
-                    (1.0, 0.0),
-                    (0.0, -1.0),
-                    (0.0, 1.0),
-                    (-1.0, -1.0),
-                    (-1.0, 1.0),
-                    (1.0, -1.0),
-                    (1.0, 1.0),
-                ] {
+            for (sc, offsets) in &outlines {
+                for &(dx, dy) in offsets {
                     self.canvas.fill_text(
                         font,
                         layout.glyph_px,
                         line.x + dx,
                         line.y + dy,
-                        sc,
+                        *sc,
                         &line.text,
                     );
                 }
@@ -478,6 +521,35 @@ impl Painter for RasterPainter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One pixel is the eight neighbours a `TextStroke` has always used.
+    #[test]
+    fn a_one_pixel_outline_is_the_eight_neighbours() {
+        let offsets = outline_offsets(1.0);
+        assert_eq!(offsets.len(), 8);
+        assert!(offsets
+            .iter()
+            .all(|&(dx, dy)| dx.abs().max(dy.abs()) == 1.0));
+    }
+
+    /// A wider outline reaches its width and no further, with no gap between
+    /// neighbouring stamps on its outer ring wider than a pixel.
+    #[test]
+    fn a_wider_outline_reaches_its_width() {
+        let offsets = outline_offsets(3.0);
+        let reach = offsets
+            .iter()
+            .map(|&(dx, dy)| (dx * dx + dy * dy).sqrt())
+            .fold(0.0_f32, f32::max);
+        assert!((reach - 3.0).abs() < 1e-4, "reach {reach}");
+        let outer: Vec<_> = offsets
+            .iter()
+            .filter(|&&(dx, dy)| ((dx * dx + dy * dy).sqrt() - 3.0).abs() < 1e-4)
+            .collect();
+        let gap = std::f32::consts::TAU * 3.0 / outer.len() as f32;
+        assert!(gap <= 1.0, "gap {gap}");
+        assert!(outline_offsets(0.0).is_empty());
+    }
 
     /// THE ACTUAL DEFECT BEHIND A RESIZED WINDOW STRETCHING ITS CONTENT
     /// instead of redrawing it: `host/src/main.rs`'s `Event::Resized` used

@@ -1054,6 +1054,8 @@ local function textField(parent: Instance, name: string, placeholder: string): T
 	textInputRecipe.Bind(box, {})
 	textInputRecipe.Bind(corner(box), {})
 	local stroke = Instance.new("UIStroke")
+	-- Around the field, not the glyphs it holds.
+	stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
 	stroke.Parent = box
 	textInputRecipe.Bind(stroke, {})
 	return box

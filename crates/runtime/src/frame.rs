@@ -375,6 +375,14 @@ pub struct Node {
     pub blend_mode: BlendMode,
     pub text_stroke_colour: Option<Rgb>,
     pub text_stroke_alpha: f32,
+    /// A `UIStroke` that outlines this node's glyphs rather than its box.
+    ///
+    /// HOST FIELD, BESIDE `stroke` RATHER THAN IN IT. A text object can carry
+    /// both a box stroke and a glyph stroke only through two `UIStroke`s, and
+    /// `stroke` is the one Live.luau emits; a node from a Luau display list
+    /// has none. `thickness` is how far the outline reaches past the glyph
+    /// edge, in pixels.
+    pub glyph_stroke: Option<Stroke>,
 }
 
 #[derive(Debug, Clone)]
@@ -447,6 +455,7 @@ impl Frame {
         "blend_mode",
         "text_stroke_colour",
         "text_stroke_alpha",
+        "glyph_stroke",
     ];
 }
 
@@ -565,6 +574,7 @@ impl Node {
             blend_mode: BlendMode::Alpha,
             text_stroke_colour: None,
             text_stroke_alpha: 0.0,
+            glyph_stroke: None,
         })
     }
 }
@@ -674,6 +684,7 @@ mod tests {
             blend_mode: BlendMode::Alpha,
             text_stroke_colour: None,
             text_stroke_alpha: 0.0,
+            glyph_stroke: None,
         };
         let Node {
             id: _,
@@ -698,6 +709,7 @@ mod tests {
             blend_mode: _,
             text_stroke_colour: _,
             text_stroke_alpha: _,
+            glyph_stroke: _,
         } = node;
 
         // `rect` is four keys and the rest are one each; the names are Live.luau's
@@ -728,6 +740,7 @@ mod tests {
             "blend_mode",
             "text_stroke_colour",
             "text_stroke_alpha",
+            "glyph_stroke",
         ];
         for key in named {
             assert!(
