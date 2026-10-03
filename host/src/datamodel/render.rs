@@ -5200,8 +5200,9 @@ mod styled_list_cost {
     }
 }
 
-/// Enum properties set through a `StyleRule`: stored with their type, checked
-/// as an assignment is, and reaching layout and paint.
+/// Enum properties set through a `StyleRule`: stored as given, applied only
+/// when the value is of the property's own type, and reaching layout and
+/// paint, as measured in Studio.
 #[cfg(test)]
 mod styled_enums {
     use super::*;
@@ -5281,39 +5282,114 @@ mod styled_enums {
     }
 
     #[test]
-    fn a_rule_checks_an_enum_value_as_assignment_does() {
+    fn a_rule_stores_any_value_under_an_enum_property_unchanged() {
         let (lua, _dom, _root) = scene(SHEET);
         run(
             &lua,
             r#"
-            local probe = Instance.new("TextLabel")
-            local function both(value)
-                local direct = pcall(function() probe.TextXAlignment = value end)
-                local styled = pcall(function() rule:SetProperty("TextXAlignment", value) end)
-                return direct, styled
+            local function stored(value)
+                rule:SetProperty("TextXAlignment", value)
+                return rule:GetProperty("TextXAlignment")
             end
 
-            -- Another enum's item: refused both ways.
-            local direct, styled = both(Enum.FillDirection.Vertical)
-            assert(not direct and not styled, "wrong enum")
+            local got = stored(Enum.FillDirection.Vertical)
+            assert(got == Enum.FillDirection.Vertical, "wrong enum: " .. tostring(got))
 
-            -- A number naming a member: accepted both ways, as that member.
-            direct, styled = both(Enum.TextXAlignment.Right.Value)
-            assert(direct and styled, "member number")
-            assert(rule:GetProperty("TextXAlignment") == Enum.TextXAlignment.Right)
+            got = stored("Left")
+            assert(typeof(got) == "string" and got == "Left", "name string: " .. tostring(got))
 
-            -- A number naming nothing: refused both ways.
-            direct, styled = both(999)
-            assert(not direct and not styled, "unknown number")
+            got = stored(Enum.TextXAlignment.Right.Value)
+            assert(typeof(got) == "number" and got == 1, "member number: " .. tostring(got))
 
-            -- A name as a string: refused both ways.
-            direct, styled = both("Left")
-            assert(not direct and not styled, "name string")
+            got = stored(999)
+            assert(typeof(got) == "number" and got == 999, "unknown number: " .. tostring(got))
 
-            -- A token is not a value yet, so the rule takes it.
-            rule:SetProperty("TextXAlignment", "$Align")
+            -- A token is not a value yet, so the rule takes it too.
+            got = stored("$Align")
+            assert(got == "$Align", "token: " .. tostring(got))
             "#,
         );
+    }
+
+    /// How the label aligns with nothing styling it.
+    fn unstyled_alignment() -> Option<Align> {
+        let (_lua, dom, root) = scene(&label(""));
+        frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x
+    }
+
+    /// The label's alignment after its rule, first set to `Left` and painted,
+    /// is set to `value`.
+    fn alignment_after(value: &str) -> Option<Align> {
+        let (lua, dom, root) = scene(&label(
+            r#"rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Left)"#,
+        ));
+        assert_eq!(
+            frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x,
+            Some(Align::Start)
+        );
+        run(
+            &lua,
+            &format!(r#"rule:SetProperty("TextXAlignment", {value})"#),
+        );
+        frame_of(&dom, root, 800.0, 100.0).nodes[0].text_align_x
+    }
+
+    #[test]
+    fn a_value_of_another_kind_leaves_the_element_unstyled() {
+        let unstyled = unstyled_alignment();
+        assert_ne!(unstyled, Some(Align::Start));
+        for value in [
+            "Enum.FillDirection.Vertical",
+            r#""Left""#,
+            r#""Right""#,
+            "999",
+        ] {
+            assert_eq!(alignment_after(value), unstyled, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_member_number_is_not_applied() {
+        let unstyled = unstyled_alignment();
+        for value in [
+            "Enum.TextXAlignment.Left.Value",
+            "Enum.TextXAlignment.Right.Value",
+        ] {
+            assert_eq!(alignment_after(value), unstyled, "{value}");
+        }
+    }
+
+    #[test]
+    fn a_string_or_number_warns_once_and_another_enum_never() {
+        let (lua, _dom, _root) = scene(SHEET);
+        let said = || {
+            crate::datamodel::members::STYLE_WARNINGS
+                .with(|said| std::mem::take(&mut *said.borrow_mut()))
+        };
+        said();
+        run(&lua, r#"rule.Name = "Accent""#);
+        run(
+            &lua,
+            r#"rule:SetProperty("TextXAlignment", "Left")
+            rule:SetProperty("TextXAlignment", "Left")"#,
+        );
+        assert_eq!(
+            said(),
+            ["Failed to apply StyleRule property 'TextXAlignment' from 'Accent': Variant cast failed"]
+        );
+        run(
+            &lua,
+            r#"rule:SetProperty("TextXAlignment", 1)
+            rule:SetProperty("TextXAlignment", 1)"#,
+        );
+        assert_eq!(said().len(), 1, "a number warns once");
+        run(
+            &lua,
+            r#"rule:SetProperty("TextXAlignment", Enum.FillDirection.Vertical)
+            rule:SetProperty("TextXAlignment", Enum.TextXAlignment.Left)
+            rule:SetProperty("TextXAlignment", "$Align")"#,
+        );
+        assert_eq!(said(), Vec::<String>::new());
     }
 
     #[test]
@@ -5383,12 +5459,17 @@ mod styled_enums {
         ));
         assert_eq!(stronger_face, montserrat);
 
-        // One rule setting both: `FontFace` wins.
-        let both = width(&format!(
+        // One rule setting both: whichever was set last wins.
+        let font_last = width(&format!(
             r#"rule:SetProperty("FontFace", {MONTSERRAT})
             rule:SetProperty("Font", Enum.Font.SourceSans)"#
         ));
-        assert_eq!(both, montserrat);
+        assert_eq!(font_last, source_sans);
+        let face_last = width(&format!(
+            r#"rule:SetProperty("Font", Enum.Font.SourceSans)
+            rule:SetProperty("FontFace", {MONTSERRAT})"#
+        ));
+        assert_eq!(face_last, montserrat);
 
         // An assigned `FontFace` beats a styled `Font`.
         let assigned_face = width(&format!(
@@ -5396,6 +5477,53 @@ mod styled_enums {
             t.FontFace = {MONTSERRAT}"#
         ));
         assert_eq!(assigned_face, montserrat);
+    }
+
+    #[test]
+    fn setting_font_or_font_face_again_makes_it_the_later() {
+        let source_sans = width("t.Font = Enum.Font.SourceSans");
+        let montserrat = width(&format!("t.FontFace = {MONTSERRAT}"));
+        let (lua, dom, root) = scene(&label(&format!(
+            r#"rule:SetProperty("Font", Enum.Font.SourceSans)
+            rule:SetProperty("FontFace", {MONTSERRAT})"#
+        )));
+        let painted = || frame_of(&dom, root, 800.0, 100.0).nodes[0].rect.w;
+        assert_eq!(painted(), montserrat);
+        // The same value again still moves `Font` after `FontFace`.
+        run(&lua, r#"rule:SetProperty("Font", Enum.Font.SourceSans)"#);
+        assert_eq!(painted(), source_sans);
+        run(
+            &lua,
+            &format!(r#"rule:SetProperty("FontFace", {MONTSERRAT})"#),
+        );
+        assert_eq!(painted(), montserrat);
+    }
+
+    #[test]
+    fn reads_stay_unstyled_while_text_bounds_follow_the_style() {
+        let bounds = |setup: &str| -> f32 {
+            let (lua, dom, root) = scene(&label(setup));
+            frame_of(&dom, root, 800.0, 100.0);
+            lua.load("return t.TextBounds.X").eval().expect("bounds")
+        };
+        let source_sans = bounds("t.Font = Enum.Font.SourceSans");
+        let (lua, dom, root) = scene(&label(&format!(
+            r#"rule:SetProperty("FontFace", {MONTSERRAT})
+            rule:SetProperty("Font", Enum.Font.SourceSans)"#
+        )));
+        frame_of(&dom, root, 800.0, 100.0);
+        let (font, family, styled): (String, String, f32) = lua
+            .load("return tostring(t.Font), t.FontFace.Family, t.TextBounds.X")
+            .eval()
+            .expect("reads");
+        let fresh: (String, String) = lua
+            .load(
+                r#"local f = Instance.new("TextLabel") return tostring(f.Font), f.FontFace.Family"#,
+            )
+            .eval()
+            .expect("defaults");
+        assert_eq!((font, family), fresh);
+        assert_eq!(styled, source_sans);
     }
 
     #[test]

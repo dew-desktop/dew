@@ -148,6 +148,10 @@ pub struct Dom {
     /// applied to, exactly as `attributes` are arbitrary names an ordinary
     /// instance carries rather than reflected properties of its own class.
     style_properties: BTreeMap<usize, BTreeMap<String, Variant>>,
+    /// The `StyleRule`s whose `Font` was set after their `FontFace`. One rule
+    /// setting both applies whichever was set last, as measured in Studio,
+    /// and the map above keeps no order of its own.
+    font_set_last: BTreeSet<usize>,
     /// `StyleRule:SetPropertyTransition`'s own table (milestone 29 part
     /// C4): rule id to property name to the `TweenInfo` a cascade-driven
     /// change of that property should animate through, instead of
@@ -226,6 +230,7 @@ impl Default for Dom {
             instance_tags: BTreeMap::new(),
             collection_service_id: None,
             style_properties: BTreeMap::new(),
+            font_set_last: BTreeSet::new(),
             style_transitions: BTreeMap::new(),
             active_transitions: BTreeMap::new(),
             transitioned_targets: BTreeMap::new(),
@@ -467,8 +472,16 @@ impl Dom {
 
     /// `SetProperty`, with `None` clearing the name the same as `SetAttribute`
     /// does -- a `StyleRule` un-setting a property it changed its mind about
-    /// is the ordinary case, not a special one.
-    fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) {
+    /// is the ordinary case, not a special one. Answers whether the stored
+    /// value changed.
+    fn set_style_property(&mut self, id: usize, name: &str, value: Option<Variant>) -> bool {
+        // Setting `Font` or `FontFace` makes it the later of the two, even
+        // when the value is the same, so the order can change on its own.
+        let reordered = match (name, &value) {
+            ("Font", Some(_)) => self.font_set_last.insert(id),
+            ("FontFace", Some(_)) => self.font_set_last.remove(&id),
+            _ => false,
+        };
         let table = self.style_properties.entry(id).or_default();
         // SAME VALUE, NO CHANGE, NO REPAINT -- the rule every other property
         // write in this file already follows, and a `StyleRule` a mod
@@ -488,10 +501,11 @@ impl Dom {
         if table.is_empty() {
             self.style_properties.remove(&id);
         }
-        if changed {
+        if changed || reordered {
             self.dirty = true;
             self.style_memo.forget();
         }
+        changed
     }
 
     fn get_style_property(&self, id: usize, name: &str) -> Option<Variant> {
@@ -745,6 +759,7 @@ impl Dom {
             // connections do -- nothing else can reach it by id once the slot
             // above is gone.
             self.style_properties.remove(&current);
+            self.font_set_last.remove(&current);
             // A destroyed `StyleLink` forgets what it pointed at. A destroyed
             // `StyleSheet` a link still names is handled at read time instead
             // -- `get_style_link` already checks the target exists -- because
@@ -1306,111 +1321,77 @@ pub(crate) fn coerce_variant_value(caller: &str, value: &LuaValue) -> LuaResult<
     }
 }
 
-/// The enum types a property name is declared as, when every class that
-/// declares it, in the reflection database or the extension registry, makes
-/// it an enum. `None` for a name no class declares, or one some class
-/// declares as anything else, since a `StyleRule` value under such a name
-/// cannot be checked without knowing which class it will reach.
-fn enum_types_named(property: &str) -> Option<Vec<&'static str>> {
+/// Whether every class that declares `property`, in the reflection database
+/// or the extension registry, makes it an enum. False for a name no class
+/// declares, or one some class declares as anything else, since a
+/// `StyleRule` value under such a name cannot be judged without knowing
+/// which class it will reach.
+fn enum_everywhere(property: &str) -> bool {
     use std::collections::HashMap;
     use std::sync::OnceLock;
-    // `None` in the map marks a name some class declares as a non-enum.
-    static DECLARED: OnceLock<HashMap<&'static str, Option<Vec<&'static str>>>> = OnceLock::new();
+    // `false` in the map marks a name some class declares as a non-enum.
+    static DECLARED: OnceLock<HashMap<&'static str, bool>> = OnceLock::new();
     let declared = DECLARED.get_or_init(|| {
-        let mut out: HashMap<&'static str, Option<Vec<&'static str>>> = HashMap::new();
+        let mut out: HashMap<&'static str, bool> = HashMap::new();
         if let Ok(db) = rbx_reflection_database::get() {
             for class in db.classes.values() {
                 for (name, descriptor) in &class.properties {
-                    let entry = out.entry(name.as_ref()).or_insert_with(|| Some(Vec::new()));
-                    match (&descriptor.data_type, entry.as_mut()) {
-                        (DataType::Enum(ty), Some(types)) => {
-                            if !types.contains(ty) {
-                                types.push(ty);
-                            }
-                        }
-                        _ => *entry = None,
-                    }
+                    let is_enum = matches!(descriptor.data_type, DataType::Enum(_));
+                    *out.entry(name.as_ref()).or_insert(true) &= is_enum;
                 }
             }
         }
         out
     });
-    let mut types = match declared.get(property) {
-        Some(None) => return None,
-        Some(Some(types)) => types.clone(),
-        None => Vec::new(),
-    };
-    for data_type in extensions::data_types_named(property) {
-        match data_type {
-            DataType::Enum(ty) if !types.contains(ty) => types.push(ty),
-            DataType::Enum(_) => {}
-            _ => return None,
+    let mut any = false;
+    if let Some(&all_enum) = declared.get(property) {
+        if !all_enum {
+            return false;
         }
+        any = true;
     }
-    (!types.is_empty()).then_some(types)
+    for data_type in extensions::data_types_named(property) {
+        if !matches!(data_type, DataType::Enum(_)) {
+            return false;
+        }
+        any = true;
+    }
+    any
 }
 
 /// Coerce a value for `StyleRule:SetProperty(name, value)`.
 ///
-/// AN ENUM IS STORED WITH ITS TYPE, as `Variant::EnumItem`, because a rule is
-/// not an instance of the class it will style and so has no declared type to
-/// name a bare `Variant::Enum` by. The cascade turns it back into the bare
-/// form an assigned property holds (`cascade::resolve_full`).
-///
-/// CHECKED AS ASSIGNMENT CHECKS IT when `name` is an enum on every class that
-/// has it: an item of another enum is refused, a number is accepted when it
-/// names a member, and a string is refused unless it is a `$` token. Anything
-/// else is stored as [`coerce_variant_value`] stores it.
-pub(crate) fn coerce_style_value(
-    caller: &str,
-    name: &str,
-    value: &LuaValue,
-) -> LuaResult<Option<Variant>> {
-    let declared = enum_types_named(name);
-    let expects = |types: &[&str]| {
-        types
-            .iter()
-            .map(|ty| format!("Enum.{ty}"))
-            .collect::<Vec<_>>()
-            .join(" or ")
-    };
+/// A rule stores whatever it is given and reads it back unchanged, as
+/// measured in Studio: an item of another enum, a name string or a number
+/// under an enum property are all kept. Only a value of the property's own
+/// type is applied (`cascade::resolve_full`). AN ENUM IS STORED WITH ITS
+/// TYPE, as `Variant::EnumItem`, because a rule is not an instance of the
+/// class it will style and so has no declared type to name a bare
+/// `Variant::Enum` by.
+pub(crate) fn coerce_style_value(caller: &str, value: &LuaValue) -> LuaResult<Option<Variant>> {
     if let LuaValue::UserData(ud) = value {
         if let Ok(item) = ud.borrow::<LuaEnumItem>() {
-            if let Some(types) = &declared {
-                if !types.contains(&item.ty) {
-                    return Err(LuaError::runtime(format!(
-                        "{caller}: {name} expects an {}, got an Enum.{}",
-                        expects(types),
-                        item.ty
-                    )));
-                }
-            }
             return Ok(Some(Variant::EnumItem(rbx_types::EnumItem {
                 ty: item.ty.to_string(),
                 value: item.value,
             })));
         }
     }
-    if let Some(types) = &declared {
-        match value {
-            LuaValue::String(s) if s.as_bytes().first() == Some(&b'$') => {}
-            LuaValue::String(_) => {
-                return Err(LuaError::runtime(format!(
-                    "{caller}: {name} expects an {}, got string",
-                    expects(types)
-                )))
-            }
-            LuaValue::Integer(_) | LuaValue::Number(_) if types.len() == 1 => {
-                let raw = coerce_enum(value, types[0], "StyleRule", name)?;
-                return Ok(Some(Variant::EnumItem(rbx_types::EnumItem {
-                    ty: types[0].to_string(),
-                    value: raw.to_u32(),
-                })));
-            }
-            _ => {}
-        }
-    }
     coerce_variant_value(caller, value)
+}
+
+/// The warning the engine prints for a `StyleRule` value it cannot cast to
+/// the enum property it names: a string that is not a `$` token, or a
+/// number. An item of another enum is skipped without one.
+pub(crate) fn style_cast_warning(rule: &str, name: &str, value: &Variant) -> Option<String> {
+    let uncastable = match value {
+        Variant::String(s) => !s.starts_with('$'),
+        Variant::Float64(_) => true,
+        _ => false,
+    };
+    (uncastable && enum_everywhere(name)).then(|| {
+        format!("Failed to apply StyleRule property '{name}' from '{rule}': Variant cast failed")
+    })
 }
 
 /// Turn a stored `Variant` back into something a guest can read.
