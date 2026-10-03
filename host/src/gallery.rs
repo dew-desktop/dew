@@ -608,6 +608,16 @@ pub const CANNOT_DIFFER: &[(&str, &str)] = &[
         "InputSink",
         "input routing, as above. Nothing about it reaches the display list.",
     ),
+    (
+        "CursorPosition",
+        "drawn only while the TextBox holds focus, and a scene is never focused. \
+         The caret's pixels are asserted by render.rs's editing tests instead.",
+    ),
+    (
+        "SelectionStart",
+        "drawn only while the TextBox holds focus, as above. The selection's \
+         pixels are asserted by render.rs's editing tests instead.",
+    ),
 ];
 
 /// Is this property excused from the differential test, and why?
