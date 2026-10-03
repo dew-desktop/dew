@@ -194,7 +194,7 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | :--- | :--- | :--- | :--- | ---: |
 | `aether/calculator` | error | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | did not load: calculator: runtime error: examples/aether/calculator/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global. | 0 |
 | `aether/contextmenu` | error | `desktop.Widget` (mount), Aether, which detects its host (runs on both), `desktop` | did not load: contextmenu: runtime error: examples/aether/contextmenu/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global... | 0 |
-| `aether/dialog-demo` | Roblox-ahead | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | `Frame.BorderSizePixel`, `TextLabel.Font` (in part), `TextLabel.FontFace` (in part), `UICorner.CornerRadius` (in part), `UIStroke.Color` (in part), `UIStroke.Transparency` (in part) | 29 |
+| `aether/dialog-demo` | Roblox-ahead | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | `Frame.BorderSizePixel`, `TextLabel.Font` (in part), `TextLabel.FontFace` (in part), `UICorner.CornerRadius` (in part), `UIStroke.Transparency` (in part) | 29 |
 | `aether/pressable` | error | `DewRoot` (mount), a returned `mount` (mount), Aether, which detects its host (runs on both) | did not load: pressable: runtime error: examples/aether/pressable/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global. | 0 |
 | `aether/slider-demo` | Roblox-ahead | `desktop.Widget` (mount), Aether, which detects its host (runs on both) | `Frame.BorderSizePixel`, `UICorner.CornerRadius` (in part) | 5 |
 | `aether/styled-pressable` | Dew-only | `desktop.Widget` (mount), Aether, which detects its host (runs on both), `services` | `Frame.BorderSizePixel`, `UICorner.CornerRadius` (in part) | 11 |
@@ -203,7 +203,7 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | `aether/workspace` | error | Aether, which detects its host (runs on both), `desktop.Overlay`, permission `overlay` | did not load: workspace: runtime error: examples/aether/workspace/roblox_packages/.pesde/spektr+aether/0.0.0-fc1c826161741b9ca17f57c8a87e956e58117d46/aether/src/host/Host:187: Aether.Host.DataModel found a conforming DataModel but no host services: `Host.Text` needs a synchronous measurer and `Host.Clock` needs a frame source, and this environment offers neither `TextService`/`RunService` nor a `dew` global. | 0 |
 | `host/basic-widget` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `host/experimental-features` | Dew-only | `desktop.Widget` (mount), `Frame.BlendingMode` | none | 10 |
-| `host/standalone` | Roblox-ahead | `DewRoot` (mount) | `UICorner.CornerRadius` (in part), `UIStroke.Color` (in part), `UIStroke.Thickness` (in part) | 7 |
+| `host/standalone` | Roblox-ahead | `DewRoot` (mount) | `UICorner.CornerRadius` (in part), `UIStroke.Thickness` (in part) | 7 |
 | `host/widget-behaviors/click-through` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `host/widget-behaviors/draggable` | Dew-only | `desktop.Widget` (mount), `desktop.Clock` | `UICorner.CornerRadius` (in part) | 4 |
 | `host/widget-behaviors/keep-on-screen` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
@@ -211,8 +211,8 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | `host/widget-behaviors/snap-to-edges` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `widgets/flex-item-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 68 |
 | `widgets/flex-list-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 57 |
-| `widgets/grid-layout-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.ApplyStrokeMode`, `UIStroke.Color` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 80 |
-| `widgets/nameplate` | Dew-only | `desktop.Widget` (mount), `desktop.Clipboard`, `desktop.Storage`, `desktop.Time` | `ImageLabel.ScaleType` (in part), `UICorner.CornerRadius` (in part), `UIStroke.Color` (in part) | 13 |
+| `widgets/grid-layout-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 80 |
+| `widgets/nameplate` | Dew-only | `desktop.Widget` (mount), `desktop.Clipboard`, `desktop.Storage`, `desktop.Time` | `ImageLabel.ScaleType` (in part), `UICorner.CornerRadius` (in part) | 13 |
 
 Read in part, in the renderer's own words:
 
@@ -224,8 +224,7 @@ Read in part, in the renderer's own words:
 - `UIPadding.PaddingLeft`: the offset insets the content; the scale is discarded
 - `UIPadding.PaddingRight`: the offset insets the content; the scale is discarded
 - `UIPadding.PaddingTop`: the offset insets the content; the scale is discarded
-- `UIStroke.Color`: always drawn around the parent's box; on a text parent the engine's default outlines the glyphs
-- `UIStroke.Thickness`: always drawn around the parent's box; on a text parent the engine's default outlines the glyphs
-- `UIStroke.Transparency`: always drawn around the parent's box; on a text parent the engine's default outlines the glyphs
+- `UIStroke.Thickness`: around glyphs, drawn as copies of the text stamped out to the thickness, so joins are always round
+- `UIStroke.Transparency`: around glyphs, the stamped copies overlap, so a translucent outline reads more solid than the engine's
 
 <!-- END GENERATED: examples compatibility -->

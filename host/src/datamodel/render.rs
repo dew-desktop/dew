@@ -503,17 +503,36 @@ fn image_of(dom: &mut Dom, id: usize) -> Option<Image> {
     })
 }
 
-fn stroke_of(dom: &Dom, id: usize) -> Option<Stroke> {
+/// The `UIStroke`s on this element: the one around its box, then the one
+/// around its glyphs.
+///
+/// `ApplyStrokeMode` decides which. `Border` is always the box. `Contextual`,
+/// the default, is the glyphs on a text object and the box on anything else.
+/// The first stroke of each kind wins, so a text object can carry one of
+/// each.
+fn strokes_of(dom: &Dom, id: usize, class: &str) -> (Option<Stroke>, Option<Stroke>) {
+    let text_object = matches!(class, "TextLabel" | "TextButton" | "TextBox");
+    let (mut border, mut glyphs) = (None, None);
     for child in dom.children(id) {
-        if dom.class_of(child).as_deref() == Some("UIStroke") {
-            return Some(Stroke {
+        if dom.class_of(child).as_deref() != Some("UIStroke") {
+            continue;
+        }
+        let around_glyphs = text_object
+            && enum_name(dom, child, "ApplyStrokeMode", "ApplyStrokeMode") != Some("Border");
+        let slot = if around_glyphs {
+            &mut glyphs
+        } else {
+            &mut border
+        };
+        if slot.is_none() {
+            *slot = Some(Stroke {
                 colour: colour(dom, child, "Color"),
                 thickness: number(dom, child, "Thickness").unwrap_or(1.0),
                 alpha: alpha_from(dom, child, "Transparency"),
             });
         }
     }
-    None
+    (border, glyphs)
 }
 
 /// `GuiObject.BlendingMode`, an experimental Dew extension
@@ -2436,6 +2455,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
     };
     let dom = &*dom;
     let laid = laid.or_else(|| text_layout_of(dom, id, &class, placed.rect));
+    let (stroke, glyph_stroke) = strokes_of(dom, id, &class);
     Node {
         id: sequence,
         name: dom.name_of(id).unwrap_or_default(),
@@ -2455,7 +2475,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
             w: c.w,
             h: c.h,
         }),
-        stroke: stroke_of(dom, id),
+        stroke,
         gradient: gradient_of(dom, id),
         text: if draws_text(&class) {
             text_for(dom, id, &class)
@@ -2488,6 +2508,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
                 .clamp(0.0, 1.0),
         image,
         blend_mode: blend_mode_of(dom, id),
+        glyph_stroke,
     }
 }
 
@@ -2789,6 +2810,51 @@ mod tests {
             "text_alpha was {}",
             f.nodes[0].text_alpha
         );
+    }
+
+    /// `ApplyStrokeMode`: `Contextual` outlines a text object's glyphs and any
+    /// other object's box, and `Border` always outlines the box.
+    #[test]
+    fn apply_stroke_mode_picks_the_glyphs_or_the_box() {
+        let f = render(
+            r#"
+            local function add(class, x, mode)
+                local g = Instance.new(class)
+                g.Name = class .. (mode or "Default")
+                g.Position = UDim2.fromOffset(x, 0)
+                g.Size = UDim2.fromOffset(40, 20)
+                g.Parent = root
+                local s = Instance.new("UIStroke")
+                s.Thickness = 3
+                if mode then
+                    s.ApplyStrokeMode = Enum.ApplyStrokeMode[mode]
+                end
+                s.Parent = g
+            end
+            add("TextLabel", 0, nil)
+            add("TextBox", 50, "Contextual")
+            add("TextButton", 100, "Border")
+            add("Frame", 150, nil)
+        "#,
+            300.0,
+            100.0,
+        );
+        let node = |name: &str| {
+            f.nodes
+                .iter()
+                .find(|n| n.name == name)
+                .unwrap_or_else(|| panic!("{name} is drawn"))
+        };
+        for name in ["TextLabelDefault", "TextBoxContextual"] {
+            let n = node(name);
+            assert!(n.stroke.is_none(), "{name} outlined its box");
+            assert_eq!(n.glyph_stroke.as_ref().map(|s| s.thickness), Some(3.0));
+        }
+        for name in ["TextButtonBorder", "FrameDefault"] {
+            let n = node(name);
+            assert!(n.glyph_stroke.is_none(), "{name} outlined glyphs");
+            assert_eq!(n.stroke.as_ref().map(|s| s.thickness), Some(3.0));
+        }
     }
 
     #[test]

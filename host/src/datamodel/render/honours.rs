@@ -246,12 +246,18 @@ fn corner(property: &str) -> Honour {
 }
 
 fn stroke(property: &str) -> Honour {
-    const AROUND_THE_BOX: &str =
-        "always drawn around the parent's box; on a text parent the engine's default outlines the glyphs";
     match property {
-        "Parent" => Honour::Implemented,
-        // `stroke_of`. `Enabled` is not read, so a disabled stroke still draws.
-        "Color" | "Thickness" | "Transparency" => Honour::Partial(AROUND_THE_BOX),
+        // `strokes_of`, which picks the box or the glyphs. `Enabled` is not
+        // read, so a disabled stroke still draws.
+        "Parent" | "Color" | "ApplyStrokeMode" => Honour::Implemented,
+        "Thickness" => Honour::Partial(
+            "around glyphs, drawn as copies of the text stamped out to the thickness, \
+             so joins are always round",
+        ),
+        "Transparency" => Honour::Partial(
+            "around glyphs, the stamped copies overlap, so a translucent outline reads \
+             more solid than the engine's",
+        ),
         _ => Honour::Absent,
     }
 }
