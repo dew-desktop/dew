@@ -763,3 +763,30 @@ fn a_long_line_scrolls_to_keep_the_caret_in_view() {
         "back at the start"
     );
 }
+
+/// Idle, a focused box costs one repaint per blink flip: 180 frames at 60 Hz
+/// over three seconds paint the first frame and five flips, and nothing else.
+/// This is the frame loop's own test, `take_dirty` or `caret_due`, run on a
+/// simulated clock.
+#[test]
+fn an_idle_focused_box_repaints_only_when_the_caret_flips() {
+    let Some(mut h) = Harness::new(PROBE) else {
+        return;
+    };
+    h.click_at(5);
+    let mut painted = 0;
+    for frame in 0..180u64 {
+        let due = {
+            let mut guard = h.dom.lock().expect("dom");
+            shim::age_blink(&mut guard, frame * 1000 / 60);
+            let caret = shim::caret_due_in(&guard, 0);
+            guard.take_dirty() || caret
+        };
+        if due {
+            painted += 1;
+            super::render::frame_of(&h.dom, h.root, SIZE.0, SIZE.1);
+        }
+    }
+    eprintln!("180 frames over 3 s at 60 Hz, painted {painted}");
+    assert_eq!(painted, 6, "the first frame and five flips");
+}
