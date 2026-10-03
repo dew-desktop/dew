@@ -120,7 +120,7 @@ flowchart LR
 - **Engine-independent DataModel in Rust.** The class hierarchy, properties, and defaults are driven by an engine reflection database, allowing the host to statically reject properties that do not exist on a class before values reach the layout pipeline. It covers 139 of 139 in-scope GUI properties.
 - **Native rendering pipeline.** Layout, text shaping, strokes, gradients, clipping, and scrolling go through a high-performance CPU rasteriser built on [`vello_cpu`](https://github.com/linebender/vello), with an optional GPU backend via `vello_hybrid` and `wgpu`.
 - **Verified layout conformance.** A shared [conformance suite](https://github.com/project-aether-ui/aether/tree/main/conformance) runs data-driven layout cases across implementations, asserting exact bounding boxes, text bounds, and flex allocations. A differential gallery validates that property mutations produce expected pixel changes.
-- **Microsecond frame budgets.** Release builds render frames in approximately 1.7 ms. The built-in `--stats` flag profiles frame time across layout, shaping, and rasterization passes.
+- **Fast frame budgets.** Release builds render frames in approximately 1.7 ms. The built-in `--stats` flag profiles frame time across layout, shaping, and rasterization passes.
 - **Headless testability in CI.** `dew snapshot` renders arbitrary applet frames directly to PNG without opening a window, allowing comprehensive integration tests to run in automated CI pipelines on Windows and Linux.
 
 ## Development
