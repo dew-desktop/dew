@@ -383,6 +383,29 @@ pub struct Node {
     /// has none. `thickness` is how far the outline reaches past the glyph
     /// edge, in pixels.
     pub glyph_stroke: Option<Stroke>,
+    /// The caret and selection of a focused `TextBox`, already placed.
+    ///
+    /// HOST FIELD, like `text_layout`, which these rectangles are measured
+    /// from: the host knows which box holds focus and where its cursor is,
+    /// and a display list built in Luau knows neither.
+    pub editing: Option<Editing>,
+}
+
+/// What a focused `TextBox` paints over and under its text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Editing {
+    /// Clips the text, the highlight and the caret, when the text is
+    /// scrolled sideways inside its box. `None` when nothing overflows.
+    pub clip: Option<Rect>,
+    /// One rectangle per line the selection covers, painted behind the
+    /// glyphs in `highlight`.
+    pub selection: Vec<Rect>,
+    pub highlight: Rgb,
+    /// The colour glyphs inside the selection are drawn in.
+    pub selected_text: Rgb,
+    /// The caret, when it is in the visible half of its blink.
+    pub caret: Option<Rect>,
+    pub caret_colour: Rgb,
 }
 
 #[derive(Debug, Clone)]
@@ -456,6 +479,7 @@ impl Frame {
         "text_stroke_colour",
         "text_stroke_alpha",
         "glyph_stroke",
+        "editing",
     ];
 }
 
@@ -575,6 +599,7 @@ impl Node {
             text_stroke_colour: None,
             text_stroke_alpha: 0.0,
             glyph_stroke: None,
+            editing: None,
         })
     }
 }
@@ -685,6 +710,7 @@ mod tests {
             text_stroke_colour: None,
             text_stroke_alpha: 0.0,
             glyph_stroke: None,
+            editing: None,
         };
         let Node {
             id: _,
@@ -710,6 +736,7 @@ mod tests {
             text_stroke_colour: _,
             text_stroke_alpha: _,
             glyph_stroke: _,
+            editing: _,
         } = node;
 
         // `rect` is four keys and the rest are one each; the names are Live.luau's
@@ -741,6 +768,7 @@ mod tests {
             "text_stroke_colour",
             "text_stroke_alpha",
             "glyph_stroke",
+            "editing",
         ];
         for key in named {
             assert!(

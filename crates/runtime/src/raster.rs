@@ -259,6 +259,7 @@ impl Painter for RasterPainter {
                         align_y: node.text_align_y.unwrap_or(Align::Center),
                         truncate: false,
                         line_height: 1.0,
+                        stops: false,
                     },
                 );
                 match &computed {
