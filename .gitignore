@@ -23,6 +23,8 @@ Thumbs.db
 
 # rendered widget snapshots
 *.png
+!assets/*.png
+!.github/assets/*.png
 
 # A MOD'S OWN ASSETS ARE NOT SNAPSHOTS, and the rule above cannot tell them
 # apart. `--snapshot` output is a build artefact that lands anywhere; a file a mod

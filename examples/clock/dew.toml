@@ -1,0 +1,10 @@
+# Desktop Clock
+#
+# A minimalist floating desktop clock with live seconds, draggable positioning,
+# and 12h/24h format toggling.
+
+id = "clock"
+name = "Desktop Clock"
+description = "A minimalist, draggable desktop clock with live seconds and format toggle"
+
+permissions = ["widget", "storage"]
