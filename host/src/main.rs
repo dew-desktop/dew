@@ -3337,9 +3337,13 @@ fn install_test_surface(
     //  pointer is what remembers where that was; a fresh one per call forgot
     //  every press, so a plain `GuiButton` never fired `Activated` here.
     let shared = Arc::new(Mutex::new(dew_host::datamodel::input::Pointer::default()));
+    //  THE SIZE THE LAST `Settle` LAID OUT AT, which the pointer hit-tests
+    //  at. At any other size it finds elements where the test never saw them.
+    let settled = Arc::new(Mutex::new((0.0f32, 0.0f32)));
     let pointer = lua.create_table()?;
     let surface_dom = dom.clone();
     let moving = shared.clone();
+    let moving_size = settled.clone();
     pointer.set(
         "Move",
         lua.create_function(move |lua, (x, y): (f32, f32)| {
@@ -3348,7 +3352,7 @@ fn install_test_surface(
                 lua,
                 dom: &surface_dom,
                 root,
-                size: (0.0, 0.0),
+                size: *moving_size.lock().expect("size"),
             };
             let _ = moving.lock().expect("pointer").moved(&surface, x, y);
             Ok(())
@@ -3358,6 +3362,7 @@ fn install_test_surface(
     for (name, down) in [("Down", true), ("Up", false)] {
         let surface_dom = dom.clone();
         let pressing = shared.clone();
+        let pressing_size = settled.clone();
         pointer.set(
             name,
             lua.create_function(move |lua, (x, y, button): (f32, f32, Option<usize>)| {
@@ -3368,7 +3373,7 @@ fn install_test_surface(
                     lua,
                     dom: &surface_dom,
                     root,
-                    size: (0.0, 0.0),
+                    size: *pressing_size.lock().expect("size"),
                 };
                 let kind = match button {
                     1 => dew_host::datamodel::input::Button::Right,
@@ -3405,6 +3410,7 @@ fn install_test_surface(
                 ),
                 None => (0.0, 0.0),
             };
+            *settled.lock().expect("size") = (w, h);
             let mut guard = settle_dom.lock().expect("dom");
             dew_host::datamodel::render::commit_geometry(&mut guard, root, w, h);
             Ok(())
@@ -4117,5 +4123,42 @@ mod tests {
             Command::Help { subcommand } => assert_eq!(subcommand.as_deref(), Some("conformance")),
             _ => panic!("expected Help command"),
         }
+    }
+
+    /// `DewTest.Pointer` hit-tests at the size the last `Settle` laid out at.
+    /// A button placed by scale sits at the middle of that size, and only
+    /// there, so a click on it lands only when the pointer uses that size.
+    #[test]
+    fn the_test_pointer_hits_at_the_settled_size() {
+        let lua = mlua::Lua::new();
+        let dom = datamodel::SharedDom::default();
+        datamodel::install(&lua, &dom).expect("install");
+        datamodel::install_vocabulary(&lua).expect("vocabulary");
+        let state: crate::capabilities::Shared =
+            Arc::new(Mutex::new(crate::capabilities::HostState::default()));
+        install_test_surface(&lua, &dom, &state).expect("test surface");
+
+        let clicked: bool = lua
+            .load(
+                r#"
+                local button = Instance.new("TextButton")
+                button.AnchorPoint = Vector2.new(0.5, 0.5)
+                button.Position = UDim2.fromScale(0.5, 0.5)
+                button.Size = UDim2.fromOffset(80, 40)
+                button.Parent = DewTest.Root
+                local clicked = false
+                button.Activated:Connect(function()
+                    clicked = true
+                end)
+                DewTest.Settle({ width = 400, height = 300 })
+                DewTest.Pointer.Move(200, 150)
+                DewTest.Pointer.Down(200, 150)
+                DewTest.Pointer.Up(200, 150)
+                return clicked
+            "#,
+            )
+            .eval()
+            .expect("click");
+        assert!(clicked, "a click at the button's centre did not reach it");
     }
 }

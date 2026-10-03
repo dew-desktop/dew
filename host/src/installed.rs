@@ -23,9 +23,22 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn dew_dir() -> Option<PathBuf> {
-    let dir = dirs::data_local_dir()?.join("Dew");
+    let dir = data_root()?.join("Dew");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+#[cfg(not(test))]
+fn data_root() -> Option<PathBuf> {
+    dirs::data_local_dir()
+}
+
+// A TEST BUILD NEVER SEES THE USER'S DATA. Everything this file and its
+// callers write under `dew_dir` lands in a scratch root instead, so running
+// the suite cannot rewrite a real install while a real service reads it.
+#[cfg(test)]
+fn data_root() -> Option<PathBuf> {
+    Some(std::env::temp_dir().join("dew-host-tests"))
 }
 
 fn applets_dir() -> Option<PathBuf> {

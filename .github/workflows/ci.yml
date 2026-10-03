@@ -421,7 +421,7 @@ jobs:
       - name: Run the Rust tests, and fail if the suite shrank
         shell: bash
         run: |
-          FLOOR=352
+          FLOOR=605
           out=$(cargo test --workspace 2>&1) || { echo "$out"; exit 1; }
           echo "$out"
           total=$(echo "$out" | awk '/^test result:/ {p += $4} END {print p+0}')

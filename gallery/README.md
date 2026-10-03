@@ -20,8 +20,8 @@ day this was written.
 
 ## Two numbers, and the second is the one that matters
 
-    DEMONSTRATED: 190 of 471   a scene SETS the property on that class
-    DIFFERENTIAL: 180 of 471   changing it on that class MOVED PIXELS
+    DEMONSTRATED: 196 of 471   a scene SETS the property on that class
+    DIFFERENTIAL: 202 of 471   changing it on that class MOVED PIXELS
 
 Both count (class, property) pairs, not names. `Padding` moving pixels on a
 `UIListLayout` says nothing about `Padding` on a `UITableLayout`, and a count by

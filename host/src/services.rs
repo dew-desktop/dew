@@ -778,23 +778,16 @@ fn install_core(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
     let text = lua.create_table()?;
     text.set(
         "Measure",
-        lua.create_function(|_, (text, size, font): (String, f32, Option<String>)| {
-            let face = font.as_deref().and_then(face_for_name);
-            if font.is_some() && face.is_none() {
-                note_once_font(font.as_deref().unwrap());
-            }
-            measure_in(&text, size, face).map_err(LuaError::runtime)
+        lua.create_function(|_, (text, size, font): (String, f32, LuaValue)| {
+            measure_in(&text, size, face_for_value(&font)).map_err(LuaError::runtime)
         })?,
     )?;
     text.set(
         "MeasureWrapped",
         lua.create_function(
-            |_, (text, size, max_width, font): (String, f32, f32, Option<String>)| {
-                let face = font.as_deref().and_then(face_for_name);
-                if font.is_some() && face.is_none() {
-                    note_once_font(font.as_deref().unwrap());
-                }
-                measure_wrapped_in(&text, size, max_width, face).map_err(LuaError::runtime)
+            |_, (text, size, max_width, font): (String, f32, f32, LuaValue)| {
+                measure_wrapped_in(&text, size, max_width, face_for_value(&font))
+                    .map_err(LuaError::runtime)
             },
         )?,
     )?;
@@ -874,6 +867,29 @@ fn install_core(lua: &Lua, clock: &SharedClock) -> LuaResult<()> {
 /// print thousands of lines a second and bury itself. `Assets::note_once` keeps
 /// its set on the `Dom` because assets are per mod; a face is per process, so
 /// this set is too.
+/// The face a `desktop.Text` call's font argument names: a `Font`, an
+/// `Enum.Font` item, or a name. Nil, or a value that names no face, measures
+/// in [`default_face`].
+fn face_for_value(font: &LuaValue) -> Option<Face<Font>> {
+    if font.is_nil() {
+        return None;
+    }
+    let face = match crate::datamodel::font_of(font) {
+        Some(font) => face_for(&font),
+        None => font
+            .as_string()
+            .and_then(|name| face_for_name(&name.to_string_lossy())),
+    };
+    if face.is_none() {
+        let named = font
+            .as_string()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_else(|| font.type_name().to_string());
+        note_once_font(&named);
+    }
+    face
+}
+
 fn note_once_font(name: &str) {
     static SAID: Mutex<Option<BTreeSet<String>>> = Mutex::new(None);
     let mut guard = SAID.lock().expect("said");
@@ -1290,6 +1306,41 @@ mod tests {
         let (lua, _clock) = vm();
         let got: String = lua.load("return desktop.Clock.Name").eval().expect("name");
         assert_eq!(got, "DewFrame");
+    }
+
+    /// `desktop.Text.Measure` measures in the face its font argument names,
+    /// whichever of the forms a label's `Font` or `FontFace` takes it in.
+    #[test]
+    fn a_font_argument_selects_the_face_measured_in() {
+        if !has_face() {
+            return;
+        }
+        let lua = Lua::new();
+        let clock: SharedClock = Arc::new(Mutex::new(Clock::default()));
+        install(&lua, &clock).expect("install");
+        crate::datamodel::install(&lua, &crate::datamodel::SharedDom::default())
+            .expect("datamodel");
+        crate::datamodel::install_vocabulary(&lua).expect("vocabulary");
+        let (code, sans, code_by_name, mono, mono_by_name): (f32, f32, f32, f32, f32) = lua
+            .load(
+                r#"
+                local text = "Hello world"
+                local mono = Font.new("rbxasset://fonts/families/RobotoMono.json")
+                return desktop.Text.Measure(text, 14, Enum.Font.Code),
+                    desktop.Text.Measure(text, 14, Enum.Font.SourceSans),
+                    desktop.Text.Measure(text, 14, "Code"),
+                    desktop.Text.Measure(text, 14, mono),
+                    desktop.Text.Measure(text, 14, "RobotoMono")
+            "#,
+            )
+            .eval()
+            .expect("measure");
+        assert_ne!(code, sans, "two families measured the same width");
+        assert_eq!(
+            code, code_by_name,
+            "an Enum.Font item and its name disagree"
+        );
+        assert_eq!(mono, mono_by_name, "a Font and its family name disagree");
     }
 }
 
