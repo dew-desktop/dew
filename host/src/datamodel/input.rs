@@ -451,43 +451,38 @@ fn undo(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
 
 /// Where Ctrl+C, Ctrl+X and Ctrl+V read and write.
 ///
-/// `Memory` IS FOR TESTS, so a suite that copies does not overwrite whatever
-/// the person running it had copied.
+/// THE PLATFORM'S IS HANDED IN by whoever owns the window, as two functions,
+/// so this file names no window crate. Until then, and in every test, it is
+/// `Memory`: a suite that copies does not overwrite whatever the person
+/// running it had copied.
 #[derive(Debug, Clone)]
 pub enum Clipboard {
-    System,
+    System {
+        read: fn() -> Option<String>,
+        write: fn(&str) -> bool,
+    },
     Memory(String),
 }
 
 impl Default for Clipboard {
     fn default() -> Self {
-        if cfg!(windows) {
-            Clipboard::System
-        } else {
-            Clipboard::Memory(String::new())
-        }
+        Clipboard::Memory(String::new())
     }
 }
 
 impl Clipboard {
     fn get(&self) -> Option<String> {
         match self {
-            #[cfg(windows)]
-            Clipboard::System => dew_window::clipboard_text(),
-            #[cfg(not(windows))]
-            Clipboard::System => None,
+            Clipboard::System { read, .. } => read(),
             Clipboard::Memory(text) => Some(text.clone()),
         }
     }
 
     fn set(&mut self, text: &str) {
         match self {
-            #[cfg(windows)]
-            Clipboard::System => {
-                dew_window::set_clipboard_text(text);
+            Clipboard::System { write, .. } => {
+                write(text);
             }
-            #[cfg(not(windows))]
-            Clipboard::System => {}
             Clipboard::Memory(held) => *held = text.to_string(),
         }
     }

@@ -11,7 +11,6 @@
 
 use super::input::{Button, Pointer, Surface};
 use super::{handle, install, install_vocabulary, SharedDom};
-use dew_runtime::{Painter, RasterPainter};
 use mlua::prelude::*;
 
 /// What these tests reach that is not a guest's to reach.
@@ -36,7 +35,7 @@ mod shim {
     pub fn clipboard(p: &Pointer) -> String {
         match &p.clipboard {
             Clipboard::Memory(text) => text.clone(),
-            Clipboard::System => String::new(),
+            Clipboard::System { .. } => String::new(),
         }
     }
 
@@ -223,14 +222,7 @@ impl Harness {
 
     /// Lay out and paint, white background, BGRA.
     fn paint(&self) -> Vec<u8> {
-        let face = crate::services::default_face().expect("face");
-        let frame = super::render::frame_of(&self.dom, self.root, SIZE.0, SIZE.1);
-        let mut painter =
-            RasterPainter::new(SIZE.0 as u32, SIZE.1 as u32, dew_raster::Backend::VelloCpu)
-                .expect("surface")
-                .with_face(face);
-        painter.paint_frame(&frame, Some(dew_runtime::frame::Rgb(255, 255, 255)));
-        painter.canvas_mut().bgra().expect("pixels").to_vec()
+        super::render::paint_white(&self.dom, self.root, SIZE.0, SIZE.1).expect("pixels")
     }
 }
 

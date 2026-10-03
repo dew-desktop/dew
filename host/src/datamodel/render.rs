@@ -2924,6 +2924,25 @@ fn commit(
     (texts, solved.items)
 }
 
+/// Lay out and paint the tree under `root` on white, as BGRA pixels, for a
+/// test that asserts on what is drawn. `None` on a machine with no font.
+#[cfg(test)]
+pub(crate) fn paint_white(
+    dom: &SharedDom,
+    root: usize,
+    width: f32,
+    height: f32,
+) -> Option<Vec<u8>> {
+    use dew_runtime::{Painter, RasterPainter};
+    let face = crate::services::default_face()?;
+    let frame = frame_of(dom, root, width, height);
+    let mut painter =
+        RasterPainter::new(width as u32, height as u32, dew_raster::Backend::VelloCpu)?
+            .with_face(face);
+    painter.paint_frame(&frame, Some(Rgb(255, 255, 255)));
+    Some(painter.canvas_mut().bgra()?.to_vec())
+}
+
 /// Render whatever is under `root` in a shared DOM.
 pub fn frame_of(dom: &SharedDom, root: usize, width: f32, height: f32) -> Frame {
     let mut guard = dom.lock().expect("dom");

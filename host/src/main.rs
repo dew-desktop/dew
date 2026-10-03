@@ -709,7 +709,19 @@ fn create_renderer(
             width: width as f32,
             height: height as f32,
             lua: vm.lua().clone(),
-            pointer: input::Pointer::default(),
+            pointer: {
+                #[allow(unused_mut)]
+                let mut pointer = input::Pointer::default();
+                // THE WINDOWS CLIPBOARD, for a `TextBox`'s Ctrl+C, X and V.
+                #[cfg(windows)]
+                {
+                    pointer.clipboard = input::Clipboard::System {
+                        read: dew_window::clipboard_text,
+                        write: dew_window::set_clipboard_text,
+                    };
+                }
+                pointer
+            },
             clock: clock.clone(),
         }),
     }
