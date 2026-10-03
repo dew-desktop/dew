@@ -154,6 +154,10 @@ pub struct Block<'a> {
     /// `LineHeight`, as a multiple of the line box: the step from one line's
     /// top to the next.
     pub line_height: f32,
+    /// Whether each line should carry its caret [`Line::stops`]. Only an
+    /// edited `TextBox` asks, because finding them measures every prefix of
+    /// the line.
+    pub stops: bool,
 }
 
 /// One visible line, placed.
@@ -164,6 +168,48 @@ pub struct Line {
     pub x: f32,
     pub y: f32,
     pub width: f32,
+    /// The top of this line's box, which `y` is centred in. A caret and a
+    /// selection highlight span the box, not the glyphs.
+    pub top: f32,
+    /// The byte range of the laid out string this line was broken from. A
+    /// wrapped line leaves out the spaces it broke at, so consecutive lines
+    /// need not touch.
+    pub start: usize,
+    pub end: usize,
+    /// Every character boundary from `start` to `end`, as a byte offset into
+    /// the laid out string and the pen position there, measured from `x`.
+    /// Empty unless [`Block::stops`] asked for them. These are the same
+    /// advances the line was measured with, so a caret placed from them sits
+    /// where the painter put the glyphs.
+    pub stops: Vec<(usize, f32)>,
+}
+
+impl Line {
+    /// The pen position of byte offset `at`, measured from `x`: the nearest
+    /// stop at or before it, the line's start before it, its end past it.
+    pub fn stop_x(&self, at: usize) -> f32 {
+        let mut x = 0.0;
+        for &(offset, sx) in &self.stops {
+            if offset > at {
+                break;
+            }
+            x = sx;
+        }
+        x
+    }
+
+    /// The byte offset of the stop nearest to `x`, measured from the line's
+    /// own `x`.
+    pub fn nearest_stop(&self, x: f32) -> usize {
+        let mut best = (self.start, f32::INFINITY);
+        for &(offset, sx) in &self.stops {
+            let d = (sx - x).abs();
+            if d < best.1 {
+                best = (offset, d);
+            }
+        }
+        best.0
+    }
 }
 
 /// A laid-out label: what is drawn, and what `TextBounds` and `TextFits` say.
@@ -192,47 +238,105 @@ pub struct TextLayout {
 /// that grew it.
 const SLACK: f32 = 0.01;
 
+/// One broken line: its text, its width and the byte range of `text` it
+/// came from.
+struct Span {
+    text: String,
+    width: f32,
+    start: usize,
+    end: usize,
+}
+
 /// Break `text` into lines with their widths.
 ///
 /// Paragraphs split on `\n`, wrapped or not. With a width, words are packed
 /// greedily against it, and a word wider than the width on its own is broken
 /// between characters rather than left to overflow.
+#[cfg(test)]
 fn break_lines<F: Advance>(
     font: &F,
     text: &str,
     px: f32,
     max_width: Option<f32>,
 ) -> Option<Vec<(String, f32)>> {
+    Some(
+        break_spans(font, text, px, max_width)?
+            .into_iter()
+            .map(|span| (span.text, span.width))
+            .collect(),
+    )
+}
+
+/// The lines `text` breaks into, keeping where in `text` each came from.
+fn break_spans<F: Advance>(
+    font: &F,
+    text: &str,
+    px: f32,
+    max_width: Option<f32>,
+) -> Option<Vec<Span>> {
     let Some(max_width) = max_width.filter(|w| *w > 0.0) else {
-        return text
-            .split('\n')
-            .map(|line| Some((line.to_string(), font.advance(px, line)?)))
-            .collect();
+        let mut offset = 0;
+        let mut out = Vec::new();
+        for line in text.split('\n') {
+            out.push(Span {
+                text: line.to_string(),
+                width: font.advance(px, line)?,
+                start: offset,
+                end: offset + line.len(),
+            });
+            offset += line.len() + 1;
+        }
+        return Some(out);
     };
 
-    let mut lines = Vec::new();
+    let mut lines: Vec<Span> = Vec::new();
+    let mut paragraph_at = 0;
     for paragraph in text.split('\n') {
         let before = lines.len();
         let mut current = String::new();
         let mut current_w = 0.0_f32;
+        let mut current_start = paragraph_at;
+        let mut current_end = paragraph_at;
 
-        for word in paragraph.split(' ').filter(|w| !w.is_empty()) {
+        let mut word_at = paragraph_at;
+        for word in paragraph.split(' ') {
+            let at = word_at;
+            word_at += word.len() + 1;
+            if word.is_empty() {
+                continue;
+            }
             let word_w = font.advance(px, word)?;
             if word_w > max_width {
                 if !current.is_empty() {
-                    lines.push((std::mem::take(&mut current), current_w));
+                    lines.push(Span {
+                        text: std::mem::take(&mut current),
+                        width: current_w,
+                        start: current_start,
+                        end: current_end,
+                    });
                 }
-                for ch in word.chars() {
+                for (i, ch) in word.char_indices() {
+                    let ch_at = at + i;
                     let candidate = format!("{current}{ch}");
                     let candidate_w = font.advance(px, &candidate)?;
                     if current.is_empty() || candidate_w <= max_width {
+                        if current.is_empty() {
+                            current_start = ch_at;
+                        }
                         current = candidate;
                         current_w = candidate_w;
                     } else {
-                        lines.push((std::mem::take(&mut current), current_w));
+                        lines.push(Span {
+                            text: std::mem::take(&mut current),
+                            width: current_w,
+                            start: current_start,
+                            end: current_end,
+                        });
                         current = ch.to_string();
                         current_w = font.advance(px, &current)?;
+                        current_start = ch_at;
                     }
+                    current_end = ch_at + ch.len_utf8();
                 }
                 continue;
             }
@@ -240,6 +344,8 @@ fn break_lines<F: Advance>(
             if current.is_empty() {
                 current = word.to_string();
                 current_w = word_w;
+                current_start = at;
+                current_end = at + word.len();
                 continue;
             }
             let candidate = format!("{current} {word}");
@@ -247,20 +353,73 @@ fn break_lines<F: Advance>(
             if candidate_w <= max_width {
                 current = candidate;
                 current_w = candidate_w;
+                current_end = at + word.len();
             } else {
-                lines.push((std::mem::take(&mut current), current_w));
+                lines.push(Span {
+                    text: std::mem::take(&mut current),
+                    width: current_w,
+                    start: current_start,
+                    end: current_end,
+                });
                 current = word.to_string();
                 current_w = word_w;
+                current_start = at;
+                current_end = at + word.len();
             }
         }
 
         // A paragraph that never pushed a line still owes one: an empty
         // paragraph between two newlines is a blank line, not nothing.
         if !current.is_empty() || lines.len() == before {
-            lines.push((current, current_w));
+            if current.is_empty() {
+                current_start = paragraph_at;
+                current_end = paragraph_at;
+            }
+            lines.push(Span {
+                text: current,
+                width: current_w,
+                start: current_start,
+                end: current_end,
+            });
         }
+        paragraph_at += paragraph.len() + 1;
     }
     Some(lines)
+}
+
+/// The caret stops of one line: every character boundary of `source` from
+/// `start` to `end`, with the pen position of the drawn `text` there.
+///
+/// THE DRAWN TEXT IS WALKED BESIDE THE SOURCE, because they differ in two
+/// ways. A wrapped line keeps one space where the source had several, so an
+/// extra source space takes no width; and a truncated line ends early in an
+/// ellipsis, so every boundary past the cut sits at the cut.
+fn stops_of<F: Advance>(
+    font: &F,
+    px: f32,
+    source: &str,
+    start: usize,
+    end: usize,
+    text: &str,
+) -> Vec<(usize, f32)> {
+    let mut stops = vec![(start, 0.0)];
+    let mut drawn = text.char_indices().peekable();
+    let mut x = 0.0;
+    let mut matching = true;
+    for (i, ch) in source[start..end].char_indices() {
+        if matching {
+            match drawn.peek() {
+                Some(&(j, d)) if d == ch => {
+                    drawn.next();
+                    x = font.advance(px, &text[..j + d.len_utf8()]).unwrap_or(x);
+                }
+                _ if ch == ' ' => {}
+                _ => matching = false,
+            }
+        }
+        stops.push((start + i + ch.len_utf8(), x));
+    }
+    stops
 }
 
 /// The size `text` takes with every line drawn: the widest line, and the
@@ -284,8 +443,8 @@ pub fn measure_spaced<F: Advance>(
     wrap_width: Option<f32>,
     line_height_mul: f32,
 ) -> Option<(f32, f32)> {
-    let lines = break_lines(&face.font, text, face.glyph_px(text_size), wrap_width)?;
-    let width = lines.iter().fold(0.0_f32, |w, (_, lw)| w.max(*lw));
+    let lines = break_spans(&face.font, text, face.glyph_px(text_size), wrap_width)?;
+    let width = lines.iter().fold(0.0_f32, |w, span| w.max(span.width));
     let base_h = face.effective_em(text_size);
     let height = if lines.is_empty() {
         0.0
@@ -311,7 +470,7 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
     let base_line_h = face.effective_em(block.text_size);
     let glyph_px = face.glyph_px(block.text_size);
     let content = block.content;
-    let all = break_lines(
+    let all = break_spans(
         &face.font,
         block.text,
         glyph_px,
@@ -356,9 +515,9 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
         .iter()
         .take(visible)
         .enumerate()
-        .map(|(i, (text, width))| {
-            let mut line_text = text.clone();
-            let mut line_width = *width;
+        .map(|(i, span)| {
+            let mut line_text = span.text.clone();
+            let mut line_width = span.width;
             let cut = line_width > content.w + SLACK || (dropped && i + 1 == visible);
             if block.truncate && cut && content.w > 0.0 {
                 if let Some(ellipsis_w) = face.font.advance(glyph_px, ellipsis) {
@@ -383,6 +542,13 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
                     }
                 }
             }
+            let stops = if block.stops {
+                stops_of(
+                    &face.font, glyph_px, block.text, span.start, span.end, &line_text,
+                )
+            } else {
+                Vec::new()
+            };
             Line {
                 text: line_text,
                 x: match block.align_x {
@@ -392,12 +558,16 @@ pub fn lay_out<F: Advance>(face: &Face<F>, block: &Block) -> Option<TextLayout> 
                 },
                 y: face.glyph_top(top + i as f32 * step, base_line_h, glyph_px),
                 width: line_width,
+                top: top + i as f32 * step,
+                start: span.start,
+                end: span.end,
+                stops,
             }
         })
         .collect();
 
     let drawn_w = lines.iter().fold(0.0_f32, |w, line| w.max(line.width));
-    let widest = all.iter().fold(0.0_f32, |w, (_, lw)| w.max(*lw));
+    let widest = all.iter().fold(0.0_f32, |w, span| w.max(span.width));
     let fits = !truncated_any
         && visible == all.len()
         && widest <= content.w + SLACK
@@ -573,6 +743,7 @@ mod tests {
             align_y: y,
             truncate: false,
             line_height: 1.0,
+            stops: false,
         }
     }
 

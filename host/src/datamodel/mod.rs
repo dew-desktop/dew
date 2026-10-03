@@ -37,6 +37,9 @@
 mod cascade;
 mod collection_service;
 mod content;
+pub mod editing;
+#[cfg(test)]
+mod editing_tests;
 pub mod enums;
 pub mod extensions;
 pub mod input;
@@ -212,6 +215,10 @@ pub struct Dom {
     /// or `None` outside one. See `cascade::StyleMemo` for when it is open
     /// and what empties it.
     style_memo: cascade::StyleMemo,
+    /// The focused `TextBox`'s editing session, if a `TextBox` holds focus.
+    /// Started and ended by `input.rs` alongside the focus owner, read by the
+    /// renderer to place the caret. See `editing::Session`.
+    pub editing: Option<editing::Session>,
 }
 
 /// STARTS DIRTY. A tree nothing has touched still has to reach the screen once,
@@ -241,6 +248,7 @@ impl Default for Dom {
             viewport: (0, 0),
             now: 0.0,
             style_memo: cascade::StyleMemo::default(),
+            editing: None,
         }
     }
 }
@@ -686,6 +694,15 @@ impl Dom {
         std::mem::replace(&mut self.dirty, false)
     }
 
+    /// Whether the focused `TextBox`'s caret has blinked since the last
+    /// painted frame, so the frame loop owes exactly one repaint per flip and
+    /// none between them. A box the last frame did not draw owes nothing.
+    pub fn caret_due(&self, now: std::time::Instant) -> bool {
+        self.editing
+            .as_ref()
+            .is_some_and(|e| e.drawn && e.painted_shown != Some(e.shown_at(now)))
+    }
+
     /// The window's own current size, for a `@ViewportDisplaySize*`
     /// `StyleQuery` to read (milestone 29 part C3).
     pub fn viewport(&self) -> (u32, u32) {
@@ -770,6 +787,9 @@ impl Dom {
             // A destroyed `StyleDerive` forgets what it composed from, same
             // reasoning as the `StyleLink` line above.
             self.style_derives.remove(&current);
+            if self.editing.as_ref().is_some_and(|e| e.id == current) {
+                self.editing = None;
+            }
             stack.extend(node.children);
         }
         self.dirty = true;
@@ -906,6 +926,15 @@ pub fn default_value(class: &str, property: &str) -> Option<Variant> {
 
 /// The default a property reads before anything assigns it.
 fn default_for(class: &str, property: &str) -> Option<Variant> {
+    // A TEXTBOX NEVER FOCUSED READS CURSOR 1 AND NO SELECTION, measured in
+    // Studio's Play mode. The database's 0 and 0 are what a file stores.
+    if class == "TextBox" {
+        match property {
+            "CursorPosition" => return Some(Variant::Int32(1)),
+            "SelectionStart" => return Some(Variant::Int32(-1)),
+            _ => {}
+        }
+    }
     let db = rbx_reflection_database::get().ok()?;
     let mut cursor = Some(class);
     while let Some(c) = cursor {
@@ -1942,7 +1971,24 @@ impl UserData for InstanceRef {
                     }
                 };
 
-                let stored = coerce(&value, want, &class, &key)?;
+                let mut stored = coerce(&value, want, &class, &key)?;
+
+                // A TEXTBOX'S CURSOR IS CLAMPED TO ITS TEXT: -1, or a position
+                // from 1 to one past the end, on a character boundary. Moving
+                // it shows the caret and restarts its blink.
+                if class == "TextBox" && matches!(key.as_str(), "CursorPosition" | "SelectionStart")
+                {
+                    if let Variant::Int32(v) = stored {
+                        let text = match dom.property(this.id, "Text") {
+                            Some(Variant::String(t)) => t,
+                            _ => String::new(),
+                        };
+                        stored = Variant::Int32(editing::clamp_script(&text, v as i64) as i32);
+                    }
+                    if let Some(session) = dom.editing.as_mut().filter(|e| e.id == this.id) {
+                        session.restart_blink();
+                    }
+                }
 
                 // ASSIGNING THE SAME VALUE FIRES NOTHING, and this is a decision
                 // rather than an optimisation that fell out.

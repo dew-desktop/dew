@@ -22,7 +22,7 @@ without Aether**.
 excluded by decision, and 25 classes under `GuiObject` are in scope.
 
 Counted per class rather than by name, those properties make 471 (class,
-property) pairs. **264 of the 471 are rendered by Dew**, 24 of them
+property) pairs. **266 of the 471 are rendered by Dew**, 26 of them
 partially and 1 differently from the engine on purpose; see the two
 sections below.
 
@@ -50,7 +50,7 @@ Three different questions, asked of every property in scope for each class:
 
 | Class | In scope | Accepted by the host | Rendered by Dew | of which partial | Honoured by Aether's pipeline |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| `TextBox` | 45 | 45 | 29 | 4 | 20 |
+| `TextBox` | 45 | 45 | 31 | 6 | 20 |
 | `TextButton` | 42 | 42 | 27 | 4 | 20 |
 | `ImageButton` | 39 | 39 | 19 | 1 | 15 |
 | `ScrollingFrame` | 38 | 38 | 14 | 0 | 13 |
@@ -84,12 +84,14 @@ the table above can be traced to the names behind it.
 ### `TextBox`
 
 - **Rendered:** `AnchorPoint`, `AutomaticSize`, `BackgroundColor3`, `BackgroundTransparency`, `ClipsDescendants`, `LayoutOrder`, `LineHeight`, `Name`, `Parent`, `PlaceholderColor3`, `Position`, `Size`, `Text`, `TextColor3`, `TextScaled`, `TextSize`, `TextStrokeColor3`, `TextStrokeTransparency`, `TextTransparency`, `TextWrapped`, `TextXAlignment`, `TextYAlignment`, `Visible`, `ZIndex`
+- **Partial,** `CursorPosition`: drawn as the focused box's caret and selection; positions count UTF-8 bytes, and the engine's unit for non-ASCII text is not measured
 - **Partial,** `Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
 - **Partial,** `FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
 - **Partial,** `RichText`: markup is stripped and measured; bold, italic, colour and other tags are not drawn
-- **Partial,** `TextTruncate`: AtEnd is drawn with an ellipsis; SplitWord is drawn as None
+- **Partial,** `SelectionStart`: drawn as the focused box's caret and selection; positions count UTF-8 bytes, and the engine's unit for non-ASCII text is not measured
+- **Partial,** `TextTruncate`: AtEnd is drawn with an ellipsis, except while the box holds focus, when its whole line is shown and scrolled; SplitWord is drawn as None
 - **Diverges from the engine,** `PlaceholderText`: RichText markup is applied to a placeholder; the engine draws a placeholder's markup as written
-- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `ClearTextOnFocus`, `CursorPosition`, `InputSink`, `Interactable`, `MaxVisibleGraphemes`, `MultiLine`, `OpenTypeFeatures`, `Rotation`, `SelectionStart`, `SizeConstraint`, `TextDirection`, `TextEditable`
+- **Not rendered:** `Active`, `BorderColor3`, `BorderMode`, `BorderSizePixel`, `ClearTextOnFocus`, `InputSink`, `Interactable`, `MaxVisibleGraphemes`, `MultiLine`, `OpenTypeFeatures`, `Rotation`, `SizeConstraint`, `TextDirection`, `TextEditable`
 
 ### `TextButton`
 

@@ -47,6 +47,7 @@
 //! marks the tree dirty on the path that already does that; a handler that
 //! changes nothing leaves the screen alone.
 
+use super::editing::{self, Session};
 use super::render::{self, Box2};
 use super::{signal, SharedDom};
 use mlua::prelude::*;
@@ -158,6 +159,11 @@ pub fn is_focused(lua: &Lua, id: usize) -> LuaResult<bool> {
 /// - If `id` is already focused, returns immediately without firing `Focused`.
 /// - If another instance was focused, releases it and fires `FocusLost(false)`.
 /// - Drops the arena lock before firing any signal.
+///
+/// A `TextBox` KEEPS A CURSOR A SCRIPT GAVE IT. Aether sets `CursorPosition`
+/// on its proxy and then captures focus, and relies on typing landing there.
+/// A cursor of -1, which every focus loss leaves, starts at the end of the
+/// text. What the engine does here is not measured.
 pub fn capture_focus(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
     let focus = focus_of(lua)?;
     let prev = focus.get();
@@ -166,52 +172,327 @@ pub fn capture_focus(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
     }
 
     if let Some(old_id) = prev {
-        focus.set(None);
-        signal::fire(
-            dom,
-            old_id,
-            &signal::Kind::FocusLost,
-            &[LuaValue::Boolean(false)],
-        );
+        lose(lua, dom, &focus, old_id, false)?;
     }
 
     if !dom.lock().expect("dom").exists(id) {
         return Ok(());
     }
 
+    // A `FocusLost` HANDLER MAY HAVE FOCUSED SOMETHING, this box included.
     if let Some(other_id) = focus.get() {
         if other_id == id {
             return Ok(());
         }
-        focus.set(None);
-        signal::fire(
-            dom,
-            other_id,
-            &signal::Kind::FocusLost,
-            &[LuaValue::Boolean(false)],
-        );
+        lose(lua, dom, &focus, other_id, false)?;
     }
 
-    focus.set(Some(id));
-    signal::fire(dom, id, &signal::Kind::Focused, &[]);
-    Ok(())
+    gain(lua, dom, &focus, id, None)
 }
 
 /// Releases focus for `id` (or current focus if `id` matches).
 pub fn release_focus(lua: &Lua, dom: &SharedDom, id: usize, enter_pressed: bool) -> LuaResult<()> {
-    let _ = lua;
     let focus = focus_of(lua)?;
     if focus.get() != Some(id) {
         return Ok(());
     }
+    lose(lua, dom, &focus, id, enter_pressed)
+}
+
+/// One property write of an edit. [`apply`] makes them in order.
+enum Step {
+    Cursor(i64),
+    Selection(i64),
+    Text(String),
+}
+
+/// Write `steps` to `id` in order, firing each one's property changed signal
+/// with the lock released, and only for a value that changed.
+///
+/// THE ORDER IS THE ENGINE'S, and every caller builds its steps to match what
+/// was measured: the cursor before the selection, and `Text` last. Typing over
+/// a selection is `CursorPosition`, `SelectionStart`, `CursorPosition`,
+/// `Text`.
+///
+/// EVERY CALL SHOWS THE CARET. A move or an edit restarts the blink even when
+/// it changes nothing, as pressing Left at the start of the text does.
+fn apply(lua: &Lua, dom: &SharedDom, id: usize, steps: Vec<Step>) -> LuaResult<()> {
+    for step in steps {
+        let (key, value) = match step {
+            Step::Cursor(v) => ("CursorPosition", Variant::Int32(v as i32)),
+            Step::Selection(v) => ("SelectionStart", Variant::Int32(v as i32)),
+            Step::Text(t) => ("Text", Variant::String(t)),
+        };
+        let changed = {
+            let mut guard = dom.lock().expect("dom");
+            if !guard.exists(id) {
+                return Ok(());
+            }
+            if let Some(session) = guard.editing.as_mut().filter(|e| e.id == id) {
+                session.restart_blink();
+            }
+            if guard.property(id, key).as_ref() == Some(&value) {
+                false
+            } else {
+                if let Some(node) = guard.node_mut(id) {
+                    node.props.insert(key.to_string(), value);
+                }
+                guard.touch();
+                true
+            }
+        };
+        if changed {
+            signal::property_changed(lua, dom, id, key)?;
+        }
+    }
+    Ok(())
+}
+
+/// A whole number property, or -1.
+fn int_of(dom: &super::Dom, id: usize, key: &str) -> i64 {
+    match dom.property(id, key) {
+        Some(Variant::Int32(v)) => v as i64,
+        Some(Variant::Int64(v)) => v,
+        _ => -1,
+    }
+}
+
+/// A focused box's text, cursor byte and selection anchor byte.
+///
+/// A CURSOR OUTSIDE THE TEXT IS READ AT THE END. A script can set `Text`
+/// shorter, or `CursorPosition` to -1, while the box holds focus.
+fn edit_state(dom: &super::Dom, id: usize) -> (String, usize, Option<usize>) {
+    let text = text_of(dom, id);
+    let cursor = int_of(dom, id, "CursorPosition");
+    let at = if cursor >= 1 {
+        editing::byte_of(&text, cursor)
+    } else {
+        text.len()
+    };
+    let selection = int_of(dom, id, "SelectionStart");
+    let anchor = (selection >= 1)
+        .then(|| editing::byte_of(&text, selection))
+        .filter(|a| *a != at);
+    (text, at, anchor)
+}
+
+/// Gives `id` focus: its cursor first, then `Focused`, the engine's order.
+///
+/// `cursor` is where a click put it; `None` keeps a valid scripted cursor.
+fn gain(
+    lua: &Lua,
+    dom: &SharedDom,
+    focus: &Focus,
+    id: usize,
+    cursor: Option<i64>,
+) -> LuaResult<()> {
+    let steps = {
+        let mut guard = dom.lock().expect("dom");
+        if !guard.exists(id) {
+            return Ok(());
+        }
+        focus.set(Some(id));
+        if guard.class_of(id).as_deref() == Some("TextBox") {
+            let text = text_of(&guard, id);
+            let cursor = match cursor {
+                Some(c) => editing::clamp_cursor(&text, c),
+                None => {
+                    let c = int_of(&guard, id, "CursorPosition");
+                    if c >= 1 && c <= text.len() as i64 + 1 {
+                        editing::clamp_cursor(&text, c)
+                    } else {
+                        text.len() as i64 + 1
+                    }
+                }
+            };
+            guard.editing = Some(Session::new(id, cursor));
+            guard.touch();
+            vec![Step::Cursor(cursor)]
+        } else {
+            Vec::new()
+        }
+    };
+    apply(lua, dom, id, steps)?;
+    signal::fire(dom, id, &signal::Kind::Focused, &[]);
+    Ok(())
+}
+
+/// Takes focus from `id`: `CursorPosition` -1, `SelectionStart` -1, then
+/// `FocusLost(enter)`, the order measured on a click outside the box.
+fn lose(lua: &Lua, dom: &SharedDom, focus: &Focus, id: usize, enter: bool) -> LuaResult<()> {
     focus.set(None);
+    let text_box = {
+        let mut guard = dom.lock().expect("dom");
+        if guard.editing.as_ref().is_some_and(|e| e.id == id) {
+            guard.editing = None;
+            guard.touch();
+        }
+        guard.class_of(id).as_deref() == Some("TextBox")
+    };
+    if text_box {
+        apply(lua, dom, id, vec![Step::Cursor(-1), Step::Selection(-1)])?;
+    }
     signal::fire(
         dom,
         id,
         &signal::Kind::FocusLost,
-        &[LuaValue::Boolean(enter_pressed)],
+        &[LuaValue::Boolean(enter)],
     );
     Ok(())
+}
+
+/// Move a focused box's cursor to byte `to`. With `extend`, the selection
+/// grows from its anchor, which is the cursor if nothing was selected.
+fn move_to(lua: &Lua, dom: &SharedDom, id: usize, to: usize, extend: bool) -> LuaResult<()> {
+    let steps = {
+        let mut guard = dom.lock().expect("dom");
+        let (_, at, anchor) = edit_state(&guard, id);
+        if let Some(session) = guard.editing.as_mut().filter(|e| e.id == id) {
+            session.typing = false;
+        }
+        let selection = if extend {
+            let anchor = anchor.unwrap_or(at);
+            if anchor == to {
+                -1
+            } else {
+                anchor as i64 + 1
+            }
+        } else {
+            -1
+        };
+        vec![Step::Cursor(to as i64 + 1), Step::Selection(selection)]
+    };
+    apply(lua, dom, id, steps)
+}
+
+/// Select from byte `from` to byte `to`, the cursor at `to`.
+fn select(lua: &Lua, dom: &SharedDom, id: usize, from: usize, to: usize) -> LuaResult<()> {
+    if let Some(session) = dom.lock().expect("dom").editing.as_mut() {
+        session.typing = false;
+    }
+    let selection = if from == to { -1 } else { from as i64 + 1 };
+    apply(
+        lua,
+        dom,
+        id,
+        vec![Step::Cursor(to as i64 + 1), Step::Selection(selection)],
+    )
+}
+
+/// Replace bytes `lo..hi` of a focused box's text with `insert`, leaving the
+/// cursor after it and nothing selected.
+///
+/// `typing` joins consecutive typed characters into one undo step. A box with
+/// `TextEditable` false refuses every edit.
+fn replace(
+    lua: &Lua,
+    dom: &SharedDom,
+    id: usize,
+    lo: usize,
+    hi: usize,
+    insert: &str,
+    typing: bool,
+) -> LuaResult<()> {
+    let steps = {
+        let mut guard = dom.lock().expect("dom");
+        if guard.property(id, "TextEditable") == Some(Variant::Bool(false)) {
+            return Ok(());
+        }
+        let text = text_of(&guard, id);
+        if lo == hi && insert.is_empty() {
+            return Ok(());
+        }
+        let mut next = String::with_capacity(text.len() + insert.len());
+        next.push_str(&text[..lo]);
+        next.push_str(insert);
+        next.push_str(&text[hi..]);
+        let after = lo + insert.len() + 1;
+        if let Some(session) = guard.editing.as_mut().filter(|e| e.id == id) {
+            if !(typing && session.typing) {
+                session.remember(&text);
+            }
+            session.typing = typing;
+            session.entered_cursor = after as i64;
+        }
+        vec![
+            Step::Cursor(lo as i64 + 1),
+            Step::Selection(-1),
+            Step::Cursor(after as i64),
+            Step::Text(next),
+        ]
+    };
+    apply(lua, dom, id, steps)
+}
+
+/// Ctrl+Z: back to the text before the last edit, with the cursor that text
+/// was entered with.
+///
+/// THE RESTORED CURSOR IS WHERE THE TEXT BEGAN, not where the edit happened.
+/// In Studio, focusing "hello world" by a click at 6, moving, selecting all,
+/// typing "x" and undoing put the cursor back at 6: the cursor the old text
+/// had when focus arrived. That is this reading of it; nothing else was
+/// measured.
+fn undo(lua: &Lua, dom: &SharedDom, id: usize) -> LuaResult<()> {
+    let steps = {
+        let mut guard = dom.lock().expect("dom");
+        let Some(session) = guard.editing.as_mut().filter(|e| e.id == id) else {
+            return Ok(());
+        };
+        let Some((text, cursor)) = session.undo.pop() else {
+            return Ok(());
+        };
+        session.typing = false;
+        session.entered_cursor = cursor;
+        let cursor = editing::clamp_cursor(&text, cursor);
+        vec![Step::Cursor(cursor), Step::Selection(-1), Step::Text(text)]
+    };
+    apply(lua, dom, id, steps)
+}
+
+/// Where Ctrl+C, Ctrl+X and Ctrl+V read and write.
+///
+/// THE PLATFORM'S IS HANDED IN by whoever owns the window, as two functions,
+/// so this file names no window crate. Until then, and in every test, it is
+/// `Memory`: a suite that copies does not overwrite whatever the person
+/// running it had copied.
+#[derive(Debug, Clone)]
+pub enum Clipboard {
+    System {
+        read: fn() -> Option<String>,
+        write: fn(&str) -> bool,
+    },
+    Memory(String),
+}
+
+impl Default for Clipboard {
+    fn default() -> Self {
+        Clipboard::Memory(String::new())
+    }
+}
+
+impl Clipboard {
+    fn get(&self) -> Option<String> {
+        match self {
+            Clipboard::System { read, .. } => read(),
+            Clipboard::Memory(text) => Some(text.clone()),
+        }
+    }
+
+    fn set(&mut self, text: &str) {
+        match self {
+            Clipboard::System { write, .. } => {
+                write(text);
+            }
+            Clipboard::Memory(held) => *held = text.to_string(),
+        }
+    }
+}
+
+/// The modifier keys held with a key or a press.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Mods {
+    pub shift: bool,
+    pub ctrl: bool,
 }
 
 /// Called on instance destruction to clean up focus and scroll velocity if the destroyed node was tracked.
@@ -479,6 +760,13 @@ pub struct Pointer {
     at: Option<(f32, f32)>,
     /// Exactly one focused instance at a time, synced with the VM registry.
     focus: Focus,
+    /// The modifiers held with the next press, set by the frame loop from the
+    /// window. A Shift+click extends a `TextBox` selection.
+    pub mods: Mods,
+    /// When, where and on what the last left press landed, so the next one
+    /// can tell whether it is a double click.
+    last_press: Option<(Instant, f32, f32, usize)>,
+    pub clipboard: Clipboard,
 }
 
 /// Where one fire is aimed, and what it carries.
@@ -599,6 +887,32 @@ impl Pointer {
         };
         self.at = Some((x, y));
 
+        // A DRAG FROM A PRESS IN THE FOCUSED BOX SELECTS, from where the press
+        // put the cursor to the boundary nearest the pointer.
+        let drag = {
+            let guard = surface.dom.lock().expect("dom");
+            guard
+                .editing
+                .as_ref()
+                .filter(|e| self.held[Button::Left as usize] == Some(e.id))
+                .and_then(|e| Some((e.id, e.drag_anchor?)))
+                .and_then(|(id, anchor)| {
+                    let c = render::cursor_at(
+                        &guard,
+                        surface.root,
+                        surface.size.0,
+                        surface.size.1,
+                        id,
+                        x,
+                        y,
+                    )?;
+                    Some((id, (anchor - 1) as usize, (c - 1) as usize))
+                })
+        };
+        if let Some((id, anchor, to)) = drag {
+            select(surface.lua, surface.dom, id, anchor, to)?;
+        }
+
         let mut batch = Vec::new();
         {
             let guard = surface.dom.lock().expect("dom");
@@ -626,6 +940,12 @@ impl Pointer {
     }
 
     /// A button went down.
+    ///
+    /// A LEFT PRESS ON A `TextBox` PLACES ITS CURSOR at the boundary nearest
+    /// the press, read from the layout the renderer draws. On a box without
+    /// focus that is `CursorPosition`, then `Focused`; on the focused box it
+    /// moves the cursor, extends the selection with Shift, or selects the word
+    /// on a double click. A left press anywhere else takes focus away.
     pub fn down(&mut self, surface: &Surface, button: Button, x: f32, y: f32) -> LuaResult<()> {
         self.at = Some((x, y));
         let focus = focus_of(surface.lua)?;
@@ -634,6 +954,7 @@ impl Pointer {
         let mut batch = Vec::new();
         let target_box;
         let old_focus;
+        let mut placed: Option<(usize, i64, bool)> = None;
         {
             let guard = surface.dom.lock().expect("dom");
             // THE PRESS IS RECORDED AS THE RAW HIT, before `Interactable` is
@@ -655,6 +976,25 @@ impl Pointer {
                     .unwrap_or(false);
                 if is_textbox {
                     let tid = target.unwrap();
+                    let now = Instant::now();
+                    let double = self.last_press.is_some_and(|(at, px, py, pid)| {
+                        pid == tid
+                            && now.duration_since(at) < editing::DOUBLE_CLICK
+                            && (x - px).abs() <= editing::DOUBLE_CLICK_SLOP
+                            && (y - py).abs() <= editing::DOUBLE_CLICK_SLOP
+                    });
+                    self.last_press = (!double).then_some((now, x, y, tid));
+                    if let Some(c) = render::cursor_at(
+                        &guard,
+                        surface.root,
+                        surface.size.0,
+                        surface.size.1,
+                        tid,
+                        x,
+                        y,
+                    ) {
+                        placed = Some((tid, c, double));
+                    }
                     if current == Some(tid) {
                         target_box = None;
                         old_focus = None;
@@ -663,6 +1003,7 @@ impl Pointer {
                         old_focus = current;
                     }
                 } else {
+                    self.last_press = None;
                     target_box = None;
                     old_focus = current;
                 }
@@ -687,37 +1028,70 @@ impl Pointer {
             }
         }
 
-        // Release old focus if any
         if let Some(old_id) = old_focus {
-            focus.set(None);
-            signal::fire(
-                surface.dom,
-                old_id,
-                &signal::Kind::FocusLost,
-                &[LuaValue::Boolean(false)],
-            );
+            lose(surface.lua, surface.dom, &focus, old_id, false)?;
         }
 
-        // Capture new focus if any
         if let Some(new_id) = target_box {
-            if surface.dom.lock().expect("dom").exists(new_id) {
-                focus.set(Some(new_id));
-                signal::fire(surface.dom, new_id, &signal::Kind::Focused, &[]);
+            let cursor = placed.filter(|p| p.0 == new_id).map(|p| p.1);
+            gain(surface.lua, surface.dom, &focus, new_id, cursor)?;
+            if let Some(c) = cursor {
+                self.anchor_drag(surface, new_id, Some(c));
+            }
+        } else if let Some((id, c, double)) = placed.filter(|p| focus.get() == Some(p.0)) {
+            let at = (c - 1) as usize;
+            if double {
+                let (text, _, _) = edit_state(&surface.dom.lock().expect("dom"), id);
+                let (start, end) = editing::word_at(&text, at);
+                select(surface.lua, surface.dom, id, start, end)?;
+                self.anchor_drag(surface, id, None);
+            } else if self.mods.shift {
+                move_to(surface.lua, surface.dom, id, at, true)?;
+                let anchor = {
+                    let guard = surface.dom.lock().expect("dom");
+                    let s = int_of(&guard, id, "SelectionStart");
+                    if s >= 1 {
+                        s
+                    } else {
+                        c
+                    }
+                };
+                self.anchor_drag(surface, id, Some(anchor));
+            } else {
+                move_to(surface.lua, surface.dom, id, at, false)?;
+                self.anchor_drag(surface, id, Some(c));
             }
         }
 
         Self::fire_all(surface, batch)
     }
 
-    /// A named key event arrived.
+    /// Where a drag from this press selects from, or `None` for no drag.
+    fn anchor_drag(&self, surface: &Surface, id: usize, anchor: Option<i64>) {
+        if let Some(session) = surface
+            .dom
+            .lock()
+            .expect("dom")
+            .editing
+            .as_mut()
+            .filter(|e| e.id == id)
+        {
+            session.drag_anchor = anchor;
+        }
+    }
+
+    /// A named key arrived, with the modifiers held.
     ///
-    /// BACKSPACE REMOVES THE LAST CHARACTER, NOT THE ONE BEFORE A CURSOR --
-    /// this host has no cursor-position tracking yet (`TextBox.CursorPosition`
-    /// is declared in the vocabulary but nothing reads or writes it), so
-    /// editing is append/remove-at-the-end only. `char` below makes the same
-    /// simplification for typing. A real caret is real work this fix does
-    /// not attempt; see the doc comment there.
-    pub fn key(&mut self, surface: &Surface, name: &str) -> LuaResult<()> {
+    /// THE FOCUSED `TextBox` EDITS AT ITS CURSOR. Left, Right, Home and End
+    /// move it, with Shift extending the selection from its anchor and Ctrl
+    /// moving by word; Backspace and Delete remove the character beside it, the
+    /// word with Ctrl, or the selection; Ctrl+A selects everything; Ctrl+C,
+    /// Ctrl+X and Ctrl+V go through the clipboard; Ctrl+Z undoes. Return
+    /// releases focus as `FocusLost(true)`, MultiLine or not.
+    ///
+    /// Up and Down do nothing yet: moving between the lines of a `MultiLine`
+    /// box is not built.
+    pub fn key(&mut self, surface: &Surface, name: &str, mods: Mods) -> LuaResult<()> {
         let focus = focus_of(surface.lua)?;
         self.focus = focus.clone();
         let Some(id) = focus.get() else {
@@ -727,61 +1101,117 @@ impl Pointer {
             release_focus(surface.lua, surface.dom, id, true)?;
             return Ok(());
         }
-        if name == "Backspace" {
-            let changed = {
-                let mut guard = surface.dom.lock().expect("dom");
-                if guard.class_of(id).as_deref() != Some("TextBox") {
+        let (text, at, anchor) = {
+            let guard = surface.dom.lock().expect("dom");
+            if guard.class_of(id).as_deref() != Some("TextBox") {
+                return Ok(());
+            }
+            edit_state(&guard, id)
+        };
+        let selected = anchor.map(|a| (a.min(at), a.max(at)));
+        let (lua, dom) = (surface.lua, surface.dom);
+        match (name, mods.ctrl) {
+            ("Left", ctrl) => {
+                let to = match (selected, mods.shift, ctrl) {
+                    (Some((lo, _)), false, false) => lo,
+                    (_, _, true) => editing::word_left(&text, at),
+                    _ => editing::prev_char(&text, at),
+                };
+                move_to(lua, dom, id, to, mods.shift)
+            }
+            ("Right", ctrl) => {
+                let to = match (selected, mods.shift, ctrl) {
+                    (Some((_, hi)), false, false) => hi,
+                    (_, _, true) => editing::word_right(&text, at),
+                    _ => editing::next_char(&text, at),
+                };
+                move_to(lua, dom, id, to, mods.shift)
+            }
+            ("Home", _) => move_to(lua, dom, id, 0, mods.shift),
+            ("End", _) => move_to(lua, dom, id, text.len(), mods.shift),
+            ("Backspace", ctrl) => {
+                let (lo, hi) = selected.unwrap_or_else(|| {
+                    if ctrl {
+                        (editing::word_left(&text, at), at)
+                    } else {
+                        (editing::prev_char(&text, at), at)
+                    }
+                });
+                replace(lua, dom, id, lo, hi, "", false)
+            }
+            ("Delete", ctrl) => {
+                let (lo, hi) = selected.unwrap_or_else(|| {
+                    if ctrl {
+                        (at, editing::word_right(&text, at))
+                    } else {
+                        (at, editing::next_char(&text, at))
+                    }
+                });
+                replace(lua, dom, id, lo, hi, "", false)
+            }
+            ("A", true) => select(lua, dom, id, 0, text.len()),
+            ("C", true) => {
+                if let Some((lo, hi)) = selected {
+                    self.clipboard.set(&text[lo..hi]);
+                }
+                Ok(())
+            }
+            ("X", true) => {
+                let Some((lo, hi)) = selected else {
+                    return Ok(());
+                };
+                if dom.lock().expect("dom").property(id, "TextEditable")
+                    == Some(Variant::Bool(false))
+                {
                     return Ok(());
                 }
-                let mut text = text_of(&guard, id);
-                let removed = text.pop().is_some();
-                if removed {
-                    if let Some(node) = guard.node_mut(id) {
-                        node.props.insert("Text".to_string(), Variant::String(text));
-                    }
-                    guard.touch();
-                }
-                removed
-            };
-            if changed {
-                signal::property_changed(surface.lua, surface.dom, id, "Text")?;
+                self.clipboard.set(&text[lo..hi]);
+                replace(lua, dom, id, lo, hi, "", false)
             }
+            ("V", true) => {
+                let Some(pasted) = self.clipboard.get() else {
+                    return Ok(());
+                };
+                let multi_line =
+                    dom.lock().expect("dom").property(id, "MultiLine") == Some(Variant::Bool(true));
+                let pasted = editing::paste_filter(&pasted, multi_line);
+                let (lo, hi) = selected.unwrap_or((at, at));
+                replace(lua, dom, id, lo, hi, &pasted, false)
+            }
+            ("Z", true) => undo(lua, dom, id),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// A printable character arrived from the keyboard (`WM_CHAR` on
-    /// Windows), appended to the focused `TextBox`'s own `Text` -- or a
-    /// no-op if nothing is focused, or what is focused is not a `TextBox`.
-    ///
-    /// THIS DID NOT EXIST BEFORE, AND `Event::Char` WAS SILENTLY DROPPED
-    /// (`main.rs` matched it to `{}`) -- a `TextBox` could be clicked into
-    /// focus, and typing into it did nothing at all. Found live, building
-    /// the dashboard's own sign-in form, the first real text-entry UI
-    /// this host had ever run.
-    ///
-    /// APPENDED AT THE END, NOT AT A CURSOR -- see `key`'s own doc comment
-    /// on `Backspace` for why: there is no cursor position to insert at
-    /// yet.
+    /// Windows), inserted at the focused `TextBox`'s cursor, replacing its
+    /// selection -- or a no-op if nothing is focused, or what is focused is
+    /// not a `TextBox`.
     pub fn char(&mut self, surface: &Surface, c: char) -> LuaResult<()> {
         let focus = focus_of(surface.lua)?;
         self.focus = focus.clone();
         let Some(id) = focus.get() else {
             return Ok(());
         };
-        {
-            let mut guard = surface.dom.lock().expect("dom");
+        let (at, anchor) = {
+            let guard = surface.dom.lock().expect("dom");
             if guard.class_of(id).as_deref() != Some("TextBox") {
                 return Ok(());
             }
-            let mut text = text_of(&guard, id);
-            text.push(c);
-            if let Some(node) = guard.node_mut(id) {
-                node.props.insert("Text".to_string(), Variant::String(text));
-            }
-            guard.touch();
-        }
-        signal::property_changed(surface.lua, surface.dom, id, "Text")
+            let (_, at, anchor) = edit_state(&guard, id);
+            (at, anchor)
+        };
+        let (lo, hi) = anchor.map_or((at, at), |a| (a.min(at), a.max(at)));
+        let mut buf = [0u8; 4];
+        replace(
+            surface.lua,
+            surface.dom,
+            id,
+            lo,
+            hi,
+            c.encode_utf8(&mut buf),
+            true,
+        )
     }
 
     /// A button came up.
@@ -791,6 +1221,11 @@ impl Pointer {
     pub fn up(&mut self, surface: &Surface, button: Button, x: f32, y: f32) -> LuaResult<()> {
         self.at = Some((x, y));
         let pressed = self.held[button as usize].take();
+        if button == Button::Left {
+            if let Some(session) = surface.dom.lock().expect("dom").editing.as_mut() {
+                session.drag_anchor = None;
+            }
+        }
         let mut batch = Vec::new();
         {
             let guard = surface.dom.lock().expect("dom");
@@ -1108,7 +1543,7 @@ mod tests {
         }
 
         fn key(&mut self, name: &str) {
-            self.drive(|p, s| p.key(s, name));
+            self.drive(|p, s| p.key(s, name, Mods::default()));
         }
 
         fn char(&mut self, c: char) {

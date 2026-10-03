@@ -125,8 +125,89 @@ fn key_name(vk: u32) -> Option<&'static str> {
         VK_TAB => "Tab",
         VK_ESCAPE => "Escape",
         VK_SPACE => "Space",
+        // A LETTER IS A NAMED KEY ONLY WITH CTRL HELD. Typed, it arrives as
+        // `WM_CHAR`; with Ctrl it arrives there as a control code, which is
+        // dropped, so this is the only report of Ctrl+A, Ctrl+C and the rest.
+        VIRTUAL_KEY(k @ 0x41..=0x5A) if modifier(VK_CONTROL) => {
+            const LETTERS: [&str; 26] = [
+                "A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P",
+                "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z",
+            ];
+            LETTERS[(k - 0x41) as usize]
+        }
         _ => return None,
     })
+}
+
+/// Whether Shift is down, as of the message being handled. A press reads it
+/// to tell a Shift+click from a click.
+pub fn shift_held() -> bool {
+    modifier(VK_SHIFT)
+}
+
+/// The clipboard's text, or `None` when it holds none or cannot be opened.
+pub fn clipboard_text() -> Option<String> {
+    use windows::Win32::Foundation::HGLOBAL;
+    use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+    use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+    const CF_UNICODETEXT: u32 = 13;
+    unsafe {
+        OpenClipboard(None).ok()?;
+        let text = (|| {
+            let handle = GetClipboardData(CF_UNICODETEXT).ok()?;
+            let global = HGLOBAL(handle.0);
+            let ptr = GlobalLock(global) as *const u16;
+            if ptr.is_null() {
+                return None;
+            }
+            let mut len = 0;
+            while *ptr.add(len) != 0 {
+                len += 1;
+            }
+            let text = String::from_utf16_lossy(std::slice::from_raw_parts(ptr, len));
+            let _ = GlobalUnlock(global);
+            Some(text)
+        })();
+        let _ = CloseClipboard();
+        text
+    }
+}
+
+/// Put `text` on the clipboard. Whether it got there.
+pub fn set_clipboard_text(text: &str) -> bool {
+    use windows::Win32::Foundation::{GlobalFree, HANDLE};
+    use windows::Win32::System::DataExchange::{
+        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+    };
+    use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+    const CF_UNICODETEXT: u32 = 13;
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    unsafe {
+        if OpenClipboard(None).is_err() {
+            return false;
+        }
+        let done = (|| {
+            EmptyClipboard().ok()?;
+            let global = GlobalAlloc(GMEM_MOVEABLE, wide.len() * 2).ok()?;
+            let ptr = GlobalLock(global) as *mut u16;
+            if ptr.is_null() {
+                let _ = GlobalFree(Some(global));
+                return None;
+            }
+            std::ptr::copy_nonoverlapping(wide.as_ptr(), ptr, wide.len());
+            let _ = GlobalUnlock(global);
+            // THE CLIPBOARD OWNS THE MEMORY ONCE THIS SUCCEEDS, and freeing it
+            // after would hand the next paste a dangling block.
+            if SetClipboardData(CF_UNICODETEXT, Some(HANDLE(global.0))).is_err() {
+                let _ = GlobalFree(Some(global));
+                return None;
+            }
+            Some(())
+        })()
+        .is_some();
+        let _ = CloseClipboard();
+        done
+    }
 }
 
 fn modifier(vk: VIRTUAL_KEY) -> bool {

@@ -135,10 +135,23 @@ fn gui_object(class: &str, property: &str) -> Honour {
             // `shows_placeholder`: an empty TextBox measures and draws its
             // placeholder, coloured by `PlaceholderColor3`.
             "PlaceholderColor3" if class == "TextBox" => return Implemented,
+            // `editing_of`: the focused box's caret sits at its cursor and its
+            // selection is highlighted from its anchor.
+            "CursorPosition" | "SelectionStart" if class == "TextBox" => {
+                return Partial(
+                    "drawn as the focused box's caret and selection; positions count \
+                     UTF-8 bytes, and the engine's unit for non-ASCII text is not measured",
+                )
+            }
             "PlaceholderText" if class == "TextBox" => {
                 return Divergent(
                     "RichText markup is applied to a placeholder; the engine draws a \
                      placeholder's markup as written",
+                )
+            }
+            "TextTruncate" if class == "TextBox" => {
+                return Partial(
+                    "AtEnd is drawn with an ellipsis, except while the box holds focus, when its whole line is shown and scrolled; SplitWord is drawn as None",
                 )
             }
             "TextTruncate" => {

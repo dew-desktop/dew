@@ -164,6 +164,46 @@ pub trait Painter {
     }
 }
 
+/// A focused `TextBox`'s text, with its selection behind the glyphs, the
+/// selected glyphs drawn again in their own colour, and the caret on top.
+///
+/// THE SELECTED GLYPHS ARE THE SAME RUNS CLIPPED, not a second layout: the
+/// text is drawn once in its colour and once more in `selected_text` through
+/// each selection rectangle, so a glyph cut by the selection edge changes
+/// colour exactly at the edge, as the engine's does.
+fn paint_editing<P: Painter + ?Sized>(
+    painter: &mut P,
+    node: &Node,
+    editing: &crate::frame::Editing,
+) {
+    if let Some(clip) = editing.clip {
+        painter.clip_push(clip);
+    }
+    for rect in &editing.selection {
+        painter.fill_rounded_rect(*rect, 0.0, editing.highlight, 1.0, BlendMode::Alpha);
+    }
+    if node.text.is_some() {
+        painter.draw_text(node);
+        if !editing.selection.is_empty() {
+            let mut selected = node.clone();
+            selected.text_colour = Some(editing.selected_text);
+            selected.text_stroke_alpha = 0.0;
+            selected.glyph_stroke = None;
+            for rect in &editing.selection {
+                painter.clip_push(*rect);
+                painter.draw_text(&selected);
+                painter.clip_pop();
+            }
+        }
+    }
+    if let Some(caret) = editing.caret {
+        painter.fill_rounded_rect(caret, 0.0, editing.caret_colour, 1.0, BlendMode::Alpha);
+    }
+    if editing.clip.is_some() {
+        painter.clip_pop();
+    }
+}
+
 /// Paint one node, in the order its parts must be drawn.
 ///
 /// `pub(crate)` so an implementor overriding `paint_delta` reuses this rather
@@ -239,8 +279,13 @@ pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
         }
     }
 
-    if node.text.is_some() {
-        painter.draw_text(node);
+    match &node.editing {
+        None => {
+            if node.text.is_some() {
+                painter.draw_text(node);
+            }
+        }
+        Some(editing) => paint_editing(painter, node, editing),
     }
 
     if clipped {

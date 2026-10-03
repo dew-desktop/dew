@@ -64,8 +64,8 @@
 //! claim, property by property and class by class, is [`honours::honours`].
 
 use dew_runtime::frame::{
-    Align, AlphaStop, BlendMode, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb, Scale,
-    Stop, Stroke,
+    Align, AlphaStop, BlendMode, Editing, Frame, Gradient, GradientKind, Image, Node, Rect, Rgb,
+    Scale, Stop, Stroke,
 };
 use dew_runtime::text::{self, lay_out, scaled_size, Block, Face, TextLayout};
 use rbx_types::{Variant, Vector2};
@@ -2465,8 +2465,231 @@ fn text_layout_of(dom: &Dom, id: usize, class: &str, rect: Box2) -> Option<TextL
             align_y: align(dom, id, "TextYAlignment", "TextYAlignment").unwrap_or(Align::Center),
             truncate,
             line_height,
+            stops: false,
         },
     )
+}
+
+/// The layout a `TextBox`'s cursor is placed in: its `Text`, never its
+/// placeholder, with caret stops on every line and no ellipsis.
+///
+/// THE SAME `lay_out` WITH THE SAME INPUTS as [`text_layout_of`], so when the
+/// text is showing these are the lines the painter draws, and the renderer
+/// paints this layout for the focused box rather than the other one. A caret
+/// and a hit test that measured on their own would drift from the glyphs.
+///
+/// NO ELLIPSIS, because a cursor can sit anywhere in the text and a cut line
+/// has nowhere to put it past the cut. A focused `AtEnd` box shows its whole
+/// line, scrolled; see [`edit_view`].
+pub fn edit_layout(dom: &Dom, id: usize, rect: Box2) -> Option<TextLayout> {
+    let face = face_of(dom, id)?;
+    let raw_text = text(dom, id, "Text").unwrap_or_default();
+    let text = if boolean(dom, id, "RichText") == Some(true) {
+        dew_runtime::text::strip_markup(&raw_text)
+    } else {
+        raw_text
+    };
+    let content = content_box(dom, id, rect);
+    lay_out(
+        &face,
+        &Block {
+            text: &text,
+            text_size: resolved_text_size(dom, id, rect),
+            content: Rect {
+                x: content.x,
+                y: content.y,
+                w: content.w,
+                h: content.h,
+            },
+            wrap: boolean(dom, id, "TextWrapped").unwrap_or(false),
+            align_x: align(dom, id, "TextXAlignment", "TextXAlignment").unwrap_or(Align::Center),
+            align_y: align(dom, id, "TextYAlignment", "TextYAlignment").unwrap_or(Align::Center),
+            truncate: false,
+            line_height: number(dom, id, "LineHeight").unwrap_or(1.0),
+            stops: true,
+        },
+    )
+}
+
+/// A whole number property, as the engine's `int` members are stored.
+fn int(dom: &Dom, id: usize, key: &str) -> Option<i64> {
+    match dom.property(id, key) {
+        Some(Variant::Int32(v)) => Some(v as i64),
+        Some(Variant::Int64(v)) => Some(v),
+        Some(Variant::Float32(v)) => Some(v as i64),
+        Some(Variant::Float64(v)) => Some(v as i64),
+        _ => None,
+    }
+}
+
+/// [`edit_layout`] scrolled as the focused box shows it, and the clip the
+/// scroll needs.
+///
+/// ONE UNWRAPPED LINE WIDER THAN ITS BOX SCROLLS, and nothing else does. The
+/// line is laid from the content box's left edge, whatever its alignment, and
+/// moved left by `scroll`; the text, the highlight and the caret are then
+/// clipped to the content box. A line that fits draws exactly where
+/// [`text_layout_of`] puts it, with no clip.
+fn edit_view(dom: &Dom, id: usize, rect: Box2, scroll: f32) -> Option<(TextLayout, Option<Box2>)> {
+    let mut laid = edit_layout(dom, id, rect)?;
+    let content = content_box(dom, id, rect);
+    if !overflows(dom, id, &laid, content) {
+        return Some((laid, None));
+    }
+    laid.lines[0].x = content.x - scroll;
+    Some((laid, Some(content)))
+}
+
+/// Whether a focused box's text is one unwrapped line wider than its box.
+fn overflows(dom: &Dom, id: usize, laid: &TextLayout, content: Box2) -> bool {
+    boolean(dom, id, "TextWrapped") != Some(true)
+        && laid.lines.len() == 1
+        && laid.lines[0].width > content.w
+}
+
+/// How far to scroll so the caret at pen position `caret` stays inside a box
+/// `width` wide, moving `scroll` as little as possible, for a line `line_w`
+/// wide. The caret is one pixel, so the right edge keeps a pixel for it.
+pub fn scroll_to_caret(scroll: f32, caret: f32, width: f32, line_w: f32) -> f32 {
+    let mut scroll = scroll;
+    if caret - scroll > width - 1.0 {
+        scroll = caret - width + 1.0;
+    }
+    if caret - scroll < 0.0 {
+        scroll = caret;
+    }
+    scroll.clamp(0.0, (line_w - width + 1.0).max(0.0))
+}
+
+/// The line of `laid` a cursor at byte `at` sits on: the first whose range
+/// holds it, or the last line before it.
+fn line_of(laid: &TextLayout, at: usize) -> Option<&dew_runtime::text::Line> {
+    laid.lines
+        .iter()
+        .find(|line| at >= line.start && at <= line.end)
+        .or_else(|| laid.lines.iter().rev().find(|line| line.start <= at))
+        .or(laid.lines.first())
+}
+
+/// The `CursorPosition` a press at (`x`, `y`) puts a `TextBox`'s cursor at:
+/// the nearest character boundary on the line under the point, or on the
+/// nearest line above or below. `None` when `id` is not drawn.
+///
+/// READ FROM THE DRAWN LAYOUT. The placement is [`display_list`]'s, the same
+/// pass the hit test that found this box used, and the lines are the ones the
+/// renderer paints, scrolled as it scrolls them when the box holds focus.
+pub fn cursor_at(
+    dom: &Dom,
+    root: usize,
+    width: f32,
+    height: f32,
+    id: usize,
+    x: f32,
+    y: f32,
+) -> Option<i64> {
+    let placed = display_list(dom, root, width, height)
+        .into_iter()
+        .rev()
+        .find(|placed| placed.id == id)?;
+    let laid = match dom.editing.as_ref().filter(|e| e.id == id) {
+        Some(session) => edit_view(dom, id, placed.rect, session.scroll)?.0,
+        None => edit_layout(dom, id, placed.rect)?,
+    };
+    let line = laid
+        .lines
+        .iter()
+        .find(|line| y < line.top + laid.line_height)
+        .or(laid.lines.last())?;
+    Some(line.nearest_stop(x - line.x) as i64 + 1)
+}
+
+/// The caret and selection a focused `TextBox` paints, and the layout to
+/// paint its text with, for the box placed at `rect`. `None` for any element
+/// that is not the focused box.
+///
+/// `&mut Dom` BECAUSE THE SCROLL IS STATE: the caret is kept in view by moving
+/// the scroll as little as possible, which depends on where it was. The blink
+/// is decided here too, against `now`, and recorded so the frame loop knows
+/// what is on screen.
+fn editing_of(
+    dom: &mut Dom,
+    id: usize,
+    rect: Box2,
+    now: std::time::Instant,
+) -> Option<(Editing, Option<TextLayout>)> {
+    let session = dom.editing.as_ref().filter(|e| e.id == id)?.clone();
+    let mut laid = edit_layout(dom, id, rect)?;
+    let content = content_box(dom, id, rect);
+    let text = text(dom, id, "Text").unwrap_or_default();
+    let cursor = int(dom, id, "CursorPosition").unwrap_or(-1);
+    let selection = int(dom, id, "SelectionStart").unwrap_or(-1);
+    let at = super::editing::byte_of(&text, cursor);
+
+    let (scroll, clip) = if overflows(dom, id, &laid, content) {
+        let line = &laid.lines[0];
+        let scroll = scroll_to_caret(session.scroll, line.stop_x(at), content.w, line.width);
+        laid.lines[0].x = content.x - scroll;
+        (scroll, Some(content))
+    } else {
+        (0.0, None)
+    };
+
+    let shown = session.shown_at(now);
+    if let Some(e) = dom.editing.as_mut() {
+        e.scroll = scroll;
+        e.drawn = true;
+        e.painted_shown = Some(shown);
+    }
+
+    let line_h = laid.line_height;
+    let mut selected = Vec::new();
+    if cursor >= 1 && selection >= 1 && selection != cursor {
+        let anchor = super::editing::byte_of(&text, selection);
+        let (lo, hi) = (at.min(anchor), at.max(anchor));
+        for line in &laid.lines {
+            if hi < line.start || lo > line.end {
+                continue;
+            }
+            let x0 = (line.x + line.stop_x(lo.max(line.start))).round();
+            let x1 = (line.x + line.stop_x(hi.min(line.end))).round();
+            if x1 > x0 {
+                selected.push(Rect {
+                    x: x0,
+                    y: line.top.round(),
+                    w: x1 - x0,
+                    h: line_h,
+                });
+            }
+        }
+    }
+
+    let caret = (shown && cursor >= 1)
+        .then(|| line_of(&laid, at))
+        .flatten()
+        .map(|line| Rect {
+            x: (line.x + line.stop_x(at)).round(),
+            y: line.top.round(),
+            w: 1.0,
+            h: line_h,
+        });
+
+    let (hr, hg, hb) = super::editing::HIGHLIGHT;
+    let (sr, sg, sb) = super::editing::SELECTED_TEXT;
+    let editing = Editing {
+        clip: clip.map(|c| Rect {
+            x: c.x,
+            y: c.y,
+            w: c.w,
+            h: c.h,
+        }),
+        selection: selected,
+        highlight: Rgb(hr, hg, hb),
+        selected_text: Rgb(sr, sg, sb),
+        caret,
+        caret_colour: colour(dom, id, "TextColor3").unwrap_or(Rgb(0, 0, 0)),
+    };
+    let painted = (!shows_placeholder(dom, id, "TextBox")).then_some(laid);
+    Some((editing, painted))
 }
 
 /// The classes with `TextBounds`, `TextFits` and `ContentText` members.
@@ -2489,6 +2712,11 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
         image_of(dom, id)
     } else {
         None
+    };
+    let (editing, laid) = match editing_of(dom, id, placed.rect, std::time::Instant::now()) {
+        Some((editing, Some(edited))) => (Some(editing), Some(edited)),
+        Some((editing, None)) => (Some(editing), laid),
+        None => (None, laid),
     };
     let dom = &*dom;
     let laid = laid.or_else(|| text_layout_of(dom, id, &class, placed.rect));
@@ -2546,6 +2774,7 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
         image,
         blend_mode: blend_mode_of(dom, id),
         glyph_stroke,
+        editing,
     }
 }
 
@@ -2576,6 +2805,12 @@ fn frame_with(
     // anyway, and now has to be: building a node may resolve an image and so
     // needs the DOM mutably, while placing reads it. One pass then the other
     // keeps both borrows to themselves without a second walk.
+    //
+    // THE FOCUSED BOX IS NOT DRAWN UNTIL `node` SAYS IT IS: a frame that
+    // skips it (an invisible box) leaves its blink owing nothing.
+    if let Some(e) = dom.editing.as_mut() {
+        e.drawn = false;
+    }
     let nodes = placed
         .iter()
         .enumerate()
@@ -2687,6 +2922,25 @@ fn commit(
     }
     dom.close_style_memo(opened);
     (texts, solved.items)
+}
+
+/// Lay out and paint the tree under `root` on white, as BGRA pixels, for a
+/// test that asserts on what is drawn. `None` on a machine with no font.
+#[cfg(test)]
+pub(crate) fn paint_white(
+    dom: &SharedDom,
+    root: usize,
+    width: f32,
+    height: f32,
+) -> Option<Vec<u8>> {
+    use dew_runtime::{Painter, RasterPainter};
+    let face = crate::services::default_face()?;
+    let frame = frame_of(dom, root, width, height);
+    let mut painter =
+        RasterPainter::new(width as u32, height as u32, dew_raster::Backend::VelloCpu)?
+            .with_face(face);
+    painter.paint_frame(&frame, Some(Rgb(255, 255, 255)));
+    Some(painter.canvas_mut().bgra()?.to_vec())
 }
 
 /// Render whatever is under `root` in a shared DOM.
