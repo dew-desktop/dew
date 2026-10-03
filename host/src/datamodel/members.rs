@@ -792,7 +792,7 @@ pub fn lookup(
         })?,
         "SetProperty" => lua.create_function(
             move |_lua, (_, name, value): (LuaValue, String, LuaValue)| {
-                let variant = super::coerce_variant_value("SetProperty", &value)?;
+                let variant = super::coerce_style_value("SetProperty", &name, &value)?;
                 let mut dom = this.dom.lock().expect("dom");
                 if dom.node(this.id).is_none() {
                     return Err(dead());
@@ -808,7 +808,7 @@ pub fn lookup(
             }
             for pair in table.pairs::<String, LuaValue>() {
                 let (name, value) = pair?;
-                let variant = super::coerce_variant_value("SetProperties", &value)?;
+                let variant = super::coerce_style_value("SetProperties", &name, &value)?;
                 dom.set_style_property(this.id, &name, variant);
             }
             Ok(())
