@@ -195,6 +195,101 @@ pub fn build(
                 .unwrap_or(0.0))
         })?,
     )?;
+    time.set(
+        "timezone_offset",
+        lua.create_function(|_, ()| {
+            #[repr(C)]
+            struct Tm {
+                tm_sec: i32, tm_min: i32, tm_hour: i32, tm_mday: i32,
+                tm_mon: i32, tm_year: i32, tm_wday: i32, tm_yday: i32, tm_isdst: i32,
+            }
+            #[cfg(windows)]
+            unsafe {
+                extern "C" {
+                    fn _localtime64_s(result: *mut Tm, time: *const i64) -> i32;
+                    fn _mkgmtime64(timeptr: *mut Tm) -> i64;
+                }
+                let now_sec = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let mut tm = std::mem::zeroed::<Tm>();
+                if _localtime64_s(&mut tm, &now_sec) == 0 {
+                    let mut tm_copy = tm;
+                    let local_as_utc = _mkgmtime64(&mut tm_copy);
+                    return Ok((local_as_utc - now_sec) as f64);
+                }
+                Ok(0.0)
+            }
+            #[cfg(not(windows))]
+            unsafe {
+                extern "C" {
+                    fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
+                    fn timegm(timeptr: *mut Tm) -> i64;
+                }
+                let now_sec = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                let mut tm = std::mem::zeroed::<Tm>();
+                if !localtime_r(&now_sec, &mut tm).is_null() {
+                    let mut tm_copy = tm;
+                    let local_as_utc = timegm(&mut tm_copy);
+                    return Ok((local_as_utc - now_sec) as f64);
+                }
+                Ok(0.0)
+            }
+        })?,
+    )?;
+    time.set(
+        "local_time",
+        lua.create_function(|lua, ()| {
+            #[repr(C)]
+            struct Tm {
+                tm_sec: i32, tm_min: i32, tm_hour: i32, tm_mday: i32,
+                tm_mon: i32, tm_year: i32, tm_wday: i32, tm_yday: i32, tm_isdst: i32,
+            }
+            #[cfg(windows)]
+            extern "C" {
+                fn _localtime64_s(result: *mut Tm, time: *const i64) -> i32;
+            }
+            #[cfg(not(windows))]
+            extern "C" {
+                fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
+            }
+            let now_sec = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let mut tm = unsafe { std::mem::zeroed::<Tm>() };
+            #[cfg(windows)]
+            let success = unsafe { _localtime64_s(&mut tm, &now_sec) == 0 };
+            #[cfg(not(windows))]
+            let success = unsafe { !localtime_r(&now_sec, &mut tm).is_null() };
+
+            let table = lua.create_table()?;
+            if success {
+                table.set("sec", tm.tm_sec)?;
+                table.set("min", tm.tm_min)?;
+                table.set("hour", tm.tm_hour)?;
+                table.set("day", tm.tm_mday)?;
+                table.set("month", tm.tm_mon + 1)?;
+                table.set("year", tm.tm_year + 1900)?;
+                table.set("wday", tm.tm_wday + 1)?;
+                table.set("isdst", tm.tm_isdst > 0)?;
+            } else {
+                table.set("sec", 0)?;
+                table.set("min", 0)?;
+                table.set("hour", 0)?;
+                table.set("day", 1)?;
+                table.set("month", 1)?;
+                table.set("year", 1970)?;
+                table.set("wday", 5)?;
+                table.set("isdst", false)?;
+            }
+            Ok(table)
+        })?,
+    )?;
     desktop.set("Time", time)?;
 
     for permission in granted {

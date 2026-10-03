@@ -97,9 +97,24 @@ type Audio = {
 	chime: (name: string) -> (),
 }
 
+type LocalTime = {
+	sec: number,
+	min: number,
+	hour: number,
+	day: number,
+	month: number,
+	year: number,
+	wday: number,
+	isdst: boolean,
+}
+
 type Time = {
 	--- Seconds since the epoch, as a float.
 	now: () -> number,
+	--- Local timezone offset from UTC in seconds (e.g. -25200 for PDT).
+	timezone_offset: () -> number,
+	--- Broken-down local time table.
+	local_time: () -> LocalTime,
 }
 
 --- A signal a host fires, shaped the way the engine shapes one.
