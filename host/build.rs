@@ -30,9 +30,13 @@
 //! without mixing a word into an otherwise all-numeric, Roblox-shaped
 //! identifier.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+#[path = "build/locked_packages.rs"]
+mod locked_packages;
 
 /// The applet folders at the repository root that are built into `dew`.
 /// The same set as `bundled::APPLETS`, which a test in `host/src` checks
@@ -123,6 +127,7 @@ fn embed_bundled_applets() {
         // A folder that appears or changes anywhere below the applet,
         // `roblox_packages/` included, reruns this script.
         println!("cargo:rerun-if-changed={}", dir.display());
+        require_locked_versions(id, &dir);
         require_installed_packages(&dir);
 
         let mut dirs = Vec::new();
@@ -189,6 +194,49 @@ fn walk(dir: &Path, rel: &str, dirs: &mut Vec<String>, files: &mut Vec<(String, 
         } else if file_type.is_file() {
             files.push((child, path));
         }
+    }
+}
+
+/// Fail the build when the packages installed under `roblox_packages/.pesde`
+/// are not the versions the applet's `pesde.lock` pins. A pin bump without a
+/// `pesde install` leaves the old version installed and every `require`
+/// still resolving, so only the lockfile can tell it is stale.
+fn require_locked_versions(id: &str, dir: &Path) {
+    let lock_path = dir.join("pesde.lock");
+    let Ok(lock) = std::fs::read_to_string(&lock_path) else {
+        return;
+    };
+    let store = dir.join("roblox_packages").join(".pesde");
+    // Named directly as well as through the applet folder, so an install
+    // that changes only these reruns this script.
+    println!("cargo:rerun-if-changed={}", lock_path.display());
+    let mut installed: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if let Ok(entries) = std::fs::read_dir(&store) {
+        println!("cargo:rerun-if-changed={}", store.display());
+        for package in entries.flatten() {
+            let path = package.path();
+            if !path.is_dir() {
+                continue;
+            }
+            println!("cargo:rerun-if-changed={}", path.display());
+            let versions = std::fs::read_dir(&path)
+                .unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+                .flatten()
+                .filter(|v| v.path().is_dir())
+                .filter_map(|v| v.file_name().into_string().ok())
+                .collect();
+            if let Ok(name) = package.file_name().into_string() {
+                installed.insert(name, versions);
+            }
+        }
+    }
+    let mismatches =
+        locked_packages::mismatches(&locked_packages::locked_packages(&lock), &installed);
+    if !mismatches.is_empty() {
+        panic!(
+            "{}",
+            locked_packages::report(id, &dir.display().to_string(), &mismatches)
+        );
     }
 }
 
