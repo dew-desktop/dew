@@ -1863,6 +1863,41 @@ pub mod tests {
     }
 
     #[test]
+    fn system_is_on_the_table_only_when_granted() {
+        // TWO FIXTURES, because the absence is the half that matters: an applet
+        // that never asked must not be able to list what this machine runs.
+        let granted = Fixture::new(
+            "system-granted",
+            "id = \"plain\"\npermissions = [\"widget\", \"system\"]\n",
+            r#"
+                return {
+                    id = "plain",
+                    mount = function(desktop, root)
+                        assert(desktop.System ~= nil, "system was granted")
+                        assert(desktop.System.Cpu().usage >= 0, "a reading arrives")
+                        assert(type(desktop.System.OnSample) == "function")
+                    end,
+                }
+            "#,
+        );
+        assert!(granted.load().is_ok());
+
+        let refused = Fixture::new(
+            "system-refused",
+            "id = \"plain\"\npermissions = [\"widget\"]\n",
+            r#"
+                return {
+                    id = "plain",
+                    mount = function(desktop, root)
+                        assert(desktop.System == nil, "system was not asked for")
+                    end,
+                }
+            "#,
+        );
+        assert!(refused.load().is_ok());
+    }
+
+    #[test]
     fn a_datamodel_mod_without_mount_is_told_the_signature_it_needed() {
         let fixture = Fixture::new(
             "nomount",
