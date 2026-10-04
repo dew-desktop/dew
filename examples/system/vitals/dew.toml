@@ -1,0 +1,11 @@
+# Vitals
+#
+# The desktop clock's companion: CPU, memory and network in a pill the clock's
+# size, docked under it by default. Click to switch between meters and a
+# twenty-second graph per vital.
+
+id = "vitals"
+name = "Vitals"
+description = "CPU, memory and network at a glance, sized to sit under the clock"
+
+permissions = ["widget", "storage", "system"]
