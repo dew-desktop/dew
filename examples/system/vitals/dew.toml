@@ -1,8 +1,8 @@
 # Vitals
 #
-# The desktop clock's companion: CPU, memory and network in a pill the clock's
-# size, docked under it by default. Click to switch between meters and a
-# twenty-second graph per vital.
+# The desktop clock's companion: CPU, memory and network in a dark pill the
+# clock's size, docked under it by default. Click to switch between meters and
+# a twenty-second graph per vital.
 
 id = "vitals"
 name = "Vitals"

@@ -5,9 +5,9 @@
 	    cargo run -- examples/system/vitals
 	    cargo run -- snapshot examples/system/vitals --after 6 -o vitals.png
 
-	The clock's size, colours and border, docked 8px under it by default, so the
-	two read as one stack in the corner. Three vitals share the width: CPU,
-	memory, and network download.
+	The clock's size, docked 8px under it by default, on the same dark surface
+	as the system monitor. Three vitals share the width: CPU, memory, and
+	network download. The Dew gradient is only the accent on the data.
 
 	Click anywhere to switch between METERS (a bar each) and GRAPHS (the last
 	twenty samples each). The choice is kept in `desktop.Storage`, the way the
@@ -34,14 +34,19 @@ local root = widget({
 	keepOnScreen = true,
 })
 
-local WHITE = Color3.fromRGB(255, 255, 255)
-local INK = Color3.fromRGB(30, 48, 80)
-local COOL = Color3.fromRGB(196, 250, 236)
-local WARM = Color3.fromRGB(255, 212, 120)
-local HOT = Color3.fromRGB(255, 118, 140)
+-- The Dew dashboard's tokens, as the system monitor uses them.
+local SURFACE = Color3.fromRGB(18, 20, 26)
+local TRACK = Color3.fromRGB(32, 36, 46)
+local RULE = Color3.fromRGB(38, 42, 54)
+local TEXT = Color3.fromRGB(233, 239, 249)
+local MUTED = Color3.fromRGB(146, 162, 188)
+local SKY = Color3.fromRGB(86, 164, 240)
+local LILAC = Color3.fromRGB(150, 134, 236)
+local CORAL = Color3.fromRGB(255, 112, 128)
+local WHITE = Color3.new(1, 1, 1)
 local SAMPLES = 20
 
-local CAPS = Font.new("rbxasset://fonts/families/Montserrat.json", Enum.FontWeight.Bold)
+local LABEL = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.SemiBold)
 local MONO = Font.new("rbxasset://fonts/families/RobotoMono.json", Enum.FontWeight.Regular)
 
 local graphs = desktop.Storage ~= nil and desktop.Storage.get("vitals.mode") == "graphs"
@@ -69,18 +74,9 @@ local function list(parent: Instance, direction: Enum.FillDirection, gap: number
 	end
 end
 
-local function mix(a: Color3, b: Color3, t: number): Color3
-	t = math.clamp(t, 0, 1)
-	return Color3.new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t)
-end
-
-local function heat(load: number): Color3
-	if load < 55 then
-		return COOL
-	elseif load < 80 then
-		return mix(COOL, WARM, (load - 55) / 25)
-	end
-	return mix(WARM, HOT, (load - 80) / 20)
+--- The accent, periwinkle to sky. `instance` must be white to show it true.
+local function accent(instance: Instance, rotation: number)
+	make("UIGradient", { Rotation = rotation, Color = ColorSequence.new(LILAC, SKY), Parent = instance })
 end
 
 --- A rate in at most four characters, for a column 50px wide.
@@ -97,30 +93,26 @@ local function compact(n: number): string
 	return string.format("%d%s", math.floor(n + 0.5), units[i])
 end
 
--- The clock's surface, exactly: a full-size button under a vertical gradient.
+-- A full-size button is the surface, as on the clock, so a click anywhere
+-- reaches it.
 local surface = make("TextButton", {
 	Name = "VitalsSurface",
 	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = WHITE,
+	BackgroundColor3 = SURFACE,
 	Text = "",
 	AutoButtonColor = false,
 	Parent = root,
 })
 make("UICorner", { CornerRadius = UDim.new(0, 10), Parent = surface })
-make("UIGradient", {
-	Rotation = 90,
-	Color = ColorSequence.new(Color3.fromRGB(72, 148, 226), Color3.fromRGB(132, 120, 218)),
-	Parent = surface,
-})
-make("UIStroke", { Thickness = 1.5, Color = Color3.fromRGB(210, 232, 255), Transparency = 0.3, Parent = surface })
+make("UIStroke", { Thickness = 1, Color = RULE, Parent = surface })
 make("UIPadding", {
-	PaddingLeft = UDim.new(0, 11),
-	PaddingRight = UDim.new(0, 11),
-	PaddingTop = UDim.new(0, 6),
-	PaddingBottom = UDim.new(0, 6),
+	PaddingLeft = UDim.new(0, 12),
+	PaddingRight = UDim.new(0, 12),
+	PaddingTop = UDim.new(0, 7),
+	PaddingBottom = UDim.new(0, 7),
 	Parent = surface,
 })
-list(surface, Enum.FillDirection.Horizontal, 8, { VerticalAlignment = Enum.VerticalAlignment.Center })
+list(surface, Enum.FillDirection.Horizontal, 9, { VerticalAlignment = Enum.VerticalAlignment.Center })
 
 type Vital = { value: TextLabel, meter: Frame, fill: Frame, spark: Frame, bars: { Frame } }
 
@@ -128,14 +120,13 @@ local function divider(order: number)
 	make("Frame", {
 		Name = `Divider{order}`,
 		LayoutOrder = order,
-		Size = UDim2.new(0, 1, 0, 22),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.65,
+		Size = UDim2.new(0, 1, 0, 24),
+		BackgroundColor3 = RULE,
 		Parent = surface,
 	})
 end
 
-local function vital(name: string, order: number, caption: string): Vital
+local function vital(name: string, order: number, caption: string, colour: Color3?): Vital
 	local column = make("Frame", {
 		Name = name,
 		LayoutOrder = order,
@@ -144,7 +135,7 @@ local function vital(name: string, order: number, caption: string): Vital
 		Parent = surface,
 	})
 	make("UIFlexItem", { FlexMode = Enum.UIFlexMode.Fill, Parent = column })
-	list(column, Enum.FillDirection.Vertical, 3)
+	list(column, Enum.FillDirection.Vertical, 4)
 
 	local head = make("Frame", {
 		Name = "Head",
@@ -156,10 +147,9 @@ local function vital(name: string, order: number, caption: string): Vital
 	make("TextLabel", {
 		Name = "Caption",
 		Text = caption,
-		FontFace = CAPS,
-		TextSize = 9,
-		TextColor3 = WHITE,
-		TextTransparency = 0.15,
+		FontFace = LABEL,
+		TextSize = 11,
+		TextColor3 = MUTED,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		BackgroundTransparency = 1,
 		Size = UDim2.fromScale(1, 1),
@@ -167,15 +157,15 @@ local function vital(name: string, order: number, caption: string): Vital
 	})
 	local value = make("TextLabel", {
 		Name = "Value",
+		Text = "",
 		FontFace = MONO,
-		TextSize = 12,
-		TextColor3 = WHITE,
+		TextSize = 11,
+		TextColor3 = TEXT,
 		TextXAlignment = Enum.TextXAlignment.Right,
 		BackgroundTransparency = 1,
 		Size = UDim2.fromScale(1, 1),
 		Parent = head,
 	})
-	make("UIStroke", { Thickness = 1, Color = INK, Transparency = 0.6, Parent = value })
 
 	-- METERS AND GRAPHS ARE BOTH BUILT, and a click only swaps which is
 	-- Visible. Nothing is created or destroyed after mount.
@@ -188,21 +178,23 @@ local function vital(name: string, order: number, caption: string): Vital
 	})
 	local meter = make("Frame", {
 		Name = "Meter",
-		AnchorPoint = Vector2.new(0, 0.5),
-		Position = UDim2.fromScale(0, 0.5),
-		Size = UDim2.new(1, 0, 0, 5),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.75,
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.fromScale(0, 1),
+		Size = UDim2.new(1, 0, 0, 4),
+		BackgroundColor3 = TRACK,
 		Parent = body,
 	})
-	make("UICorner", { CornerRadius = UDim.new(0, 3), Parent = meter })
+	make("UICorner", { CornerRadius = UDim.new(0, 2), Parent = meter })
 	local fill = make("Frame", {
 		Name = "Fill",
 		Size = UDim2.fromScale(0, 1),
-		BackgroundColor3 = COOL,
+		BackgroundColor3 = colour or WHITE,
 		Parent = meter,
 	})
-	make("UICorner", { CornerRadius = UDim.new(0, 3), Parent = fill })
+	make("UICorner", { CornerRadius = UDim.new(0, 2), Parent = fill })
+	if not colour then
+		accent(fill, 0)
+	end
 
 	local spark = make("Frame", {
 		Name = "Spark",
@@ -216,14 +208,18 @@ local function vital(name: string, order: number, caption: string): Vital
 	})
 	local bars = {}
 	for i = 1, SAMPLES do
-		bars[i] = make("Frame", {
+		local bar = make("Frame", {
 			Name = string.format("Bar%02d", i),
 			LayoutOrder = i,
 			Size = UDim2.new(0, 1, 0, 1),
-			BackgroundColor3 = WHITE,
+			BackgroundColor3 = colour or WHITE,
 			BackgroundTransparency = 1,
 			Parent = spark,
 		})
+		if not colour then
+			accent(bar, 90)
+		end
+		bars[i] = bar
 	end
 	return { value = value, meter = meter, fill = fill, spark = spark, bars = bars }
 end
@@ -232,7 +228,8 @@ local cpu = vital("Cpu", 1, "CPU")
 divider(2)
 local ram = vital("Memory", 3, "RAM")
 divider(4)
-local net = vital("Network", 5, "NET")
+-- Download, in the colour the monitor gives it.
+local net = vital("Network", 5, "NET", SKY)
 local vitals = { cpu, ram, net }
 
 local function show()
@@ -242,17 +239,17 @@ local function show()
 	end
 end
 
---- The last `SAMPLES` of `series` against `scale`, newest on the right.
-local function spark(v: Vital, series: { number }, scale: number, tint: ((number) -> Color3)?)
-	local offset = SAMPLES - #series
+--- The last `SAMPLES` of `series` against `scale`, newest on the right. A
+--- sample not taken yet is hidden rather than drawn as zero.
+local function spark(v: Vital, series: { number }, scale: number)
+	local skip = #series - SAMPLES
 	for i, bar in v.bars do
-		local value = series[i + (#series - SAMPLES)]
-		if i <= offset or value == nil then
+		local value = series[i + skip]
+		if value == nil then
 			bar.BackgroundTransparency = 1
 		else
 			bar.Size = UDim2.new(0, 1, math.clamp(value / scale, 0, 1), 1)
-			bar.BackgroundTransparency = 0.05 + 0.55 * (1 - i / SAMPLES)
-			bar.BackgroundColor3 = if tint then tint(value) else WHITE
+			bar.BackgroundTransparency = 0
 		end
 	end
 end
@@ -260,16 +257,16 @@ end
 local function update()
 	local c = System.Cpu()
 	cpu.value.Text = string.format("%d%%", math.floor(c.usage + 0.5))
+	cpu.value.TextColor3 = if c.usage >= 85 then CORAL else TEXT
 	cpu.fill.Size = UDim2.fromScale(c.usage / 100, 1)
-	cpu.fill.BackgroundColor3 = heat(c.usage)
-	spark(cpu, System.History("cpu"), 100, heat)
+	spark(cpu, System.History("cpu"), 100)
 
 	local m = System.Memory()
 	local used = if m.total > 0 then m.used / m.total * 100 else 0
 	ram.value.Text = string.format("%d%%", math.floor(used + 0.5))
+	ram.value.TextColor3 = if used >= 90 then CORAL else TEXT
 	ram.fill.Size = UDim2.fromScale(used / 100, 1)
-	ram.fill.BackgroundColor3 = heat(used)
-	spark(ram, System.History("memory"), 100, heat)
+	spark(ram, System.History("memory"), 100)
 
 	local down = System.History("down")
 	local peak = 16 * 1024
@@ -279,7 +276,6 @@ local function update()
 	local n = System.Network()
 	net.value.Text = compact(n.down)
 	net.fill.Size = UDim2.fromScale(math.clamp(n.down / peak, 0, 1), 1)
-	net.fill.BackgroundColor3 = Color3.fromRGB(150, 245, 215)
 	spark(net, down, peak)
 end
 

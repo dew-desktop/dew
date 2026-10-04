@@ -1,67 +1,59 @@
 --!strict
 --[[
-	System Monitor: what the machine is doing, in the desktop clock's colours.
+	System Monitor: what the machine is doing, in one dark panel.
 
 	    cargo run -- examples/system/monitor
 	    cargo run -- snapshot examples/system/monitor --after 6 -o monitor.png
 
-	From the top:
+	Laid out the way menu-bar monitors such as iStat Menus and Stats lay out
+	their dropdowns: one solid surface, sections divided by hairlines, a grey
+	label beside a white value, and colour only where there is data. The
+	surface and type colours are the Dew dashboard's own tokens.
 
-	  HEADER      a heartbeat that flips on every sample, the OS, the battery
-	              when there is one, and uptime.
-	  CPU         total load, a minute of history whose older bars fade, and a
-	              heat tile per core laid out by one UIGridLayout (past sixteen
-	              threads, each tile averages a run of them).
-	  MEMORY      used and free as two segments whose widths are their
-	              UIFlexItem GrowRatios -- the bytes themselves, no arithmetic.
-	  NETWORK     download rising and upload hanging from one centre line, both
-	              against the same scale, so the two can be compared at a glance.
-	  STORAGE     every fixed drive, fullest in warm colours.
-	  PROCESSES   the five busiest by name; click CPU / MEM to re-sort. The
-	              choice is kept in `desktop.Storage`, like the clock's 12h/24h.
+	THE DEW GRADIENT IS THE ACCENT AND NOTHING ELSE. Sky blue to periwinkle
+	fills the CPU and core bars and the memory and drive meters, and its two
+	ends are the two network series: download is the sky end, upload the
+	periwinkle one. A value turns coral only past a threshold worth noticing.
 
-	NOTHING IS POSITIONED BY HAND. Rows are UIListLayouts, the spare width in a
-	row goes to whichever child has a UIFlexItem, the graphs are lists with
-	HorizontalFlex = Fill so sixty bars share any width evenly, and the cores are
-	a grid. The only numbers below are sizes.
+	THE LAYOUT ENGINE DOES THE ARITHMETIC. Every row is a UIListLayout and its
+	spare width goes to whichever child has a UIFlexItem. Graphs are lists with
+	HorizontalFlex = Fill, so sixty bars share any width evenly. Memory is two
+	segments whose GrowRatios are the bytes themselves.
 
-	NOTHING REDRAWS PER FRAME. Every update happens in `System.OnSample`, once a
-	second, so the monitor costs one repaint a second and does not appear in its
-	own graph.
+	SAME TREE ON EVERY MACHINE. Sixteen core bars and four drive rows are built
+	once; the unused ones are hidden and the lists skip them. Past sixteen
+	threads each bar averages a run of neighbours.
+
+	ONE REPAINT A SECOND. Everything updates in `System.OnSample`, so the panel
+	does not show up in its own CPU graph.
 ]]
 
 local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 local System = assert(desktop.System, "dew.toml must grant `system`")
 
-local WIDTH = 340
-local PAD = 14 -- card inset
-local GAP = 10 -- between sections
-local INSET = 12 -- panel inset
-local ROW_GAP = 8 -- between rows in a panel
-local INNER = WIDTH - 2 * PAD - 2 * INSET -- a panel row's width
+local WIDTH = 300
+local PAD = 16
 
--- The clock's palette: sky blue to periwinkle, white type with a dark edge.
-local SKY = Color3.fromRGB(72, 148, 226)
-local LILAC = Color3.fromRGB(132, 120, 218)
-local RIM = Color3.fromRGB(210, 232, 255)
-local INK = Color3.fromRGB(30, 48, 80)
-local WHITE = Color3.fromRGB(255, 255, 255)
+-- The dashboard's tokens (dashboard/dashboard.luau).
+local SURFACE = Color3.fromRGB(18, 20, 26)
+local TRACK = Color3.fromRGB(32, 36, 46)
+local RULE = Color3.fromRGB(38, 42, 54)
+local TEXT = Color3.fromRGB(233, 239, 249)
+local MUTED = Color3.fromRGB(146, 162, 188)
+local FAINT = Color3.fromRGB(96, 106, 124)
 
--- Load colours, cool to hot. Cool is nearly white so a quiet machine reads as
--- calm on the gradient; warm and hot are reserved for something worth seeing.
-local COOL = Color3.fromRGB(196, 250, 236)
-local WARM = Color3.fromRGB(255, 212, 120)
-local HOT = Color3.fromRGB(255, 118, 140)
-local DOWN = Color3.fromRGB(150, 245, 215)
-local UP = Color3.fromRGB(255, 196, 228)
+-- The accent: the clock's gradient, and a warning used sparingly.
+local SKY = Color3.fromRGB(86, 164, 240)
+local LILAC = Color3.fromRGB(150, 134, 236)
+local CORAL = Color3.fromRGB(255, 112, 128)
+local WHITE = Color3.new(1, 1, 1)
 
 local function face(family: string, weight: Enum.FontWeight?): Font
 	return Font.new(`rbxasset://fonts/families/{family}.json`, weight or Enum.FontWeight.Regular)
 end
-local DISPLAY = face("Montserrat", Enum.FontWeight.Heavy)
-local TITLE = face("Montserrat", Enum.FontWeight.Bold)
-local CAPS = face("Montserrat", Enum.FontWeight.Bold)
-local BODY = face("SourceSansPro", Enum.FontWeight.SemiBold)
+local LIGHT = face("SourceSansPro", Enum.FontWeight.Light)
+local BODY = face("SourceSansPro")
+local STRONG = face("SourceSansPro", Enum.FontWeight.SemiBold)
 local MONO = face("RobotoMono")
 
 -- Formatting -----------------------------------------------------------------
@@ -95,24 +87,13 @@ local function duration(seconds: number): string
 	return `{m}m`
 end
 
-local function mix(a: Color3, b: Color3, t: number): Color3
-	t = math.clamp(t, 0, 1)
-	return Color3.new(a.R + (b.R - a.R) * t, a.G + (b.G - a.G) * t, a.B + (b.B - a.B) * t)
-end
-
-local function heat(load: number): Color3
-	if load < 55 then
-		return COOL
-	elseif load < 80 then
-		return mix(COOL, WARM, (load - 55) / 25)
-	end
-	return mix(WARM, HOT, (load - 80) / 20)
-end
-
 --- The drive's own name where it has one worth showing: `C:` rather than `C:\`.
-local function driveName(mount: string): string
-	local letter = string.match(mount, "^(%a:)[\\/]?$")
-	return letter or mount
+local function driveName(path: string): string
+	return string.match(path, "^(%a:)[\\/]?$") or path
+end
+
+local function processName(name: string): string
+	return (string.gsub(name, "%.[eE][xX][eE]$", ""))
 end
 
 -- Building -------------------------------------------------------------------
@@ -120,13 +101,12 @@ end
 --- An instance of `class` with `props`, parented last so it arrives whole.
 local function make(class: string, props: { [string]: any }): any
 	local instance = Instance.new(class)
-	local parent = props.Parent
 	for key, value in props do
 		if key ~= "Parent" then
 			(instance :: any)[key] = value
 		end
 	end
-	instance.Parent = parent
+	instance.Parent = props.Parent
 	return instance
 end
 
@@ -134,19 +114,9 @@ local function rounded(parent: Instance, radius: number)
 	make("UICorner", { CornerRadius = UDim.new(0, radius), Parent = parent })
 end
 
-local function inset(parent: Instance, x: number, y: number)
-	make("UIPadding", {
-		PaddingLeft = UDim.new(0, x),
-		PaddingRight = UDim.new(0, x),
-		PaddingTop = UDim.new(0, y),
-		PaddingBottom = UDim.new(0, y),
-		Parent = parent,
-	})
-end
-
 --- A UIListLayout in LayoutOrder. SortOrder defaults to Name on every layout,
 --- which is rarely what the LayoutOrder beside it meant.
-local function list(parent: Instance, direction: Enum.FillDirection, gap: number, props: { [string]: any }?): UIListLayout
+local function list(parent: Instance, direction: Enum.FillDirection, gap: number, props: { [string]: any }?)
 	local layout = make("UIListLayout", {
 		FillDirection = direction,
 		SortOrder = Enum.SortOrder.LayoutOrder,
@@ -156,16 +126,25 @@ local function list(parent: Instance, direction: Enum.FillDirection, gap: number
 	for key, value in props or {} do
 		(layout :: any)[key] = value
 	end
-	return layout
 end
 
---- Take the row's spare width. The one line that makes a spacer, a stretching
---- label or a bar that fills what its neighbours leave.
-local function fill(instance: Instance)
+--- Take whatever width the row's other children leave.
+local function grow(instance: Instance)
 	make("UIFlexItem", { FlexMode = Enum.UIFlexMode.Fill, Parent = instance })
 end
 
-local function blank(name: string, order: number, size: UDim2, parent: Instance): Frame
+--- Paint `instance` with the accent: periwinkle at the top (or the left, at
+--- rotation 0) to sky blue. Its own colour must be white for the gradient to
+--- show true.
+local function accent(instance: Instance, rotation: number?)
+	make("UIGradient", {
+		Rotation = rotation or 90,
+		Color = ColorSequence.new(LILAC, SKY),
+		Parent = instance,
+	})
+end
+
+local function blank(parent: Instance, name: string, order: number, size: UDim2): Frame
 	return make("Frame", {
 		Name = name,
 		LayoutOrder = order,
@@ -175,84 +154,102 @@ local function blank(name: string, order: number, size: UDim2, parent: Instance)
 	})
 end
 
-local function label(parent: Instance, props: { [string]: any }): TextLabel
-	local text = make("TextLabel", {
+--- A label as wide as its text unless told otherwise.
+local function text(parent: Instance, props: { [string]: any }): TextLabel
+	local label = make("TextLabel", {
+		Text = "",
 		BackgroundTransparency = 1,
-		TextColor3 = WHITE,
+		TextColor3 = TEXT,
 		FontFace = BODY,
 		TextSize = 13,
 		TextXAlignment = Enum.TextXAlignment.Left,
 		TextYAlignment = Enum.TextYAlignment.Center,
-		Parent = parent,
-	})
-	for key, value in props do
-		(text :: any)[key] = value
-	end
-	return text
-end
-
---- A small capitalised heading, the panel's name.
-local function caption(parent: Instance, text: string, order: number): TextLabel
-	return label(parent, {
-		Name = "Caption",
-		LayoutOrder = order,
-		Text = text,
-		FontFace = CAPS,
-		TextSize = 10,
-		TextTransparency = 0.2,
 		AutomaticSize = Enum.AutomaticSize.X,
 		Size = UDim2.new(0, 0, 1, 0),
 	})
-end
-
---- The dark edge the clock gives its digits, for the large numerals.
-local function edged(text: TextLabel)
-	make("UIStroke", { Thickness = 1, Color = INK, Transparency = 0.55, Parent = text })
-end
-
---- A frosted panel holding rows. Each row is asked for at its own height, and
---- the panel's own height follows, so the window can be sized to the content
---- before it exists. A row built hidden takes no height, and the list skips it.
-type Panel = {
-	frame: Frame,
-	height: number,
-	row: (self: Panel, name: string, height: number, shown: boolean?) -> Frame,
-}
-
-local function panel(parent: Instance, name: string, order: number): Panel
-	local frame = make("Frame", {
-		Name = name,
-		LayoutOrder = order,
-		Size = UDim2.new(1, 0, 0, 0),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.87,
-		Parent = parent,
-	})
-	rounded(frame, 10)
-	make("UIStroke", { Thickness = 1, Color = WHITE, Transparency = 0.78, Parent = frame })
-	inset(frame, INSET, INSET)
-	list(frame, Enum.FillDirection.Vertical, ROW_GAP)
-
-	local self = { frame = frame, height = 2 * INSET - ROW_GAP } :: any
-	local rows = 0
-	function self.row(this: Panel, rowName: string, height: number, shown: boolean?): Frame
-		rows += 1
-		local row = blank(rowName, rows, UDim2.new(1, 0, 0, height), frame)
-		if shown == false then
-			row.Visible = false
-		else
-			this.height += height + ROW_GAP
-			frame.Size = UDim2.new(1, 0, 0, this.height)
-		end
-		return row
+	for key, value in props do
+		(label :: any)[key] = value
 	end
-	return self
+	label.Parent = parent
+	return label
 end
 
---- A row of `count` bars sharing the row's width evenly, standing on
---- `align`'s edge. HorizontalFlex = Fill is what shares the width: every bar
---- asks for 1px and the layout hands each the same part of what is left.
-local function bars(parent: Instance, count: number, align: Enum.VerticalAlignment, colour: Color3): { Frame }
+-- The panel ------------------------------------------------------------------
+
+local card = make("Frame", {
+	Name = "Monitor",
+	Size = UDim2.fromScale(1, 1),
+	BackgroundColor3 = SURFACE,
+})
+rounded(card, 12)
+make("UIStroke", { Thickness = 1, Color = RULE, Parent = card })
+make("UIPadding", {
+	PaddingLeft = UDim.new(0, PAD),
+	PaddingRight = UDim.new(0, PAD),
+	PaddingTop = UDim.new(0, 14),
+	PaddingBottom = UDim.new(0, 16),
+	Parent = card,
+})
+list(card, Enum.FillDirection.Vertical, 0)
+
+-- The window's height is the sum of the rows added below, so the window can
+-- be sized before it exists.
+local height = 14 + 16
+local order = 0
+
+--- A full-width row `size` pixels tall, next down the panel. A hidden row
+--- takes no height, and the list skips it.
+local function row(name: string, size: number, shown: boolean?): Frame
+	order += 1
+	local frame = blank(card, name, order, UDim2.new(1, 0, 0, size))
+	if shown == false then
+		frame.Visible = false
+	else
+		height += size
+	end
+	return frame
+end
+
+local function gap(size: number, shown: boolean?)
+	row(`Gap{order + 1}`, size, shown)
+end
+
+--- A hairline between sections, with room either side.
+local function rule()
+	gap(12)
+	local line = row(`Rule{order + 1}`, 1)
+	line.BackgroundTransparency = 0
+	line.BackgroundColor3 = RULE
+	gap(12)
+end
+
+--- A spacer that takes a row's spare width.
+local function spacer(parent: Instance, order: number)
+	grow(blank(parent, "Spacer", order, UDim2.new(0, 0, 1, 0)))
+end
+
+--- A section's heading: its name on the left, a headline value on the right.
+local function heading(name: string): TextLabel
+	local frame = row(`{name}Heading`, 18)
+	list(frame, Enum.FillDirection.Horizontal, 8, { VerticalAlignment = Enum.VerticalAlignment.Center })
+	text(frame, { Name = "Title", LayoutOrder = 1, Text = name, FontFace = STRONG })
+	spacer(frame, 2)
+	return text(frame, { Name = "Value", LayoutOrder = 3, FontFace = MONO, TextSize = 12 })
+end
+
+--- A grey label and a white value, sharing the row with its siblings.
+local function stat(parent: Instance, order: number, label: string): TextLabel
+	local frame = blank(parent, label, order, UDim2.new(0, 0, 1, 0))
+	grow(frame)
+	list(frame, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
+	text(frame, { Name = "Label", LayoutOrder = 1, Text = label, TextColor3 = MUTED, TextSize = 12 })
+	return text(frame, { Name = "Value", LayoutOrder = 2, FontFace = MONO, TextSize = 11 })
+end
+
+--- `count` bars sharing `parent`'s width, standing on `align`'s edge.
+--- HorizontalFlex = Fill does the sharing: each bar asks for 1px and the list
+--- hands each the same part of what is left. With no `colour`, the accent.
+local function bars(parent: Instance, count: number, align: Enum.VerticalAlignment, colour: Color3?): { Frame }
 	list(parent, Enum.FillDirection.Horizontal, 2, {
 		HorizontalFlex = Enum.UIFlexAlignment.Fill,
 		VerticalAlignment = align,
@@ -263,560 +260,367 @@ local function bars(parent: Instance, count: number, align: Enum.VerticalAlignme
 			Name = string.format("Bar%02d", i),
 			LayoutOrder = i,
 			Size = UDim2.new(0, 1, 0, 0),
-			BackgroundColor3 = colour,
+			BackgroundColor3 = colour or WHITE,
 			BackgroundTransparency = 1,
 			Parent = parent,
 		})
-		rounded(bar, 2)
+		rounded(bar, 1)
+		if not colour then
+			accent(bar)
+		end
 		made[i] = bar
 	end
 	return made
 end
 
---- Set the bars in `row` from `series`, newest on the right. Missing samples are hidden
---- rather than drawn as zero: a minute that has not happened yet is not idle.
---- Older bars fade, so the graph reads as moving even between samples.
-local function plot(row: { Frame }, series: { number }, scale: number, tint: ((number) -> Color3)?)
-	local count = #row
-	local offset = count - #series
+--- Set `row` from `series`, newest on the right. A sample not taken yet is
+--- hidden rather than drawn as zero: a minute that has not happened is not idle.
+local function plot(row: { Frame }, series: { number }, scale: number)
+	local offset = #row - #series
 	for i, bar in row do
 		local value = series[i - offset]
 		if value == nil then
 			bar.BackgroundTransparency = 1
 		else
-			local ratio = math.clamp(value / scale, 0, 1)
-			bar.Size = UDim2.new(0, 1, ratio, 2)
-			bar.BackgroundTransparency = 0.05 + 0.6 * (1 - i / count)
-			if tint then
-				bar.BackgroundColor3 = tint(value)
-			end
+			bar.Size = UDim2.new(0, 1, math.clamp(value / scale, 0, 1), 1)
+			bar.BackgroundTransparency = 0
 		end
 	end
 end
 
--- The card ------------------------------------------------------------------
-
-local card = make("Frame", {
-	Name = "Monitor",
-	Size = UDim2.fromScale(1, 1),
-	BackgroundColor3 = WHITE,
-})
-rounded(card, 14)
-make("UIGradient", { Rotation = 90, Color = ColorSequence.new(SKY, LILAC), Parent = card })
-make("UIStroke", { Thickness = 1.5, Color = RIM, Transparency = 0.3, Parent = card })
-inset(card, PAD, PAD)
-list(card, Enum.FillDirection.Vertical, GAP)
-
-local height = 2 * PAD - GAP
-local function section(h: number)
-	height += h + GAP
-end
-
 -- Header ---------------------------------------------------------------------
 
-local HEADER = 34
-local header = blank("Header", 1, UDim2.new(1, 0, 0, HEADER), card)
-section(HEADER)
-list(header, Enum.FillDirection.Horizontal, 10, { VerticalAlignment = Enum.VerticalAlignment.Center })
-
+local header = row("Header", 18)
+list(header, Enum.FillDirection.Horizontal, 8, { VerticalAlignment = Enum.VerticalAlignment.Center })
 local beat = make("Frame", {
 	Name = "Heartbeat",
 	LayoutOrder = 1,
-	Size = UDim2.fromOffset(10, 10),
-	BackgroundColor3 = DOWN,
+	Size = UDim2.fromOffset(6, 6),
+	BackgroundColor3 = SKY,
 	Parent = header,
 })
-rounded(beat, 5)
-make("UIStroke", { Thickness = 2, Color = WHITE, Transparency = 0.6, Parent = beat })
-
-local titles = blank("Titles", 2, UDim2.new(0, 0, 1, 0), header)
-fill(titles)
-list(titles, Enum.FillDirection.Vertical, 0)
-local title = label(titles, {
-	Name = "Title",
-	LayoutOrder = 1,
-	Text = "System",
-	FontFace = TITLE,
-	TextSize = 17,
-	Size = UDim2.new(1, 0, 0, 19),
-})
-edged(title)
-local subtitle = label(titles, {
-	Name = "Subtitle",
+rounded(beat, 3)
+local osName = text(header, {
+	Name = "Os",
 	LayoutOrder = 2,
-	Text = "",
+	TextColor3 = MUTED,
 	TextSize = 12,
-	TextTransparency = 0.15,
 	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 15),
+	AutomaticSize = Enum.AutomaticSize.None,
 })
+grow(osName)
 
---- A pill that is as wide as what it says.
-local function pill(name: string, order: number): (Frame, TextLabel)
-	local frame = make("Frame", {
-		Name = name,
-		LayoutOrder = order,
-		AutomaticSize = Enum.AutomaticSize.X,
-		Size = UDim2.new(0, 0, 0, 22),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.82,
-		Parent = header,
-	})
-	rounded(frame, 11)
-	inset(frame, 9, 0)
-	list(frame, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
-	local text = label(frame, {
-		Name = "Text",
-		LayoutOrder = 2,
-		FontFace = MONO,
-		TextSize = 11,
-		AutomaticSize = Enum.AutomaticSize.X,
-		Size = UDim2.new(0, 0, 1, 0),
-	})
-	return frame, text
-end
-
--- A battery drawn from frames rather than a glyph, so it looks the same in
--- every face: a body with a fill whose width is the charge, and a nub.
-local batteryPill, batteryText = pill("Battery", 3)
-local cell = blank("Cell", 1, UDim2.fromOffset(20, 10), batteryPill)
-local body = make("Frame", {
-	Name = "Body",
-	Size = UDim2.fromOffset(17, 10),
-	BackgroundTransparency = 1,
-	Parent = cell,
-})
-rounded(body, 2)
-make("UIStroke", { Thickness = 1, Color = WHITE, Transparency = 0.1, Parent = body })
+-- A battery drawn from frames rather than a glyph, so it is the same in every
+-- face: an outline, a fill whose width is the charge, and a nub.
+local battery = blank(header, "Battery", 3, UDim2.new(0, 0, 1, 0))
+battery.AutomaticSize = Enum.AutomaticSize.X
+list(battery, Enum.FillDirection.Horizontal, 5, { VerticalAlignment = Enum.VerticalAlignment.Center })
+local cell = blank(battery, "Cell", 1, UDim2.fromOffset(19, 9))
+local shell = make("Frame", { Name = "Shell", Size = UDim2.fromOffset(16, 9), BackgroundTransparency = 1, Parent = cell })
+rounded(shell, 2)
+make("UIStroke", { Thickness = 1, Color = MUTED, Parent = shell })
 local charge = make("Frame", {
 	Name = "Charge",
 	Position = UDim2.fromOffset(2, 2),
-	Size = UDim2.fromOffset(13, 6),
-	BackgroundColor3 = WHITE,
-	Parent = body,
+	Size = UDim2.fromOffset(12, 5),
+	BackgroundColor3 = TEXT,
+	Parent = shell,
 })
 rounded(charge, 1)
 make("Frame", {
 	Name = "Nub",
-	Position = UDim2.fromOffset(18, 3),
-	Size = UDim2.fromOffset(2, 4),
-	BackgroundColor3 = WHITE,
-	BackgroundTransparency = 0.1,
+	Position = UDim2.fromOffset(17, 3),
+	Size = UDim2.fromOffset(2, 3),
+	BackgroundColor3 = MUTED,
 	Parent = cell,
 })
-batteryPill.Visible = false
+local batteryText = text(battery, { Name = "Percent", LayoutOrder = 2, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
+battery.Visible = false
 
-local _, uptimeText = pill("Uptime", 4)
+local uptime = text(header, { Name = "Uptime", LayoutOrder = 4, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
+
+rule()
 
 -- CPU ------------------------------------------------------------------------
 
-local cpu = panel(card, "Cpu", 2)
-local cores = #System.Cpu().cores
-
-local top = cpu:row("Summary", 44)
-list(top, Enum.FillDirection.Horizontal, 4, { VerticalAlignment = Enum.VerticalAlignment.Center })
-local cpuValue = label(top, {
-	Name = "Value",
-	LayoutOrder = 1,
-	FontFace = DISPLAY,
-	TextSize = 40,
-	AutomaticSize = Enum.AutomaticSize.X,
-	Size = UDim2.new(0, 0, 1, 0),
-})
-edged(cpuValue)
-label(top, {
-	Name = "Percent",
-	LayoutOrder = 2,
-	Text = "%",
-	FontFace = TITLE,
-	TextSize = 18,
-	TextTransparency = 0.15,
-	TextYAlignment = Enum.TextYAlignment.Bottom,
-	Size = UDim2.new(0, 18, 0, 36),
-})
-local about = blank("About", 3, UDim2.new(0, 0, 1, 0), top)
-fill(about)
-inset(about, 8, 0)
-list(about, Enum.FillDirection.Vertical, 1, { VerticalAlignment = Enum.VerticalAlignment.Center })
-caption(about, "PROCESSOR", 1).Size = UDim2.new(0, 0, 0, 12)
-local brand = label(about, {
+-- The headline: a light, large number, readable from across the room, with
+-- the processor's name and shape beside it, smaller.
+local summary = row("Cpu", 40)
+list(summary, Enum.FillDirection.Horizontal, 12, { VerticalAlignment = Enum.VerticalAlignment.Center })
+local cpuValue = text(summary, { Name = "Value", LayoutOrder = 1, FontFace = LIGHT, TextSize = 38 })
+local about = blank(summary, "About", 2, UDim2.new(0, 0, 0, 34))
+grow(about)
+list(about, Enum.FillDirection.Vertical, 2)
+local brand = text(about, {
 	Name = "Brand",
-	LayoutOrder = 2,
-	TextSize = 13,
+	LayoutOrder = 1,
+	FontFace = STRONG,
 	TextTruncate = Enum.TextTruncate.AtEnd,
+	AutomaticSize = Enum.AutomaticSize.None,
+	Size = UDim2.new(1, 0, 0, 16),
+})
+local detail = text(about, {
+	Name = "Detail",
+	LayoutOrder = 2,
+	TextColor3 = MUTED,
+	TextSize = 12,
+	TextTruncate = Enum.TextTruncate.AtEnd,
+	AutomaticSize = Enum.AutomaticSize.None,
 	Size = UDim2.new(1, 0, 0, 15),
 })
-local clockText = label(about, {
-	Name = "Detail",
-	LayoutOrder = 3,
-	FontFace = MONO,
-	TextSize = 10,
-	TextTransparency = 0.2,
-	TextTruncate = Enum.TextTruncate.AtEnd,
-	Size = UDim2.new(1, 0, 0, 13),
-})
 
--- The graph sits over two guide lines. The lines are siblings of the bars'
--- frame rather than children, so the list lays out the bars and nothing else.
-local graph = cpu:row("Graph", 52)
-for i, at in { 0, 0.5 } do
+gap(10)
+
+-- A minute of load over a half-way guide and a baseline. The guides are
+-- siblings of the bars' frame, so the list lays out bars and nothing else.
+local graph = row("Graph", 48)
+for i, at in { 0.5, 1 } do
 	make("Frame", {
 		Name = `Guide{i}`,
-		Position = UDim2.fromScale(0, at),
+		Position = UDim2.new(0, 0, at, -1),
 		Size = UDim2.new(1, 0, 0, 1),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.82,
+		BackgroundColor3 = RULE,
 		Parent = graph,
 	})
 end
-local cpuBars = bars(blank("Bars", 1, UDim2.fromScale(1, 1), graph), 60, Enum.VerticalAlignment.Bottom, COOL)
+local cpuBars = bars(blank(graph, "Bars", 1, UDim2.fromScale(1, 1)), 60, Enum.VerticalAlignment.Bottom)
 
-local coresHead = cpu:row("CoresHead", 12)
-list(coresHead, Enum.FillDirection.Horizontal, 6)
-local coresCaption = caption(coresHead, `CORES · {cores}`, 1)
-local spacer = blank("Spacer", 2, UDim2.new(0, 0, 1, 0), coresHead)
-fill(spacer)
-local hottest = label(coresHead, {
-	Name = "Hottest",
-	LayoutOrder = 3,
-	FontFace = MONO,
-	TextSize = 10,
-	TextTransparency = 0.2,
-	AutomaticSize = Enum.AutomaticSize.X,
-	Size = UDim2.new(0, 0, 1, 0),
-})
+gap(12)
 
--- SIXTEEN TILES, WHATEVER THE MACHINE. Up to sixteen threads each has its
--- own; past that each tile is the average of a run of neighbours, so a
--- 64-thread workstation is sixteen readable tiles rather than sixty-four
--- slivers. Unused tiles are built hidden and the grid skips them: the tree has
--- the same shape on every machine, and nothing is created after mount.
-local TILES = 16
-local group = math.ceil(cores / TILES)
-local shownTiles = math.ceil(cores / group)
-local columns = math.min(shownTiles, 8)
-local TILE_GAP = 4
-local tileWidth = math.floor((INNER - (columns - 1) * TILE_GAP) / columns)
-local TILE_HEIGHT = 24
-local rowsOfTiles = math.ceil(shownTiles / columns)
-if group > 1 then
-	coresCaption.Text = `CORES · {cores} · {group} PER TILE`
-end
-local grid = cpu:row("Cores", rowsOfTiles * TILE_HEIGHT + (rowsOfTiles - 1) * TILE_GAP)
-make("UIGridLayout", {
-	CellSize = UDim2.fromOffset(tileWidth, TILE_HEIGHT),
-	CellPadding = UDim2.fromOffset(TILE_GAP, TILE_GAP),
-	FillDirectionMaxCells = columns,
-	SortOrder = Enum.SortOrder.LayoutOrder,
-	HorizontalAlignment = Enum.HorizontalAlignment.Center,
-	Parent = grid,
-})
-local tiles: { Frame } = {}
-local tileText: { TextLabel } = {}
-for i = 1, TILES do
-	local tile = make("Frame", {
+local coresHeading = row("CoresHeading", 14)
+list(coresHeading, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
+local coresLabel = text(coresHeading, { Name = "Label", LayoutOrder = 1, TextColor3 = MUTED, TextSize = 12 })
+spacer(coresHeading, 2)
+local busiest = text(coresHeading, { Name = "Busiest", LayoutOrder = 3, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
+
+gap(6)
+
+-- One bar per core, like an equaliser: a track filled up from its foot.
+-- Sixteen always exist; see the header comment.
+local cores = #System.Cpu().cores
+local CELLS = 16
+local group = math.ceil(cores / CELLS)
+local shownCells = math.ceil(cores / group)
+coresLabel.Text = if group > 1 then `{cores} threads, {group} per bar` else `{cores} threads`
+
+local coreRow = row("Cores", 26)
+list(coreRow, Enum.FillDirection.Horizontal, 3, { HorizontalFlex = Enum.UIFlexAlignment.Fill })
+local coreFills: { Frame } = {}
+for i = 1, CELLS do
+	local track = make("Frame", {
 		Name = string.format("Tile%02d", i),
 		LayoutOrder = i,
-		Visible = i <= shownTiles,
-		BackgroundColor3 = COOL,
-		BackgroundTransparency = 0.8,
-		Parent = grid,
+		Visible = i <= shownCells,
+		Size = UDim2.new(0, 1, 1, 0),
+		BackgroundColor3 = TRACK,
+		Parent = coreRow,
 	})
-	rounded(tile, 5)
-	tiles[i] = tile
-	tileText[i] = label(tile, {
+	rounded(track, 2)
+	local fill = make("Frame", {
 		Name = "Load",
-		FontFace = MONO,
-		TextSize = 10,
-		TextXAlignment = Enum.TextXAlignment.Center,
-		Size = UDim2.fromScale(1, 1),
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.fromScale(0, 1),
+		Size = UDim2.fromScale(1, 0),
+		BackgroundColor3 = WHITE,
+		Parent = track,
 	})
+	rounded(fill, 2)
+	accent(fill)
+	coreFills[i] = fill
 end
-section(cpu.height)
+
+rule()
 
 -- Memory ---------------------------------------------------------------------
 
-local memory = panel(card, "Memory", 3)
-
-local memHead = memory:row("Head", 14)
-list(memHead, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
-caption(memHead, "MEMORY", 1)
-fill(blank("Spacer", 2, UDim2.new(0, 0, 1, 0), memHead))
-local memText = label(memHead, {
-	Name = "Amount",
-	LayoutOrder = 3,
-	FontFace = MONO,
-	TextSize = 11,
-	AutomaticSize = Enum.AutomaticSize.X,
-	Size = UDim2.new(0, 0, 1, 0),
-})
+local memValue = heading("Memory")
+gap(10)
 
 -- TWO SEGMENTS, ONE RATIO EACH. Both ask for no width and grow by their
--- GrowRatio, so the layout splits the bar in proportion to the bytes. The
--- arithmetic is the flex layout's, not this file's.
-local memBar = memory:row("Bar", 12)
-list(memBar, Enum.FillDirection.Horizontal, 3)
-local function segment(name: string, order: number, transparency: number): (Frame, UIFlexItem)
+-- GrowRatio, so the bar is split in proportion to the bytes without a line of
+-- arithmetic here.
+local memBar = row("MemoryBar", 6)
+list(memBar, Enum.FillDirection.Horizontal, 2)
+local function segment(name: string, order: number, colour: Color3): (Frame, UIFlexItem)
 	local frame = make("Frame", {
 		Name = name,
 		LayoutOrder = order,
 		Size = UDim2.new(0, 0, 1, 0),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = transparency,
+		BackgroundColor3 = colour,
 		Parent = memBar,
 	})
-	rounded(frame, 6)
-	local flex = make("UIFlexItem", {
-		FlexMode = Enum.UIFlexMode.Custom,
-		GrowRatio = 1,
-		ShrinkRatio = 0,
-		Parent = frame,
-	})
+	rounded(frame, 3)
+	local flex = make("UIFlexItem", { FlexMode = Enum.UIFlexMode.Custom, GrowRatio = 1, ShrinkRatio = 0, Parent = frame })
 	return frame, flex
 end
-local usedSegment, usedFlex = segment("Used", 1, 0.05)
-local _, freeFlex = segment("Free", 2, 0.78)
+local usedSegment, usedFlex = segment("Used", 1, WHITE)
+accent(usedSegment, 0)
+local _, freeFlex = segment("Free", 2, TRACK)
 
-local memFoot = memory:row("Foot", 12)
-list(memFoot, Enum.FillDirection.Horizontal, 6)
-local memPercent = label(memFoot, {
-	Name = "Percent",
-	LayoutOrder = 1,
-	FontFace = MONO,
-	TextSize = 10,
-	TextTransparency = 0.2,
-	AutomaticSize = Enum.AutomaticSize.X,
-	Size = UDim2.new(0, 0, 1, 0),
-})
-fill(blank("Spacer", 2, UDim2.new(0, 0, 1, 0), memFoot))
-local swapText = label(memFoot, {
-	Name = "Swap",
-	LayoutOrder = 3,
-	FontFace = MONO,
-	TextSize = 10,
-	TextTransparency = 0.2,
-	AutomaticSize = Enum.AutomaticSize.X,
-	Size = UDim2.new(0, 0, 1, 0),
-})
-section(memory.height)
+gap(10)
+local memStats = row("MemoryStats", 16)
+list(memStats, Enum.FillDirection.Horizontal, 16)
+local memUsed = stat(memStats, 1, "Used")
+local memFree = stat(memStats, 2, "Free")
+local memSwap = stat(memStats, 3, "Swap")
+
+rule()
 
 -- Network --------------------------------------------------------------------
 
-local network = panel(card, "Network", 4)
+heading("Network")
+gap(10)
 
-local netHead = network:row("Rates", 34)
-list(netHead, Enum.FillDirection.Horizontal, 8, { HorizontalFlex = Enum.UIFlexAlignment.Fill })
-local function rateColumn(name: string, order: number, colour: Color3, heading: string): TextLabel
-	local column = blank(name, order, UDim2.new(0, 0, 1, 0), netHead)
-	list(column, Enum.FillDirection.Vertical, 2)
-	local head = blank("Head", 1, UDim2.new(1, 0, 0, 12), column)
-	list(head, Enum.FillDirection.Horizontal, 5, { VerticalAlignment = Enum.VerticalAlignment.Center })
-	local dot = make("Frame", {
+local rates = row("Rates", 16)
+list(rates, Enum.FillDirection.Horizontal, 16)
+local function legend(order: number, name: string, colour: Color3): TextLabel
+	local frame = blank(rates, name, order, UDim2.new(0, 0, 1, 0))
+	grow(frame)
+	list(frame, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
+	local swatch = make("Frame", {
 		Name = "Swatch",
 		LayoutOrder = 1,
-		Size = UDim2.fromOffset(7, 7),
+		Size = UDim2.fromOffset(6, 6),
 		BackgroundColor3 = colour,
-		Parent = head,
+		Parent = frame,
 	})
-	rounded(dot, 4)
-	caption(head, heading, 2)
-	local value = label(column, {
-		Name = "Rate",
-		LayoutOrder = 2,
-		FontFace = MONO,
-		TextSize = 16,
-		Size = UDim2.new(1, 0, 0, 20),
-	})
-	edged(value)
-	return value
+	rounded(swatch, 3)
+	text(frame, { Name = "Label", LayoutOrder = 2, Text = name, TextColor3 = MUTED, TextSize = 12 })
+	spacer(frame, 3)
+	return text(frame, { Name = "Rate", LayoutOrder = 4, FontFace = MONO, TextSize = 11 })
 end
-local downText = rateColumn("Down", 1, DOWN, "DOWNLOAD")
-local upText = rateColumn("Up", 2, UP, "UPLOAD")
+local downText = legend(1, "Down", SKY)
+local upText = legend(2, "Up", LILAC)
 
--- A WAVEFORM FROM TWO LISTS. The top half's bars stand on its bottom edge and
--- the lower half's hang from its top, so download and upload meet at one line.
-local wave = network:row("Wave", 56)
-local downHalf = blank("DownHalf", 1, UDim2.new(1, 0, 0.5, -1), wave)
-local upHalf = blank("UpHalf", 2, UDim2.new(1, 0, 0.5, -1), wave)
-upHalf.Position = UDim2.new(0, 0, 0.5, 1)
+gap(10)
+
+-- A WAVEFORM FROM TWO LISTS: download stands on the centre line and upload
+-- hangs from it, both against one scale, in the gradient's two colours.
+local wave = row("Wave", 44)
+local downHalf = blank(wave, "DownHalf", 1, UDim2.new(1, 0, 0.5, 0))
+local upHalf = blank(wave, "UpHalf", 2, UDim2.new(1, 0, 0.5, 0))
+upHalf.Position = UDim2.fromScale(0, 0.5)
 make("Frame", {
 	Name = "Axis",
-	Position = UDim2.new(0, 0, 0.5, -1),
+	Position = UDim2.fromScale(0, 0.5),
 	Size = UDim2.new(1, 0, 0, 1),
-	BackgroundColor3 = WHITE,
-	BackgroundTransparency = 0.6,
+	BackgroundColor3 = RULE,
+	ZIndex = 2,
 	Parent = wave,
 })
-local downBars = bars(downHalf, 60, Enum.VerticalAlignment.Bottom, DOWN)
-local upBars = bars(upHalf, 60, Enum.VerticalAlignment.Top, UP)
-local peakText = label(wave, {
-	Name = "Peak",
-	FontFace = MONO,
-	TextSize = 9,
-	TextTransparency = 0.25,
-	TextXAlignment = Enum.TextXAlignment.Right,
-	TextYAlignment = Enum.TextYAlignment.Top,
-	Size = UDim2.new(1, 0, 0, 10),
-	ZIndex = 2,
-})
-section(network.height)
+local downBars = bars(downHalf, 60, Enum.VerticalAlignment.Bottom, SKY)
+local upBars = bars(upHalf, 60, Enum.VerticalAlignment.Top, LILAC)
+
+gap(6)
+local scaleRow = row("Scale", 14)
+list(scaleRow, Enum.FillDirection.Horizontal, 6)
+text(scaleRow, { Name = "Window", LayoutOrder = 1, Text = "last 60 s", FontFace = MONO, TextSize = 10, TextColor3 = FAINT })
+spacer(scaleRow, 2)
+local peakText = text(scaleRow, { Name = "Peak", LayoutOrder = 3, FontFace = MONO, TextSize = 10, TextColor3 = FAINT })
+
+rule()
 
 -- Storage --------------------------------------------------------------------
 
 local MAX_DISKS = 4
-local function chosenDisks(): { any }
-	local fixed, removable = {}, {}
-	for _, disk in System.Disks() do
-		table.insert(if disk.removable then removable else fixed, disk)
+local disks = System.Disks()
+table.sort(disks, function(a, b)
+	if a.removable ~= b.removable then
+		return not a.removable
 	end
-	for _, disk in removable do
-		table.insert(fixed, disk)
-	end
-	table.sort(fixed, function(a, b)
-		return a.mount < b.mount
-	end)
-	local chosen = {}
-	for i = 1, math.min(#fixed, MAX_DISKS) do
-		chosen[i] = fixed[i]
-	end
-	return chosen
-end
+	return a.mount < b.mount
+end)
 
-local disks = chosenDisks()
-local storage = panel(card, "Storage", 5)
-caption(storage:row("Head", 12), "STORAGE", 1)
+heading("Storage")
 type DiskRow = { fill: Frame, free: TextLabel, path: string }
 local diskRows: { DiskRow } = {}
--- FOUR ROWS, SHOWN AS NEEDED, for the same reason as the tiles.
+-- FOUR ROWS, SHOWN AS NEEDED, for the same reason as the core bars.
 for i = 1, MAX_DISKS do
 	local disk = disks[i]
-	local row = storage:row(`Disk{i}`, 14, disk ~= nil)
-	list(row, Enum.FillDirection.Horizontal, 8, { VerticalAlignment = Enum.VerticalAlignment.Center })
-	label(row, {
+	gap(8, disk ~= nil)
+	local frame = row(`Disk{i}`, 16, disk ~= nil)
+	list(frame, Enum.FillDirection.Horizontal, 10, { VerticalAlignment = Enum.VerticalAlignment.Center })
+	text(frame, {
 		Name = "Mount",
 		LayoutOrder = 1,
 		Text = if disk then driveName(disk.mount) else "",
-		FontFace = MONO,
-		TextSize = 11,
+		TextColor3 = MUTED,
+		TextSize = 12,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.new(0, 64, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.None,
+		Size = UDim2.new(0, 56, 1, 0),
 	})
 	local track = make("Frame", {
 		Name = "Track",
 		LayoutOrder = 2,
-		Size = UDim2.new(0, 0, 0, 6),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.8,
-		Parent = row,
+		Size = UDim2.new(0, 0, 0, 4),
+		BackgroundColor3 = TRACK,
+		Parent = frame,
 	})
-	rounded(track, 3)
-	fill(track)
-	local used = make("Frame", {
-		Name = "Used",
-		Size = UDim2.fromScale(0, 1),
-		BackgroundColor3 = COOL,
-		Parent = track,
-	})
-	rounded(used, 3)
-	local free = label(row, {
+	rounded(track, 2)
+	grow(track)
+	local used = make("Frame", { Name = "Used", Size = UDim2.fromScale(0, 1), BackgroundColor3 = WHITE, Parent = track })
+	rounded(used, 2)
+	accent(used, 0)
+	local free = text(frame, {
 		Name = "Free",
 		LayoutOrder = 3,
 		FontFace = MONO,
-		TextSize = 10,
-		TextTransparency = 0.15,
+		TextSize = 11,
 		TextXAlignment = Enum.TextXAlignment.Right,
-		Size = UDim2.new(0, 68, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.None,
+		Size = UDim2.new(0, 64, 1, 0),
 	})
 	diskRows[i] = { fill = used, free = free, path = if disk then disk.mount else "" }
 end
-label(storage:row("None", 14, #disks == 0), {
-	Text = "No drives reported",
-	TextTransparency = 0.3,
-	Size = UDim2.fromScale(1, 1),
-})
-section(storage.height)
+gap(8, #disks == 0)
+local noDisks = row("NoDisks", 16, #disks == 0)
+text(noDisks, { Name = "Text", Text = "No drives reported", TextColor3 = MUTED, TextSize = 12 })
+
+rule()
 
 -- Processes ------------------------------------------------------------------
 
 local SHOWN = 5
 local sortBy = if desktop.Storage and desktop.Storage.get("monitor.processes") == "memory" then "memory" else "cpu"
 
-local processes = panel(card, "Processes", 6)
-local procHead = processes:row("Head", 18)
-list(procHead, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
-caption(procHead, "TOP PROCESSES", 1)
-fill(blank("Spacer", 2, UDim2.new(0, 0, 1, 0), procHead))
+local procHeading = row("ProcessesHeading", 18)
+list(procHeading, Enum.FillDirection.Horizontal, 12, { VerticalAlignment = Enum.VerticalAlignment.Center })
+text(procHeading, { Name = "Title", LayoutOrder = 1, Text = "Processes", FontFace = STRONG })
+spacer(procHeading, 2)
 
--- A two-way switch: a list of two buttons inside one rounded track, the chosen
--- one filled white with dark type.
-local switch = make("Frame", {
-	Name = "Sort",
-	LayoutOrder = 3,
-	AutomaticSize = Enum.AutomaticSize.X,
-	Size = UDim2.new(0, 0, 1, 0),
-	BackgroundColor3 = WHITE,
-	BackgroundTransparency = 0.82,
-	Parent = procHead,
-})
-rounded(switch, 9)
-inset(switch, 2, 2)
-list(switch, Enum.FillDirection.Horizontal, 2)
-local switchButtons: { [string]: TextButton } = {}
+-- Two words, not a pill: the chosen one white with the accent under it, the
+-- other faint. Each is a button as wide as its word.
+type Choice = { button: TextButton, mark: Frame }
+local choices: { [string]: Choice } = {}
 
-local procRows: { { name: TextLabel, count: TextLabel, value: TextLabel, meter: Frame } } = {}
+type ProcessRow = { name: TextLabel, count: TextLabel, value: TextLabel }
+local procRows: { ProcessRow } = {}
 for i = 1, SHOWN do
-	local row = processes:row(`Process{i}`, 16)
-	list(row, Enum.FillDirection.Horizontal, 8, { VerticalAlignment = Enum.VerticalAlignment.Center })
-	local name = label(row, {
+	gap(if i == 1 then 8 else 4)
+	local frame = row(`Process{i}`, 16)
+	list(frame, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
+	local name = text(frame, {
 		Name = "Name",
 		LayoutOrder = 1,
-		TextSize = 13,
 		TextTruncate = Enum.TextTruncate.AtEnd,
-		Size = UDim2.new(0, 0, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.None,
 	})
-	fill(name)
-	local count = label(row, {
-		Name = "Count",
-		LayoutOrder = 2,
-		FontFace = MONO,
-		TextSize = 9,
-		TextTransparency = 0.35,
-		AutomaticSize = Enum.AutomaticSize.X,
-		Size = UDim2.new(0, 0, 1, 0),
-	})
-	local track = make("Frame", {
-		Name = "Meter",
-		LayoutOrder = 3,
-		Size = UDim2.fromOffset(42, 4),
-		BackgroundColor3 = WHITE,
-		BackgroundTransparency = 0.8,
-		Parent = row,
-	})
-	rounded(track, 2)
-	local meter = make("Frame", {
-		Name = "Fill",
-		Size = UDim2.fromScale(0, 1),
-		BackgroundColor3 = WHITE,
-		Parent = track,
-	})
-	rounded(meter, 2)
-	local value = label(row, {
+	grow(name)
+	local count = text(frame, { Name = "Count", LayoutOrder = 2, FontFace = MONO, TextSize = 10, TextColor3 = FAINT })
+	local value = text(frame, {
 		Name = "Value",
-		LayoutOrder = 4,
+		LayoutOrder = 3,
 		FontFace = MONO,
 		TextSize = 11,
 		TextXAlignment = Enum.TextXAlignment.Right,
-		Size = UDim2.new(0, 58, 1, 0),
+		AutomaticSize = Enum.AutomaticSize.None,
+		Size = UDim2.new(0, 60, 1, 0),
 	})
-	procRows[i] = { name = name, count = count, value = value, meter = meter }
+	procRows[i] = { name = name, count = count, value = value }
 end
-section(processes.height)
 
 -- Updating -------------------------------------------------------------------
-
-local function processName(name: string): string
-	return (string.gsub(name, "%.[eE][xX][eE]$", ""))
-end
 
 local function updateProcesses()
 	local ranked = System.Processes(16)
@@ -825,49 +629,51 @@ local function updateProcesses()
 			return a.memory > b.memory
 		end)
 	end
-	local total = System.Memory().total
-	for i, row in procRows do
+	for i, r in procRows do
 		local p = ranked[i]
-		if p then
-			row.name.Text = processName(p.name)
-			row.count.Text = if p.count > 1 then `×{p.count}` else ""
-			if sortBy == "memory" then
-				row.value.Text = bytes(p.memory)
-				row.meter.Size = UDim2.fromScale(if total > 0 then p.memory / total else 0, 1)
-				row.meter.BackgroundColor3 = WHITE
-			else
-				row.value.Text = string.format("%.1f%%", p.cpu)
-				row.meter.Size = UDim2.fromScale(p.cpu / 100, 1)
-				row.meter.BackgroundColor3 = heat(p.cpu)
-			end
+		r.name.Text = if p then processName(p.name) else ""
+		r.count.Text = if p and p.count > 1 then `×{p.count}` else ""
+		if not p then
+			r.value.Text = ""
+		elseif sortBy == "memory" then
+			r.value.Text = bytes(p.memory)
+			r.value.TextColor3 = TEXT
 		else
-			row.name.Text = ""
-			row.count.Text = ""
-			row.value.Text = ""
-			row.meter.Size = UDim2.fromScale(0, 1)
+			r.value.Text = string.format("%.1f%%", p.cpu)
+			r.value.TextColor3 = if p.cpu >= 50 then CORAL else TEXT
 		end
 	end
-	for key, button in switchButtons do
+	for key, choice in choices do
 		local on = key == sortBy
-		button.BackgroundTransparency = if on then 0 else 1
-		button.TextColor3 = if on then INK else WHITE
+		choice.button.TextColor3 = if on then TEXT else FAINT
+		choice.mark.Visible = on
 	end
 end
 
 for i, option in { { key = "cpu", text = "CPU" }, { key = "memory", text = "MEM" } } do
 	local button = make("TextButton", {
 		Name = option.text,
-		LayoutOrder = i,
+		LayoutOrder = 2 + i,
 		Text = option.text,
-		FontFace = CAPS,
-		TextSize = 9,
+		FontFace = STRONG,
+		TextSize = 11,
 		AutoButtonColor = false,
-		BackgroundColor3 = WHITE,
-		Size = UDim2.new(0, 34, 1, 0),
-		Parent = switch,
+		BackgroundTransparency = 1,
+		AutomaticSize = Enum.AutomaticSize.X,
+		Size = UDim2.new(0, 0, 1, 0),
+		Parent = procHeading,
 	})
-	rounded(button, 7)
-	switchButtons[option.key] = button
+	local mark = make("Frame", {
+		Name = "Mark",
+		AnchorPoint = Vector2.new(0, 1),
+		Position = UDim2.fromScale(0, 1),
+		Size = UDim2.new(1, 0, 0, 2),
+		BackgroundColor3 = WHITE,
+		Parent = button,
+	})
+	rounded(mark, 1)
+	accent(mark, 0)
+	choices[option.key] = { button = button, mark = mark }
 	button.MouseButton1Click:Connect(function()
 		sortBy = option.key
 		if desktop.Storage then
@@ -880,28 +686,30 @@ end
 local beatOn = false
 local function update()
 	beatOn = not beatOn
-	beat.BackgroundTransparency = if beatOn then 0 else 0.55
+	beat.BackgroundColor3 = if beatOn then SKY else LILAC
 
 	local info = System.Info()
-	subtitle.Text = if info.os ~= "" then info.os else "Unknown OS"
-	uptimeText.Text = `UP {duration(info.uptime)}`
+	osName.Text = if info.os ~= "" then info.os else "System"
+	uptime.Text = `up {duration(info.uptime)}`
 
-	local battery = System.Battery()
-	batteryPill.Visible = battery ~= nil
-	if battery then
-		batteryText.Text = string.format("%d%%%s", math.floor(battery.percent + 0.5), if battery.charging then " +" else "")
-		charge.Size = UDim2.fromOffset(math.max(1, math.floor(13 * battery.percent / 100 + 0.5)), 6)
-		charge.BackgroundColor3 = if battery.percent <= 20 and not battery.plugged then HOT else WHITE
+	local power = System.Battery()
+	battery.Visible = power ~= nil
+	if power then
+		batteryText.Text = string.format("%d%%", math.floor(power.percent + 0.5))
+		local low = power.percent <= 20 and not power.plugged
+		charge.Size = UDim2.fromOffset(math.max(1, math.floor(12 * power.percent / 100 + 0.5)), 5)
+		charge.BackgroundColor3 = if low then CORAL elseif power.charging then SKY else TEXT
 	end
 
 	local c = System.Cpu()
-	cpuValue.Text = string.format("%d", math.floor(c.usage + 0.5))
+	cpuValue.Text = string.format("%d%%", math.floor(c.usage + 0.5))
+	cpuValue.TextColor3 = if c.usage >= 85 then CORAL else TEXT
 	brand.Text = if c.brand ~= "" then c.brand else "Processor"
 	local threads = #c.cores
 	local physical = c.physicalCores
-	local detail = if physical and physical ~= threads then `{physical} cores · {threads} threads` else `{threads} cores`
-	clockText.Text = if c.frequency > 0 then string.format("%.2f GHz · %s", c.frequency / 1000, detail) else detail
-	plot(cpuBars, System.History("cpu"), 100, heat)
+	local shape = if physical and physical ~= threads then `{physical} cores, {threads} threads` else `{threads} cores`
+	detail.Text = if c.frequency > 0 then string.format("%.2f GHz · %s", c.frequency / 1000, shape) else shape
+	plot(cpuBars, System.History("cpu"), 100)
 
 	local peak, peakAt = 0, 0
 	for i, load in c.cores do
@@ -909,36 +717,33 @@ local function update()
 			peak, peakAt = load, i
 		end
 	end
-	for i = 1, shownTiles do
+	busiest.Text = if peakAt > 0 then string.format("busiest #%d  %d%%", peakAt, math.floor(peak + 0.5)) else ""
+	for i = 1, shownCells do
 		local sum, count = 0, 0
 		for core = (i - 1) * group + 1, math.min(i * group, #c.cores) do
 			sum += c.cores[core]
 			count += 1
 		end
 		local load = if count > 0 then sum / count else 0
-		tiles[i].BackgroundColor3 = heat(load)
-		tiles[i].BackgroundTransparency = 0.78 - 0.73 * math.clamp(load / 100, 0, 1)
-		tileText[i].Text = string.format("%d", math.floor(load + 0.5))
-		tileText[i].TextColor3 = if load >= 40 then INK else WHITE
+		coreFills[i].Size = UDim2.new(1, 0, math.clamp(load / 100, 0, 1), 0)
 	end
-	hottest.Text = if peakAt > 0 then string.format("hottest #%d · %d%%", peakAt, math.floor(peak + 0.5)) else ""
 
 	local m = System.Memory()
 	local usedRatio = if m.total > 0 then m.used / m.total else 0
 	usedFlex.GrowRatio = math.max(m.used, 1)
 	freeFlex.GrowRatio = math.max(m.total - m.used, 1)
-	usedSegment.BackgroundColor3 = heat(usedRatio * 100)
-	memText.Text = `{bytes(m.used)} / {bytes(m.total)}`
-	memPercent.Text = string.format("%d%% used · %s free", math.floor(usedRatio * 100 + 0.5), bytes(m.available))
-	swapText.Text = if m.swapTotal > 0 then `swap {bytes(m.swapUsed)} / {bytes(m.swapTotal)}` else ""
+	memValue.Text = `{bytes(m.used)} / {bytes(m.total)}`
+	memUsed.Text = string.format("%d%%", math.floor(usedRatio * 100 + 0.5))
+	memUsed.TextColor3 = if usedRatio >= 0.9 then CORAL else TEXT
+	memFree.Text = bytes(m.available)
+	memSwap.Text = if m.swapTotal > 0 then bytes(m.swapUsed) else "none"
 
 	local n = System.Network()
 	downText.Text = rate(n.down)
 	upText.Text = rate(n.up)
 	local down, up = System.History("down"), System.History("up")
-	-- ONE SCALE FOR BOTH HALVES, or a trickle of upload would look as tall as
-	-- a download saturating the link. A floor keeps an idle line from turning
-	-- background chatter into full-height bars.
+	-- ONE SCALE FOR BOTH HALVES, or a trickle of upload would stand as tall as
+	-- a saturated download. A floor keeps background chatter from filling it.
 	local scale = 16 * 1024
 	for _, v in down do
 		scale = math.max(scale, v)
@@ -950,17 +755,17 @@ local function update()
 	plot(upBars, up, scale)
 	peakText.Text = `peak {rate(scale)}`
 
-	local byMount: { [string]: any } = {}
+	local byPath: { [string]: any } = {}
 	for _, disk in System.Disks() do
-		byMount[disk.mount] = disk
+		byPath[disk.mount] = disk
 	end
-	for _, row in diskRows do
-		local disk = byMount[row.path]
+	for _, r in diskRows do
+		local disk = byPath[r.path]
 		if disk and disk.total > 0 then
 			local usedPart = 1 - disk.available / disk.total
-			row.fill.Size = UDim2.fromScale(usedPart, 1)
-			row.fill.BackgroundColor3 = heat(usedPart * 100)
-			row.free.Text = `{bytes(disk.available)} free`
+			r.fill.Size = UDim2.fromScale(usedPart, 1)
+			r.free.Text = bytes(disk.available)
+			r.free.TextColor3 = if usedPart >= 0.9 then CORAL else TEXT
 		end
 	end
 
@@ -970,7 +775,7 @@ end
 update()
 System.OnSample(update)
 
--- The window, sized to the panels above it.
+-- The window, sized to the rows above it.
 local root = widget({
 	width = WIDTH,
 	height = height,

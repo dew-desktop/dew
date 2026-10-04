@@ -85,8 +85,8 @@ end
 
 local function testMemoryIsSplitByItsRatio()
 	settle()
-	local used = find(find(root, "Memory"), "Used").AbsoluteSize.X
-	local free = find(find(root, "Memory"), "Free").AbsoluteSize.X
+	local used = find(find(root, "MemoryBar"), "Used").AbsoluteSize.X
+	local free = find(find(root, "MemoryBar"), "Free").AbsoluteSize.X
 	local m = System.Memory()
 	local expected = m.used / m.total
 	local drawn = used / (used + free)

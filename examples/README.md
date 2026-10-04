@@ -122,17 +122,21 @@ second for every applet holding the permission, keeps a minute of history, and
 `System.OnSample` calls back on the applet's own frame when a new sample lands,
 so neither applet redraws more than once a second.
 
-`monitor` is a detailed panel in the desktop clock's colours: a CPU graph whose
-older bars fade, a heat tile per core from a `UIGridLayout`, memory split into
-two segments by `UIFlexItem.GrowRatio`, download and upload as one mirrored
-waveform, drives, and the top five processes with a CPU / MEM switch kept in
-`desktop.Storage`. Its tree is the same shape on every machine: sixteen core
-tiles and four drive rows are built once and the unused ones are hidden, and
-past sixteen threads each tile averages a run of neighbours.
+`monitor` is a dark panel laid out the way menu-bar monitors like iStat Menus
+and Stats lay out their dropdowns: one solid surface in the dashboard's own
+colour tokens, sections divided by hairlines, grey labels beside white values.
+The Dew gradient is only the accent on the data: the CPU and per-core bars,
+the memory and drive meters, and the two network series (download is the sky
+end, upload the periwinkle one). Memory is two segments sized by
+`UIFlexItem.GrowRatio`, the graphs are lists with `HorizontalFlex = Fill`, and
+the top five processes have a CPU / MEM switch kept in `desktop.Storage`. Its
+tree is the same shape on every machine: sixteen core bars and four drive rows
+are built once and the unused ones are hidden, and past sixteen threads each
+bar averages a run of neighbours.
 
-`vitals` is the clock's size and docks 8px under it by default, so the two read
-as one stack. A click switches its three columns between meters and a
-twenty-second graph each.
+`vitals` is the clock's size, docks 8px under it by default, and uses the same
+dark surface and accent. A click switches its three columns between meters and
+a twenty-second graph each.
 
 ```sh
 cargo run -- examples/system/monitor
@@ -241,8 +245,8 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | `host/widget-behaviors/keep-on-screen` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `host/widget-behaviors/save-position` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `host/widget-behaviors/snap-to-edges` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
-| `system/monitor` | Dew-only | `desktop.Widget` (mount), `desktop.Storage`, `desktop.System`, permission `system` | `TextButton.AutoButtonColor`, `TextButton.FontFace` (in part), `TextLabel.FontFace` (in part), `TextLabel.TextTruncate` (in part), `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 642 |
-| `system/vitals` | Dew-only | `desktop.Widget` (mount), `desktop.Storage`, `desktop.System`, permission `system` | `TextButton.AutoButtonColor`, `TextLabel.FontFace` (in part), `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 110 |
+| `system/monitor` | Dew-only | `desktop.Widget` (mount), `desktop.Storage`, `desktop.System`, permission `system` | `TextButton.AutoButtonColor`, `TextButton.FontFace` (in part), `TextLabel.FontFace` (in part), `TextLabel.TextTruncate` (in part), `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 737 |
+| `system/vitals` | Dew-only | `desktop.Widget` (mount), `desktop.Storage`, `desktop.System`, permission `system` | `TextButton.AutoButtonColor`, `TextLabel.FontFace` (in part), `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 148 |
 | `widgets/flex-item-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 68 |
 | `widgets/flex-list-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 57 |
 | `widgets/grid-layout-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 80 |
