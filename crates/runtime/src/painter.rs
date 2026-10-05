@@ -269,9 +269,20 @@ pub(crate) fn paint_node<P: Painter + ?Sized>(painter: &mut P, node: &Node) {
 
     if let Some(stroke) = &node.stroke {
         if let Some(colour) = stroke.colour {
+            // THE CENTRE LINE, OFFSET FROM THE BOX: a stroke of width `t` on
+            // the box grown by `t/2` covers exactly the ring outside it, and
+            // its corner radius grows with it so the ring is the same width
+            // all the way round. See `Stroke::offset`.
+            let d = stroke.offset;
+            let rect = Rect {
+                x: node.rect.x - d,
+                y: node.rect.y - d,
+                w: (node.rect.w + 2.0 * d).max(0.0),
+                h: (node.rect.h + 2.0 * d).max(0.0),
+            };
             painter.stroke_rounded_rect(
-                node.rect,
-                node.radius,
+                rect,
+                (node.radius + d).max(0.0),
                 stroke.thickness,
                 colour,
                 stroke.alpha,

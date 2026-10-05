@@ -275,6 +275,9 @@ fn stroke(property: &str) -> Honour {
         // `strokes_of`, which picks the box or the glyphs. `Enabled` is not
         // read, so a disabled stroke still draws.
         "Parent" | "Color" | "ApplyStrokeMode" => Honour::Implemented,
+        // `strokes_of` turns it into the stroke's offset from the box edge,
+        // and `paint_node` strokes the box grown or shrunk by that offset.
+        "BorderStrokePosition" => Honour::Implemented,
         "Thickness" => Honour::Partial(
             "around glyphs, drawn as copies of the text stamped out to the thickness, \
              so joins are always round",

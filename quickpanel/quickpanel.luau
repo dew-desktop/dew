@@ -182,6 +182,9 @@ corner(body, 14)
 local outline = Instance.new("UIStroke")
 outline.Color = T.Line
 outline.Thickness = 1
+-- Inside the edge: the body fills the window, so a stroke outside it (the
+-- engine's default) would be cut off along every straight side.
+outline.BorderStrokePosition = Enum.BorderStrokePosition.Inner
 outline.Parent = body
 list(body, Enum.FillDirection.Vertical, 0)
 -- The scrolling shelf stops short of the bottom edge, so a card scrolled

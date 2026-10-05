@@ -104,7 +104,17 @@ local surface = make("TextButton", {
 	Parent = root,
 })
 make("UICorner", { CornerRadius = UDim.new(0, 10), Parent = surface })
-make("UIStroke", { Thickness = 1, Color = RULE, Parent = surface })
+-- Around the box, not the glyphs: on a TextButton the default, Contextual,
+-- outlines the text, and this one has none. Inside the edge, because the
+-- surface fills the window and a stroke outside it (the engine's default)
+-- would be cut off along every straight side.
+make("UIStroke", {
+	Thickness = 1,
+	Color = RULE,
+	ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+	BorderStrokePosition = Enum.BorderStrokePosition.Inner,
+	Parent = surface,
+})
 make("UIPadding", {
 	PaddingLeft = UDim.new(0, 12),
 	PaddingRight = UDim.new(0, 12),
