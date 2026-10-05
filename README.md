@@ -14,10 +14,10 @@
 
 <br />
 
-![Dew Applets Quick Panel and running Desktop Clock widget](assets/showcase.png)
+![Dew Applets Quick Panel, running Desktop Clock widget, and System Monitor HUD](assets/showcase.png)
 
 <br />
-<sub>Dew's quick panel managing installed applets alongside a running desktop clock widget</sub>
+<sub>Dew's quick panel managing installed applets alongside running desktop widgets</sub>
 
 </div>
 
@@ -141,7 +141,7 @@ flowchart LR
 | [`crates/raster`](crates/raster) | Translates display lists to pixels. CPU rasterization by default, GPU acceleration via feature flag |
 | [`crates/window`](crates/window) | Native window management, swapchains, system tray, and input events on Windows |
 
-## Highlights
+### Highlights
 
 - **Deny-by-default sandbox.** Every applet runs in its own isolated Luau VM with no raw `io`, `os`, or FFI access. An applet can only reach capabilities explicitly granted in its manifest (e.g. storage, notifications, clipboard). The host injects each capability as a function, keeping security boundaries strictly auditable and testable in Rust.
 - **Engine-independent DataModel in Rust.** The class hierarchy, properties, and defaults are driven by an engine reflection database, allowing the host to statically reject properties that do not exist on a class before values reach the layout pipeline. It covers 139 of 139 in-scope GUI properties.
