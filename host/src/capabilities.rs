@@ -422,6 +422,12 @@ pub fn build(
                 desktop.set("Audio", audio)?;
             }
 
+            Permission::System => {
+                let system =
+                    dew_host::system::table(lua, &desktop, dew_host::system::Sampler::shared())?;
+                desktop.set("System", system)?;
+            }
+
             Permission::RbxAssetId => {
                 // Host-level capability for Content resolution; exposes no guest Lua table.
             }

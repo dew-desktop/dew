@@ -97,6 +97,83 @@ type Audio = {
 	chime: (name: string) -> (),
 }
 
+--- One reading of the machine, from `desktop.System`. Sizes are bytes, rates
+--- bytes per second, and loads 0-100 of the whole machine.
+type SystemCpu = {
+	usage: number,
+	--- Per logical core, in the order the OS numbers them.
+	cores: { number },
+	brand: string,
+	--- MHz as the OS reports it; on Windows this is the nominal clock.
+	frequency: number,
+	physicalCores: number?,
+}
+
+type SystemMemory = {
+	total: number,
+	used: number,
+	available: number,
+	swapTotal: number,
+	swapUsed: number,
+}
+
+type SystemDisk = {
+	name: string,
+	--- `C:\` on Windows, a path elsewhere.
+	mount: string,
+	total: number,
+	available: number,
+	removable: boolean,
+	kind: "ssd" | "hdd" | "unknown",
+}
+
+type SystemNetwork = {
+	down: number,
+	up: number,
+	receivedTotal: number,
+	transmittedTotal: number,
+}
+
+--- Every process sharing a name, added together.
+type SystemProcess = {
+	name: string,
+	cpu: number,
+	memory: number,
+	count: number,
+}
+
+type SystemBattery = {
+	percent: number,
+	charging: boolean,
+	plugged: boolean,
+	secondsLeft: number?,
+}
+
+type SystemMetric = "cpu" | "memory" | "down" | "up"
+
+--- What the machine is doing. One host thread samples once a second for
+--- every applet granted `system`; every call here reads its latest sample and
+--- returns at once.
+type System = {
+	Cpu: () -> SystemCpu,
+	Memory: () -> SystemMemory,
+	Disks: () -> { SystemDisk },
+	Network: () -> SystemNetwork,
+	--- Busiest first; `limit` defaults to 5 and is capped at 16.
+	Processes: (limit: number?) -> { SystemProcess },
+	--- Read when asked. Nil without a battery.
+	Battery: () -> SystemBattery?,
+	Info: () -> { os: string, uptime: number, cores: number },
+	--- Up to the last 60 samples of one metric, oldest first. `memory` is
+	--- percent used.
+	History: (metric: SystemMetric) -> { number },
+	--- How many samples the host has taken. Changes once a second.
+	Sequence: () -> number,
+	--- Calls `listener` on the applet's own frame after each new sample;
+	--- returns the disposer `Clock.OnFrame` returns.
+	OnSample: (listener: (sequence: number) -> ()) -> () -> (),
+}
+
 type LocalTime = {
 	sec: number,
 	min: number,
@@ -201,4 +278,8 @@ declare desktop: {
 
 	--- Requires "audio".
 	Audio: Audio?,
+
+	--- Requires "system". Load, memory, disks, network, battery, and the names
+	--- of running processes with their share of CPU and memory.
+	System: System?,
 }
