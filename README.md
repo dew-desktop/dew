@@ -27,9 +27,37 @@ Dew runs desktop utilities called **applets**: desktop clocks, status HUDs, quic
 
 Applets construct their interface using the declarative UI object model familiar to Luau developers (`Frame`, `TextLabel`, `TextButton`, `UIListLayout`, `UDim2`, `Color3`). Dew implements this object model from scratch in Rust, allowing components to run seamlessly across desktop environments and engine viewports.
 
-## Featured Applet: Desktop Clock
+## Featured Applets
 
-The repository includes [`examples/clock`](examples/clock), a clean, floating desktop clock widget. It demonstrates host window management, reactive updates, and local state persistence without requiring any external packages.
+### System Monitor
+
+[`examples/system/monitor`](examples/system/monitor) is a real-time hardware telemetry HUD showcasing dynamic visualizations and host telemetry gated by `desktop.System`.
+
+<div align="center">
+
+![System Monitor HUD](assets/system-monitor.png)
+
+</div>
+
+- **Live hardware telemetry:** Monitors CPU utilization, memory pressure, network throughput, disk space, and top active processes.
+- **Dynamic visualizations:** 60-second rolling CPU graph, 16 individual core bars, dual-channel network waveform, and memory consumption meters.
+- **Window management:** Smooth dragging with display edge snapping (`snapToEdges = true`) and position persistence across restarts (`savePosition = true`).
+- **Capability-governed:** Access to telemetry is strictly gated by the host under the `system` permission.
+
+```toml
+id = "monitor"
+name = "System Monitor"
+description = "CPU, cores, memory, network, storage and top processes, live"
+
+# Capabilities granted to the guest VM
+permissions = ["widget", "storage", "system"]
+```
+
+Authored in Luau under [`examples/system/monitor/monitor.luau`](examples/system/monitor/monitor.luau).
+
+### Desktop Clock
+
+[`examples/clock`](examples/clock) is a minimalist, floating desktop clock widget demonstrating reactive UI updates and state persistence without external dependencies.
 
 <div align="center">
 
@@ -37,15 +65,10 @@ The repository includes [`examples/clock`](examples/clock), a clean, floating de
 
 </div>
 
-- **Branded vertical gradient:** Rounded widget styled with Dew's water-droplet gradient colors (`UIGradient`, `UICorner`, `UIStroke`) floating cleanly on the desktop.
-- **Draggable & sticky:** Click and drag the clock to move it anywhere on screen. It automatically snaps to display edges (`snapToEdges = true`) and remembers its saved position across restarts (`savePosition = true`).
-- **Interactive toggle:** Click anywhere on the clock to toggle between 12-hour and 24-hour formats. Preference is preserved across launches via `desktop.Storage`.
-- **Automatic timezone detection:** Automatically resolves local time and timezone offsets via `desktop.Time`.
-- **Zero dependencies:** Built directly on Dew's native DataModel primitives with zero external packages.
-
-### Manifest (`dew.toml`)
-
-The applet declares its permissions upfront. Dew inspects and validates the manifest before executing any guest code:
+- **Branded vertical gradient:** Rounded widget styled with Dew's gradient palette (`UIGradient`, `UICorner`, `UIStroke`).
+- **Window management:** Smooth dragging with display edge snapping (`snapToEdges = true`) and position persistence across restarts (`savePosition = true`).
+- **Interactive toggle:** Click anywhere on the clock to toggle between 12-hour and 24-hour formats, saved across launches via `desktop.Storage`.
+- **Automatic timezone detection:** Resolves local time and timezone offsets via `desktop.Time`.
 
 ```toml
 id = "clock"
@@ -56,7 +79,7 @@ description = "A minimalist, draggable desktop clock with live seconds and forma
 permissions = ["widget", "storage"]
 ```
 
-The full implementation is authored in pure Luau under [`examples/clock/clock.luau`](examples/clock/clock.luau).
+Authored in Luau under [`examples/clock/clock.luau`](examples/clock/clock.luau).
 
 ## Quick start
 
@@ -68,8 +91,11 @@ cd dew
 
 rokit install            # pinned developer tools (lune, etc.)
 
-# Run the desktop clock applet
-cargo run -p dew-host -- examples/clock
+# Run the system monitor applet
+cargo run examples/system/monitor
+
+# Or run the desktop clock applet
+cargo run examples/clock
 ```
 
 While running, Dew manages the widget lifecycle, handles window dragging and snapping, and sits quietly in the Windows system tray.
