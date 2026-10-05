@@ -256,7 +256,19 @@ pub extern "C" fn ar_fill_text(
         // checks can still fail. If a vello release breaks this, they go red.
         //
         // Turn it off here if that happens; nothing else depends on it.
-        .atlas_cache(true)
+        //
+        // OFF, BECAUSE A MISS COSTS A WHOLE ATLAS PAGE. vello_cpu 0.2 draws each
+        // newly cached glyph by rendering its entire 4096x4096 page
+        // (`sync_glyph_cache` -> `render_with` on a page-sized context), so every
+        // frame that meets a glyph it has not cached pays 15ms or more, however
+        // small the glyph. A widget whose labels change -- a system monitor
+        // rewriting twenty-odd numbers a second -- keeps meeting new glyph and
+        // subpixel combinations, and those frames ran 18-68ms against 2ms for
+        // the rest. Uncached, the same frames paint in about 2ms. The 0.6ms the
+        // atlas saves on a frame of steady text is not worth a stall each time
+        // the text changes; turn it back on when a vello release stops
+        // re-rendering the page.
+        .atlas_cache(false)
         .fill_glyphs(glyphs.into_iter().map(|p| vello_cpu::Glyph {
             id: p.id,
             x: x + p.x,

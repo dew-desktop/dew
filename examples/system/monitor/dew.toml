@@ -1,0 +1,11 @@
+# System Monitor
+#
+# A detailed, draggable system panel on a dark surface, with the Dew gradient
+# as the accent on its data: CPU with a minute of history and a bar per core,
+# memory, a mirrored network waveform, storage, and the busiest processes.
+
+id = "monitor"
+name = "System Monitor"
+description = "CPU, cores, memory, network, storage and top processes, live"
+
+permissions = ["widget", "storage", "system"]

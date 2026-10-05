@@ -100,6 +100,15 @@ ureq = { version = "2.10", default-features = false, features = ["tls", "json"] 
 rpassword = "7"
 
 mlua = { version = "0.12", features = ["luau", "send", "serialize"] }
+
+# `desktop.System`: CPU, memory, disks, network and processes, read by one
+# sampler thread the host runs while any applet holds the `system` permission.
+#
+# ONLY THE THREE FEATURES IT READS. `component` would bring WMI (temperatures,
+# fans) and `user` the account list; neither is in the permission, and a feature
+# that is compiled in is one a later diff can reach for without anyone noticing
+# the capability grew.
+sysinfo = { version = "0.39", default-features = false, features = ["system", "disk", "network"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The applet manifest is `dew.toml`. TOML rather than JSON for one reason:
@@ -156,6 +165,9 @@ windows = { version = "0.59", features = [
     # Windows stops bitmap-stretching every window Dew creates when it is
     # dragged to a monitor with a different DPI -- see `declare_dpi_awareness`.
     "Win32_UI_HiDpi",
+    # `GetSystemPowerStatus`, for `desktop.System.Battery()`. sysinfo reads no
+    # battery, and this one call is all a percentage and a charging flag need.
+    "Win32_System_Power",
 ] }
 
 # `[profile.dev.package."*"]` MOVED TO THE WORKSPACE ROOT, `../Cargo.toml`.

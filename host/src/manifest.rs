@@ -41,6 +41,10 @@ pub enum Permission {
     Audio,
     Notifications,
     Clipboard,
+    // `desktop.System`: load, memory, disks, network, battery and the names of
+    // running processes. Read-only, and named for what it reads rather than
+    // split per metric -- see `crate::system` for exactly what it discloses.
+    System,
     #[serde(rename = "rbxassetid")]
     RbxAssetId,
 
@@ -79,6 +83,7 @@ impl Permission {
             Permission::Audio => "audio",
             Permission::Notifications => "notifications",
             Permission::Clipboard => "clipboard",
+            Permission::System => "system",
             Permission::RbxAssetId => "rbxassetid",
             Permission::Widget => "widget",
             Permission::Window => "window",
@@ -102,6 +107,7 @@ impl Permission {
             | Permission::Audio
             | Permission::Notifications
             | Permission::Clipboard
+            | Permission::System
             | Permission::RbxAssetId
             | Permission::Widget
             | Permission::Window
@@ -131,6 +137,9 @@ impl Permission {
             // describe the desktop rather than a game viewport.
             Permission::Window | Permission::Overlay | Permission::Popover => None,
             Permission::Clipboard => None,
+            // `Stats` reports the engine's own memory and network, not the
+            // machine's, so it is not the same question.
+            Permission::System => None,
             Permission::Auth | Permission::Discover | Permission::Install | Permission::Library => {
                 None
             }

@@ -746,6 +746,9 @@ pub enum Command {
     Snapshot {
         target: SnapshotTarget,
         output: String,
+        /// `--after <seconds>`: run the applet's frames for this long, in real
+        /// time, before drawing the one that is written.
+        after: Option<std::time::Duration>,
     },
     Check {
         /// Directories to check. Empty means the working directory, if it is one.
@@ -960,6 +963,7 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
     let mut script = None;
     let mut size = (400, 300);
     let mut output = None;
+    let mut after = None;
     let mut positionals = Vec::new();
 
     let mut iter = args.iter();
@@ -996,6 +1000,20 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
             "--output" | "--out" | "-o" => {
                 let val = iter.next().ok_or("missing value for --output")?;
                 output = Some(val.clone());
+            }
+            // AN APPLET THAT WATCHES SOMETHING HAS NOTHING TO SHOW AT ITS
+            // FIRST FRAME. A system monitor's graph is a minute of samples and a
+            // clock's seconds hand moves; this lets a snapshot show either
+            // after it has run, rather than only as it mounts.
+            "--after" => {
+                let val = iter.next().ok_or("missing value for --after")?;
+                let seconds: f64 = val
+                    .trim()
+                    .parse()
+                    .ok()
+                    .filter(|s: &f64| s.is_finite() && *s >= 0.0)
+                    .ok_or_else(|| format!("invalid --after '{val}', expected seconds (e.g. 5)"))?;
+                after = Some(std::time::Duration::from_secs_f64(seconds));
             }
             s if !s.starts_with('-') => {
                 positionals.push(s.to_string());
@@ -1048,9 +1066,16 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
         SnapshotTarget::Applet(dir)
     };
 
+    if after.is_some() && matches!(target, SnapshotTarget::Script { .. }) {
+        return Err(
+            "`--after` runs an applet's frames; a script draws one frame and has none".to_string(),
+        );
+    }
+
     Ok(Command::Snapshot {
         target,
         output: out,
+        after,
     })
 }
 
@@ -1368,6 +1393,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
         Ok(Command::Snapshot {
             target,
             output: out,
+            after: None,
         })
     } else if let Some(s) = script {
         Ok(Command::Snapshot {
@@ -1377,6 +1403,7 @@ fn parse_legacy_flags(args: &[String], is_windows: bool) -> Result<Command, Stri
                 height: size.1,
             },
             output: "dew.png".to_string(),
+            after: None,
         })
     } else {
         if !is_windows {
@@ -1416,7 +1443,11 @@ fn load_applet(dir: &Path) -> Result<applets::Applet, String> {
     applets::load(dir, &HashMap::new(), &state)
 }
 
-fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String> {
+fn execute_snapshot(
+    target: SnapshotTarget,
+    output: String,
+    after: Option<std::time::Duration>,
+) -> Result<(), String> {
     match target {
         SnapshotTarget::Script {
             path,
@@ -1447,7 +1478,14 @@ fn execute_snapshot(target: SnapshotTarget, output: String) -> Result<(), String
             } = active;
 
             let mut renderer = create_renderer(mounted, &vm, &clock, &surface, width, height)?;
-            renderer.frame(1.0 / 60.0)?;
+            const STEP: f32 = 1.0 / 60.0;
+            let started = std::time::Instant::now();
+            let run_for = after.unwrap_or_default();
+            while started.elapsed() < run_for {
+                renderer.frame(STEP)?;
+                std::thread::sleep(std::time::Duration::from_secs_f32(STEP));
+            }
+            renderer.frame(STEP)?;
             renderer
                 .painter_mut()
                 .write_png(&output)
@@ -2941,6 +2979,7 @@ fn execute_help(subcommand: Option<String>) {
             println!("  --script, -s <PATH>   Standalone script to execute and snapshot");
             println!("  --size <WxH>          Dimensions for standalone script (default: 400x300)");
             println!("  --output, -o <PATH>   Output PNG path (default: dew.png)");
+            println!("  --after <SECONDS>     Run an applet's frames this long before drawing");
         }
         Some("run") => {
             println!("Usage: dew run [OPTIONS]");
@@ -3206,7 +3245,11 @@ fn run() -> Result<(), String> {
             _ => Err("running more than one applet at once is not supported yet".to_string()),
         },
         Command::Start { stats, bench } => execute_start(stats, bench),
-        Command::Snapshot { target, output } => execute_snapshot(target, output),
+        Command::Snapshot {
+            target,
+            output,
+            after,
+        } => execute_snapshot(target, output, after),
         Command::Check { targets } => execute_check(targets),
         Command::Install { path, force } => execute_install(path, force),
         Command::InstallFromMarketplace {
@@ -3348,6 +3391,7 @@ fn install_test_surface(
         crate::manifest::Permission::Popover,
         crate::manifest::Permission::Storage,
         crate::manifest::Permission::Clipboard,
+        crate::manifest::Permission::System,
     ];
     let grant = crate::capabilities::SurfaceGrant {
         requested: Arc::new(Mutex::new(None)),
@@ -3590,7 +3634,7 @@ mod tests {
         .into_iter();
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Snapshot { target, output } => {
+            Command::Snapshot { target, output, .. } => {
                 assert_eq!(output, "out.png");
                 match target {
                     SnapshotTarget::Applet(got) => assert_eq!(got, dir),
@@ -3599,6 +3643,39 @@ mod tests {
             }
             _ => panic!("expected Snapshot command"),
         }
+    }
+
+    #[test]
+    fn snapshot_after_runs_an_applet_and_refuses_a_script() {
+        let dir = std::env::temp_dir().join("dew-cli-test-applet-after");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let args = ["snapshot", dir.to_str().expect("utf-8"), "--after", "2.5"]
+            .into_iter()
+            .map(|s| s.to_string());
+        match parse_args(args, false).unwrap() {
+            Command::Snapshot { after, .. } => {
+                assert_eq!(after, Some(std::time::Duration::from_millis(2500)))
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+
+        let bad = ["snapshot", dir.to_str().expect("utf-8"), "--after", "-1"]
+            .into_iter()
+            .map(|s| s.to_string());
+        assert!(
+            parse_args(bad, false).is_err(),
+            "a negative wait is refused"
+        );
+
+        let script = std::env::temp_dir().join("dew-cli-test-after.luau");
+        std::fs::write(&script, "").expect("temp script");
+        let args = ["snapshot", script.to_str().expect("utf-8"), "--after", "1"]
+            .into_iter()
+            .map(|s| s.to_string());
+        let Err(message) = parse_args(args, false) else {
+            panic!("a script has no frames to run");
+        };
+        assert!(message.contains("--after"), "{message}");
     }
 
     /// The flag is gone, and saying so beats `unrecognised argument`.
@@ -3638,7 +3715,7 @@ mod tests {
         .map(|s| s.to_string());
         let cmd = parse_args(args, false).unwrap();
         match cmd {
-            Command::Snapshot { target, output } => {
+            Command::Snapshot { target, output, .. } => {
                 assert_eq!(output, "/tmp/app.png");
                 match target {
                     SnapshotTarget::Script {

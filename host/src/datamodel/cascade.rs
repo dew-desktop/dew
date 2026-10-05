@@ -290,13 +290,22 @@ fn style_derive_target(dom: &Dom, derive: usize) -> Option<usize> {
 /// entry carries the SAME distance as whatever sheet composes from it: see
 /// this module's own doc comment for why composition is transparent to tree
 /// position rather than a farther, separate contribution.
+///
+/// BORROWED, NOT CLONED, AND THAT IS THE WHOLE COST OF A PASS. This runs once
+/// per instance per render pass and visits every child of every ancestor, so
+/// an element in a list of sixty pays for its fifty-nine siblings, and so does
+/// each of them. Copying each ancestor's child list and each child's class
+/// name to ask "is this a `StyleSheet`" made it the larger part of a frame:
+/// a system monitor of ~640 instances spent 7.7ms of a release frame in
+/// layout, most of it in allocation here, and dragging stuttered on every
+/// repaint because of it.
 fn applicable_style_sheets(dom: &Dom, id: usize) -> Vec<(usize, usize)> {
     let mut sheets = Vec::new();
     let mut cursor = Some(id);
     let mut distance = 0;
-    while let Some(current) = cursor {
-        for child in dom.children(current) {
-            match dom.class_of(child).as_deref() {
+    while let Some(node) = cursor.and_then(|current| dom.node(current)) {
+        for &child in &node.children {
+            match dom.node(child).map(|c| c.class.as_str()) {
                 Some("StyleSheet") => {
                     sheets.push((distance, child));
                     collect_derived_sheets(dom, child, distance, &mut sheets, &mut HashSet::new());
@@ -319,7 +328,7 @@ fn applicable_style_sheets(dom: &Dom, id: usize) -> Vec<(usize, usize)> {
                 _ => {}
             }
         }
-        cursor = dom.parent_of(current);
+        cursor = node.parent;
         distance += 1;
     }
     sheets

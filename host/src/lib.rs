@@ -30,6 +30,7 @@ pub mod gallery;
 pub mod manifest;
 pub mod scope;
 pub mod services;
+pub mod system;
 
 // `host/build.rs`'s lockfile check, compiled here only so its tests run.
 #[cfg(test)]
