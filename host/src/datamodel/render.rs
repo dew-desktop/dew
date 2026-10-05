@@ -1411,7 +1411,10 @@ fn layout_order(dom: &Dom, id: usize, by_name: bool) -> Vec<usize> {
         named.sort_by(|a, b| a.0.cmp(&b.0));
         kids = named.into_iter().map(|(_, child)| child).collect();
     } else {
-        kids.sort_by_key(|&child| number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32);
+        // CACHED, so each child's `LayoutOrder` is read once rather than once
+        // per comparison: a read is a cascade lookup, and a sixty-bar graph
+        // was paying for several hundred of them. Still stable.
+        kids.sort_by_cached_key(|&child| number(dom, child, "LayoutOrder").unwrap_or(0.0) as i32);
     }
     kids
 }
@@ -2322,9 +2325,9 @@ fn paint_rank(dom: &Dom, root: usize) -> HashMap<usize, usize> {
         *next += 1;
 
         // STABLE, so siblings sharing a `ZIndex` keep declaration order, which is
-        // the rest of the engine's rule.
+        // the rest of the engine's rule. Cached, so each `ZIndex` is read once.
         let mut kids = dom.children(id);
-        kids.sort_by_key(|child| z_of(dom, *child));
+        kids.sort_by_cached_key(|child| z_of(dom, *child));
         for child in kids {
             walk(dom, child, next, out);
         }
@@ -2336,11 +2339,56 @@ fn paint_rank(dom: &Dom, root: usize) -> HashMap<usize, usize> {
     out
 }
 
+/// The display list the last painted frame solved, until anything is written.
+///
+/// A HIT TEST IS A LAYOUT, AND THERE ARE MANY OF THEM. `input::hit` reads the
+/// display list backwards, and it runs on every pointer move, press and
+/// release, and again after every painted frame to reconcile hover. Solving
+/// the tree for each one meant a widget of ~640 instances solved its layout
+/// twice per repaint and once per mouse move, and a drag stuttered for its
+/// first few moves (still hit-tested until the drag threshold) and on every
+/// repaint after. Between two writes the answer cannot change, so the frame
+/// that solved it keeps it.
+///
+/// ONLY [`display_list`] READS IT. [`frame_of`] always solves afresh and then
+/// stores what it solved, so a running transition or a style query that
+/// changed `IsActive` (written without an invalidation, by design) is picked up
+/// by the next painted frame exactly as before, and a hit test between frames
+/// sees what is on screen. Emptied by every write that empties the cascade
+/// memo, which is every write that can move anything.
+#[derive(Default)]
+pub struct LastLayout(std::cell::RefCell<Option<Kept>>);
+
+/// The root and size a display list was solved for, and the list itself.
+type Kept = (usize, f32, f32, Vec<Placed>);
+
+impl LastLayout {
+    pub fn forget(&mut self) {
+        *self.0.get_mut() = None;
+    }
+
+    fn get(&self, root: usize, width: f32, height: f32) -> Option<Vec<Placed>> {
+        match self.0.borrow().as_ref() {
+            Some((r, w, h, placed)) if *r == root && *w == width && *h == height => {
+                Some(placed.clone())
+            }
+            _ => None,
+        }
+    }
+
+    fn store(&self, root: usize, width: f32, height: f32, placed: Vec<Placed>) {
+        *self.0.borrow_mut() = Some((root, width, height, placed));
+    }
+}
+
 /// Resolve everything under `root` into paint order, back to front.
 ///
 /// `root` itself is the surface and is not placed; its children are laid out
 /// against the box the surface offers, which is how a `ScreenGui` behaves.
 pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Placed> {
+    if let Some(placed) = dom.last_layout.get(root, width, height) {
+        return placed;
+    }
     let opened = dom.open_style_memo();
     let surface = Box2 {
         x: 0.0,
@@ -2351,6 +2399,7 @@ pub fn display_list(dom: &Dom, root: usize, width: f32, height: f32) -> Vec<Plac
     let solved = solve_layout(dom, root, surface);
     let placed = paint_order(dom, root, solved);
     dom.close_style_memo(opened);
+    dom.last_layout.store(root, width, height, placed.clone());
     placed
 }
 
@@ -2951,8 +3000,11 @@ pub fn frame_of(dom: &SharedDom, root: usize, width: f32, height: f32) -> Frame 
     let opened = guard.open_style_memo();
     let (texts, solved) = commit(&mut guard, root, width, height);
     let placed = paint_order(&guard, root, solved);
+    let kept = placed.clone();
     let f = frame_with(&mut guard, placed, width, height, texts);
     guard.close_style_memo(opened);
+    // AFTER EVERY WRITE THIS PASS MADE, so none of them empties it.
+    guard.last_layout.store(root, width, height, kept);
     f
 }
 
@@ -2981,6 +3033,60 @@ mod tests {
             .expect("root");
         lua.load(src).exec().expect("guest");
         frame_of(&dom, root, width, height)
+    }
+
+    #[test]
+    fn a_hit_test_after_a_write_sees_the_new_layout() {
+        // THE CACHE HIT TESTS READ IS ONLY GOOD UNTIL THE NEXT WRITE. A frame
+        // stores what it solved; moving the box afterwards must not leave a hit
+        // test aiming at where it used to be.
+        let lua = Lua::new();
+        let dom = SharedDom::default();
+        install(&lua, &dom).expect("install");
+        install_vocabulary(&lua).expect("vocabulary");
+        let root = dom
+            .lock()
+            .expect("dom")
+            .insert("Folder".into(), "Root".into());
+        lua.globals()
+            .set(
+                "root",
+                crate::datamodel::handle(&lua, &dom, root).expect("root handle"),
+            )
+            .expect("root");
+        lua.load(
+            r#"
+            box = Instance.new("Frame")
+            box.Position = UDim2.fromOffset(10, 10)
+            box.Size = UDim2.fromOffset(20, 20)
+            box.Parent = root
+            "#,
+        )
+        .exec()
+        .expect("guest");
+
+        frame_of(&dom, root, 200.0, 100.0);
+        let x_of = |dom: &SharedDom| {
+            let guard = dom.lock().expect("dom");
+            display_list(&guard, root, 200.0, 100.0)
+                .iter()
+                .map(|p| p.rect.x)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(x_of(&dom), vec![10.0], "the frame's own layout");
+
+        lua.load("box.Position = UDim2.fromOffset(120, 10)")
+            .exec()
+            .expect("move");
+        assert_eq!(x_of(&dom), vec![120.0], "a write must empty the cache");
+
+        let guard = dom.lock().expect("dom");
+        assert!(
+            display_list(&guard, root, 100.0, 100.0)
+                .iter()
+                .all(|p| p.rect.x == 120.0),
+            "a different size is solved, not served from the cache"
+        );
     }
 
     /// The same, with a directory of real assets for `mod://` to resolve against.

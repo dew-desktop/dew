@@ -57,7 +57,7 @@ use mlua::prelude::*;
 use mlua::{MetaMethod, UserData, UserDataFields, UserDataMethods};
 use rbx_reflection::{DataType, PropertyDescriptor, Scriptability};
 use rbx_types::{Variant, VariantType};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use vocabulary::{
     LuaColor3, LuaColorSequence, LuaNumberSequence, LuaRect, LuaUDim, LuaUDim2, LuaVector2,
@@ -215,6 +215,10 @@ pub struct Dom {
     /// or `None` outside one. See `cascade::StyleMemo` for when it is open
     /// and what empties it.
     style_memo: cascade::StyleMemo,
+    /// The display list the last painted frame solved, kept for hit tests
+    /// until the next write. Emptied wherever `style_memo` is; see
+    /// `render::LastLayout`.
+    last_layout: render::LastLayout,
     /// The focused `TextBox`'s editing session, if a `TextBox` holds focus.
     /// Started and ended by `input.rs` alongside the focus owner, read by the
     /// renderer to place the caret. See `editing::Session`.
@@ -248,6 +252,7 @@ impl Default for Dom {
             viewport: (0, 0),
             now: 0.0,
             style_memo: cascade::StyleMemo::default(),
+            last_layout: render::LastLayout::default(),
             editing: None,
         }
     }
@@ -268,6 +273,7 @@ impl Dom {
         }));
         self.dirty = true;
         self.style_memo.forget();
+        self.last_layout.forget();
         self.slots.len() - 1
     }
 
@@ -280,6 +286,7 @@ impl Dom {
     /// a parent, an attribute) may change what a selector matches.
     fn node_mut(&mut self, id: usize) -> Option<&mut Node> {
         self.style_memo.forget();
+        self.last_layout.forget();
         self.slots.get_mut(id).and_then(|s| s.as_mut())
     }
 
@@ -406,6 +413,7 @@ impl Dom {
             // other property write below marks the tree dirty.
             self.dirty = true;
             self.style_memo.forget();
+            self.last_layout.forget();
         }
         added
     }
@@ -429,6 +437,7 @@ impl Dom {
             }
             self.dirty = true;
             self.style_memo.forget();
+            self.last_layout.forget();
         }
         removed
     }
@@ -512,6 +521,7 @@ impl Dom {
         if changed || reordered {
             self.dirty = true;
             self.style_memo.forget();
+            self.last_layout.forget();
         }
         changed
     }
@@ -558,6 +568,7 @@ impl Dom {
 
     fn set_style_link(&mut self, id: usize, target: Option<usize>) {
         self.style_memo.forget();
+        self.last_layout.forget();
         match target {
             Some(target) => {
                 self.style_links.insert(id, target);
@@ -578,6 +589,7 @@ impl Dom {
 
     fn set_style_derive(&mut self, id: usize, target: Option<usize>) {
         self.style_memo.forget();
+        self.last_layout.forget();
         match target {
             Some(target) => {
                 self.style_derives.insert(id, target);
@@ -683,6 +695,7 @@ impl Dom {
     pub fn touch(&mut self) {
         self.dirty = true;
         self.style_memo.forget();
+        self.last_layout.forget();
     }
 
     /// Is a repaint owed, and clear the debt.
@@ -717,6 +730,7 @@ impl Dom {
     pub fn set_viewport(&mut self, width: u32, height: u32) {
         if self.viewport != (width, height) {
             self.style_memo.forget();
+            self.last_layout.forget();
         }
         self.viewport = (width, height);
     }
@@ -794,6 +808,7 @@ impl Dom {
         }
         self.dirty = true;
         self.style_memo.forget();
+        self.last_layout.forget();
     }
 
     /// Write a property the HOST computed, bypassing the guest's rules.
@@ -924,8 +939,52 @@ pub fn default_value(class: &str, property: &str) -> Option<Variant> {
     default_for(class, property)
 }
 
+/// [`default_for`]'s answers by class, then property, and the flag generation
+/// they were computed under.
+type Defaults = (u64, HashMap<String, HashMap<String, Option<Variant>>>);
+
+thread_local! {
+    static DEFAULTS: std::cell::RefCell<Defaults> = std::cell::RefCell::new((0, HashMap::new()));
+}
+
 /// The default a property reads before anything assigns it.
+///
+/// CACHED, BECAUSE A FRAME ASKS THOUSANDS OF TIMES. Every property layout reads
+/// that an instance never set lands here, and the answer walks the class's
+/// superclasses through the extension registry and the reflection database
+/// with string-hashed lookups at each step -- 38% of a debug-build frame for a
+/// system monitor of ~640 instances. The answer only changes when this
+/// thread's experimental flags do, so the cache is keyed by their generation
+/// and dropped when it moves. Thread-local for the same reason the flags are.
 fn default_for(class: &str, property: &str) -> Option<Variant> {
+    let generation = crate::flags::generation();
+    let hit = DEFAULTS.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if cache.0 != generation {
+            cache.1.clear();
+            cache.0 = generation;
+        }
+        cache
+            .1
+            .get(class)
+            .and_then(|by_property| by_property.get(property))
+            .cloned()
+    });
+    if let Some(answer) = hit {
+        return answer;
+    }
+    let answer = uncached_default_for(class, property);
+    DEFAULTS.with(|cell| {
+        cell.borrow_mut()
+            .1
+            .entry(class.to_string())
+            .or_default()
+            .insert(property.to_string(), answer.clone());
+    });
+    answer
+}
+
+fn uncached_default_for(class: &str, property: &str) -> Option<Variant> {
     // A TEXTBOX NEVER FOCUSED READS CURSOR 1 AND NO SELECTION, measured in
     // Studio's Play mode. The database's 0 and 0 are what a file stores.
     if class == "TextBox" {

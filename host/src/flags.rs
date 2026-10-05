@@ -34,6 +34,10 @@ thread_local! {
     /// by default, which is what makes a run that never calls
     /// `set_enabled_flags` see zero observable difference.
     static ENABLED_FLAGS: RefCell<HashSet<&'static str>> = RefCell::new(HashSet::new());
+
+    /// Bumped by every `set_enabled_flags`, so a cache of anything a flag can
+    /// change (a property default, say) knows when to throw itself away.
+    static GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// Enable exactly this set of flags for whatever runs on the calling thread
@@ -45,6 +49,12 @@ pub fn set_enabled_flags(flags: &[Flag]) {
         set.clear();
         set.extend(flags.iter().map(|(flag, _)| *flag));
     });
+    GENERATION.with(|generation| generation.set(generation.get() + 1));
+}
+
+/// Changes whenever this thread's enabled set may have; see `GENERATION`.
+pub fn generation() -> u64 {
+    GENERATION.with(|generation| generation.get())
 }
 
 /// Is this exact flag enabled for the calling thread?
