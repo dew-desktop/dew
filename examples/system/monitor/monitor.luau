@@ -182,7 +182,14 @@ local card = make("Frame", {
 	BackgroundColor3 = SURFACE,
 })
 rounded(card, 12)
-make("UIStroke", { Thickness = 1, Color = RULE, Parent = card })
+-- Inside the edge: the card fills the window, so a stroke outside it (the
+-- engine's default) would be cut off along every straight side.
+make("UIStroke", {
+	Thickness = 1,
+	Color = RULE,
+	BorderStrokePosition = Enum.BorderStrokePosition.Inner,
+	Parent = card,
+})
 make("UIPadding", {
 	PaddingLeft = UDim.new(0, PAD),
 	PaddingRight = UDim.new(0, PAD),
@@ -318,7 +325,12 @@ list(battery, Enum.FillDirection.Horizontal, 5, { VerticalAlignment = Enum.Verti
 local cell = blank(battery, "Cell", 1, UDim2.fromOffset(19, 9))
 local shell = make("Frame", { Name = "Shell", Size = UDim2.fromOffset(16, 9), BackgroundTransparency = 1, Parent = cell })
 rounded(shell, 2)
-make("UIStroke", { Thickness = 1, Color = MUTED, Parent = shell })
+make("UIStroke", {
+	Thickness = 1,
+	Color = MUTED,
+	BorderStrokePosition = Enum.BorderStrokePosition.Inner,
+	Parent = shell,
+})
 local charge = make("Frame", {
 	Name = "Charge",
 	Position = UDim2.fromOffset(2, 2),

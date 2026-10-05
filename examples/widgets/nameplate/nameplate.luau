@@ -72,6 +72,9 @@ corner.Parent = card
 local stroke = Instance.new("UIStroke")
 stroke.Color = Color3.fromRGB(64, 110, 184)
 stroke.Thickness = 1
+-- Inside the edge: the card fills the window, so a stroke outside it (the
+-- engine's default) would be cut off along every straight side.
+stroke.BorderStrokePosition = Enum.BorderStrokePosition.Inner
 stroke.Parent = card
 
 label(card, "Title", 14, 22, Color3.fromRGB(233, 239, 249)).Text = "Nameplate"

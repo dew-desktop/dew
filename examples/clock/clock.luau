@@ -59,6 +59,12 @@ local borderStroke = Instance.new("UIStroke")
 borderStroke.Thickness = 1.5
 borderStroke.Color = Color3.fromRGB(210, 232, 255)
 borderStroke.Transparency = 0.3
+-- Around the box, not the glyphs: on a TextButton the default, Contextual,
+-- outlines the text, and this one has none. Inside the edge, because the
+-- button fills the window and a stroke outside it (the engine's default)
+-- would be cut off along every straight side.
+borderStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+borderStroke.BorderStrokePosition = Enum.BorderStrokePosition.Inner
 borderStroke.Parent = button
 
 -- Digital time readout
