@@ -815,6 +815,13 @@ pub enum Command {
 #[derive(Debug, PartialEq, Eq)]
 pub enum SnapshotTarget {
     Applet(PathBuf),
+    /// An applet named by its manifest id: the frame it is showing if it is
+    /// running, otherwise its installed copy rendered fresh. `fresh` skips
+    /// the running one.
+    Installed {
+        id: String,
+        fresh: bool,
+    },
     Script {
         path: String,
         width: u32,
@@ -964,6 +971,8 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
     let mut size = (400, 300);
     let mut output = None;
     let mut after = None;
+    let mut fresh = false;
+    let mut installed: Option<String> = None;
     let mut positionals = Vec::new();
 
     let mut iter = args.iter();
@@ -1001,6 +1010,7 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
                 let val = iter.next().ok_or("missing value for --output")?;
                 output = Some(val.clone());
             }
+            "--fresh" => fresh = true,
             // AN APPLET THAT WATCHES SOMETHING HAS NOTHING TO SHOW AT ITS
             // FIRST FRAME. A system monitor's graph is a minute of samples and a
             // clock's seconds hand moves; this lets a snapshot show either
@@ -1042,6 +1052,12 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
                 applet = Some(pos);
             } else if pos.is_file() {
                 script = Some(pos.display().to_string());
+            } else if is_applet_id(&pos) {
+                // A BARE WORD IS AN APPLET'S ID. `--applet` was removed for
+                // taking a name that had to be looked up when a path would
+                // do; an applet already running, or installed where a person
+                // never sees its directory, has no path to hand over.
+                installed = Some(pos.display().to_string());
             } else {
                 // A TYPO IS NOT A SCRIPT. Falling through to the script branch
                 // made a mistyped directory fail later, inside the Luau loader,
@@ -1053,7 +1069,15 @@ fn parse_snapshot(args: &[String]) -> Result<Command, String> {
     }
 
     let out = output.unwrap_or_else(|| "dew.png".to_string());
-    let target = if let Some(path) = script {
+    if fresh && installed.is_none() {
+        return Err(
+            "`--fresh` renders an applet named by its id instead of capturing it running; a directory or script is always rendered fresh"
+                .to_string(),
+        );
+    }
+    let target = if let Some(id) = installed {
+        SnapshotTarget::Installed { id, fresh }
+    } else if let Some(path) = script {
         SnapshotTarget::Script {
             path,
             width: size.0,
@@ -1443,12 +1467,76 @@ fn load_applet(dir: &Path) -> Result<applets::Applet, String> {
     applets::load(dir, &HashMap::new(), &state)
 }
 
+/// Does `pos` read as an applet id rather than a path? One word, as an
+/// installed id is (`installed::valid_id`): no separator and not `.` or `..`.
+/// A word ending like a script or an image is still a path, so a mistyped
+/// `examples/clok` or `app.luau` is reported as a missing file.
+fn is_applet_id(pos: &Path) -> bool {
+    let word = pos.as_os_str().to_string_lossy();
+    let lower = word.to_ascii_lowercase();
+    !word.is_empty()
+        && word != "."
+        && word != ".."
+        && !word.contains(['/', '\\', ':'])
+        && ![".luau", ".lua", ".png"]
+            .iter()
+            .any(|ext| lower.ends_with(ext))
+}
+
+/// `dew snapshot <id>`: the running applet's frame, or its installed copy.
+#[cfg(windows)]
+fn snapshot_by_id(
+    id: &str,
+    fresh: bool,
+    output: String,
+    after: Option<std::time::Duration>,
+) -> Result<(), String> {
+    if !fresh {
+        // ABSOLUTE, because the running Dew writes it from its own working
+        // directory, not this terminal's.
+        let path =
+            std::path::absolute(&output).map_err(|e| format!("could not resolve {output}: {e}"))?;
+        if let coordinator::LiveSnapshot::Written(width, height) =
+            coordinator::snapshot_running(id, &path)?
+        {
+            if after.is_some() {
+                println!("[dew] --after ignored: '{id}' is running, so its frame is already live");
+            }
+            println!("[dew] wrote {output} ({width}x{height}) from the running {id}");
+            return Ok(());
+        }
+    }
+    let dir = installed::list()
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| entry.dir)
+        .ok_or_else(|| {
+            format!(
+                "no applet '{id}' is running or installed: install it with `dew install <dir>`, or pass its directory"
+            )
+        })?;
+    execute_snapshot(SnapshotTarget::Applet(dir), output, after)
+}
+
+#[cfg(not(windows))]
+fn snapshot_by_id(
+    id: &str,
+    _fresh: bool,
+    _output: String,
+    _after: Option<std::time::Duration>,
+) -> Result<(), String> {
+    Err(format!(
+        "'{id}' names a running or installed applet, which only Windows has: pass the applet's directory instead"
+    ))
+}
+
 fn execute_snapshot(
     target: SnapshotTarget,
     output: String,
     after: Option<std::time::Duration>,
 ) -> Result<(), String> {
     match target {
+        SnapshotTarget::Installed { id, fresh } => snapshot_by_id(&id, fresh, output, after),
         SnapshotTarget::Script {
             path,
             width,
@@ -1814,6 +1902,11 @@ fn run_applet(
     };
     let mut drag: Option<DragState> = None;
 
+    // `dew snapshot <id>` FROM ANOTHER TERMINAL lands here, by manifest id,
+    // and is answered between frames on this thread, the only one that may
+    // touch the canvas. Unregistered when this function returns.
+    let snapshots = coordinator::SnapshotInbox::open(&manifest.id);
+
     let _keep_alive = vm;
 
     let mut last = Instant::now();
@@ -1985,6 +2078,20 @@ fn run_applet(
             window.borrow_mut().present(bgra, width, height);
         }
         let t_raster = t1.elapsed();
+
+        // THE FRAME JUST PRESENTED, so the file is exactly what is on screen:
+        // the same pixels at the same size, with the desktop behind it left
+        // out because the canvas never had it.
+        while let Some(request) = snapshots.take() {
+            let path = request.path.display().to_string();
+            let written = renderer
+                .borrow_mut()
+                .painter_mut()
+                .write_png(&path)
+                .map(|()| (width, height))
+                .map_err(|code| format!("could not write {path}: rasteriser status {code}"));
+            let _ = request.reply.send(written);
+        }
 
         if stats {
             frames += 1;
@@ -2968,9 +3075,10 @@ return process
 fn execute_help(subcommand: Option<String>) {
     match subcommand.as_deref() {
         Some("snapshot") => {
-            println!("Usage: dew snapshot [OPTIONS] [OUTPUT]");
+            println!("Usage: dew snapshot [OPTIONS] <DIR | SCRIPT | APPLET-ID>");
             println!();
-            println!("Render a mod or standalone script headlessly to a PNG image.");
+            println!("Render a mod or standalone script headlessly to a PNG image, or capture");
+            println!("a running applet's frame by its id.");
             println!();
             println!("Options:");
             println!(
@@ -2980,6 +3088,11 @@ fn execute_help(subcommand: Option<String>) {
             println!("  --size <WxH>          Dimensions for standalone script (default: 400x300)");
             println!("  --output, -o <PATH>   Output PNG path (default: dew.png)");
             println!("  --after <SECONDS>     Run an applet's frames this long before drawing");
+            println!("  --fresh               With an applet id, render it instead of capturing it running");
+            println!();
+            println!("A directory is rendered headlessly; so is a script. An applet's id instead");
+            println!("captures the frame it is showing if it is running (Windows), and otherwise");
+            println!("renders its installed copy.");
         }
         Some("run") => {
             println!("Usage: dew run [OPTIONS]");
@@ -3156,7 +3269,7 @@ fn execute_help(subcommand: Option<String>) {
             println!(
                 "  start            Start the service with whatever is installed (Windows only)"
             );
-            println!("  snapshot <PATH>  Render an applet or a script to a PNG, no window needed");
+            println!("  snapshot <PATH|ID>  Render an applet or a script to a PNG, or capture a running one");
             println!("  check [PATH...]  Validate manifests and entry points, or this directory");
             println!(
                 "  install <PATH>   Copy an applet (directory or .dewpkg) into the per-user store (Windows only)"
@@ -3643,6 +3756,68 @@ mod tests {
             }
             _ => panic!("expected Snapshot command"),
         }
+    }
+
+    #[test]
+    fn snapshot_takes_an_applet_id() {
+        // A BARE WORD THAT IS NOT A FILE OR DIRECTORY HERE names an applet,
+        // captured running by default and rendered fresh with `--fresh`.
+        let args = ["snapshot", "monitor", "-o", "monitor.png"]
+            .into_iter()
+            .map(|s| s.to_string());
+        match parse_args(args, false).unwrap() {
+            Command::Snapshot { target, output, .. } => {
+                assert_eq!(output, "monitor.png");
+                assert_eq!(
+                    target,
+                    SnapshotTarget::Installed {
+                        id: "monitor".to_string(),
+                        fresh: false
+                    }
+                );
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+
+        let args = ["snapshot", "monitor", "--fresh", "--after", "5"]
+            .into_iter()
+            .map(|s| s.to_string());
+        match parse_args(args, false).unwrap() {
+            Command::Snapshot { target, after, .. } => {
+                assert_eq!(
+                    target,
+                    SnapshotTarget::Installed {
+                        id: "monitor".to_string(),
+                        fresh: true
+                    }
+                );
+                assert_eq!(after, Some(std::time::Duration::from_secs(5)));
+            }
+            _ => panic!("expected Snapshot command"),
+        }
+    }
+
+    #[test]
+    fn snapshot_still_reports_a_mistyped_path() {
+        // A PATH THAT IS NOT THERE IS STILL A TYPO, not an id: a separator or
+        // a script's extension says it was meant as a path.
+        for typo in ["examples/clok", "app.luau", "shot.png"] {
+            let args = ["snapshot", typo].into_iter().map(|s| s.to_string());
+            let Err(message) = parse_args(args, false) else {
+                panic!("{typo} is a missing path, not an applet id");
+            };
+            assert!(message.contains("no such file or directory"), "{message}");
+        }
+
+        let dir = std::env::temp_dir().join("dew-cli-test-applet-fresh");
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let args = ["snapshot", dir.to_str().expect("utf-8"), "--fresh"]
+            .into_iter()
+            .map(|s| s.to_string());
+        assert!(
+            parse_args(args, false).is_err(),
+            "--fresh means nothing for a directory"
+        );
     }
 
     #[test]
