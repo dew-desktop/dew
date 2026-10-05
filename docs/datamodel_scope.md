@@ -22,7 +22,7 @@ without Aether**.
 excluded by decision, and 25 classes under `GuiObject` are in scope.
 
 Counted per class rather than by name, those properties make 471 (class,
-property) pairs. **266 of the 471 are rendered by Dew**, 26 of them
+property) pairs. **267 of the 471 are rendered by Dew**, 26 of them
 partially and 1 differently from the engine on purpose; see the two
 sections below.
 
@@ -63,7 +63,7 @@ Three different questions, asked of every property in scope for each class:
 | `GuiLabel` | 20 | 20 | 12 | 0 | 12 |
 | `GuiObject` | 20 | 20 | 12 | 0 | 12 |
 | `UIPageLayout` | 13 | 13 | 0 | 0 | 3 |
-| `UIStroke` | 12 | 12 | 5 | 2 | 5 |
+| `UIStroke` | 12 | 12 | 6 | 2 | 5 |
 | `UIListLayout` | 11 | 11 | 10 | 0 | 3 |
 | `UIGradient` | 10 | 10 | 6 | 0 | 6 |
 | `UIGridLayout` | 10 | 10 | 9 | 0 | 2 |
@@ -166,10 +166,10 @@ the table above can be traced to the names behind it.
 
 ### `UIStroke`
 
-- **Rendered:** `ApplyStrokeMode`, `Color`, `Parent`
+- **Rendered:** `ApplyStrokeMode`, `BorderStrokePosition`, `Color`, `Parent`
 - **Partial,** `Thickness`: around glyphs, drawn as copies of the text stamped out to the thickness, so joins are always round
 - **Partial,** `Transparency`: around glyphs, the stamped copies overlap, so a translucent outline reads more solid than the engine's
-- **Not rendered:** `BorderOffset`, `BorderStrokePosition`, `Enabled`, `LineJoinMode`, `Name`, `StrokeSizingMode`, `ZIndex`
+- **Not rendered:** `BorderOffset`, `Enabled`, `LineJoinMode`, `Name`, `StrokeSizingMode`, `ZIndex`
 
 ### `UIListLayout`
 

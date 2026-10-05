@@ -562,10 +562,28 @@ fn strokes_of(dom: &Dom, id: usize, class: &str) -> (Option<Stroke>, Option<Stro
             &mut border
         };
         if slot.is_none() {
+            let thickness = number(dom, child, "Thickness").unwrap_or(1.0);
+            // WHERE THE BOX STROKE SITS, which the engine defaults to wholly
+            // outside. Drawing it centred instead put half of a 1px stroke in
+            // each of two pixel columns -- a dim, soft line along every
+            // straight edge beside a crisp one around every corner -- and on
+            // a widget whose box fills its window, the window cut the outer
+            // half off the edges and left the corners whole. Glyph strokes
+            // are drawn their own way and take no offset.
+            let offset = if around_glyphs {
+                0.0
+            } else {
+                match enum_name(dom, child, "BorderStrokePosition", "BorderStrokePosition") {
+                    Some("Inner") => -thickness / 2.0,
+                    Some("Center") => 0.0,
+                    _ => thickness / 2.0,
+                }
+            };
             *slot = Some(Stroke {
                 colour: colour(dom, child, "Color"),
-                thickness: number(dom, child, "Thickness").unwrap_or(1.0),
+                thickness,
                 alpha: alpha_from(dom, child, "Transparency"),
+                offset,
             });
         }
     }
@@ -2748,6 +2766,30 @@ fn reports_text(class: &str) -> bool {
 
 /// Turn one placed element into the display list node the painter consumes.
 ///
+/// A box on the pixel grid: each edge rounded to the nearest whole pixel.
+///
+/// PAINT ONLY. Layout keeps its fractions, because the engine does: two flex
+/// children sharing 200px in a ratio of 100 to 420 read back as 92.31 and
+/// 107.69 (`uiflexitem_custom_shrink_ratio_weights_the_overflow`). What it
+/// draws is on the grid, and a box drawn where layout put it was not: an edge
+/// at x = 92.31 is a pixel column a third covered, so a list of bars sharing a
+/// width evenly drew every bar with two soft edges, and a 1px stroke on such
+/// an edge smeared across two columns.
+///
+/// EDGES, NOT ORIGIN AND SIZE. Rounding the two edges keeps neighbours that
+/// meet in layout meeting on screen; rounding x and w separately would open a
+/// pixel gap or overlap between them wherever the fractions fall differently.
+fn snapped(r: Box2) -> Rect {
+    let (left, top) = (r.x.round(), r.y.round());
+    let (right, bottom) = ((r.x + r.w).round(), (r.y + r.h).round());
+    Rect {
+        x: left,
+        y: top,
+        w: (right - left).max(0.0),
+        h: (bottom - top).max(0.0),
+    }
+}
+
 /// `&mut Dom` FOR ONE REASON, AND IT IS WORTH THE SIGNATURE. Resolving an image
 /// reads a file, decodes it, and remembers the answer; without the remembering,
 /// a mod with an icon would decode that icon on every frame it is drawn. The
@@ -2773,22 +2815,12 @@ fn node(dom: &mut Dom, placed: &Placed, sequence: u64, laid: Option<TextLayout>)
     Node {
         id: sequence,
         name: dom.name_of(id).unwrap_or_default(),
-        rect: Rect {
-            x: placed.rect.x,
-            y: placed.rect.y,
-            w: placed.rect.w,
-            h: placed.rect.h,
-        },
+        rect: snapped(placed.rect),
         fill: colour(dom, id, "BackgroundColor3"),
         alpha: alpha_from(dom, id, "BackgroundTransparency"),
         radius: corner_radius(dom, id),
         clip_radius: placed.clip_radius,
-        clip: placed.clip.map(|c| Rect {
-            x: c.x,
-            y: c.y,
-            w: c.w,
-            h: c.h,
-        }),
+        clip: placed.clip.map(snapped),
         stroke,
         gradient: gradient_of(dom, id),
         text: if draws_text(&class) {
@@ -3033,6 +3065,93 @@ mod tests {
             .expect("root");
         lua.load(src).exec().expect("guest");
         frame_of(&dom, root, width, height)
+    }
+
+    #[test]
+    fn a_box_stroke_sits_where_border_stroke_position_puts_it() {
+        // OUTSIDE BY DEFAULT, as the engine draws it: the centre line half the
+        // thickness beyond the edge, so the whole stroke lies outside the box.
+        let frame = render(
+            r#"
+            for i, position in { "Default", "Outer", "Center", "Inner" } do
+                local box = Instance.new("Frame")
+                box.Name = position
+                box.Position = UDim2.fromOffset(i * 30, 0)
+                box.Size = UDim2.fromOffset(20, 20)
+                local stroke = Instance.new("UIStroke")
+                stroke.Thickness = 4
+                if position ~= "Default" then
+                    stroke.BorderStrokePosition = Enum.BorderStrokePosition[position]
+                end
+                stroke.Parent = box
+                box.Parent = root
+            end
+            "#,
+            200.0,
+            40.0,
+        );
+        let offset = |name: &str| {
+            frame
+                .nodes
+                .iter()
+                .find(|n| n.name == name)
+                .and_then(|n| n.stroke.as_ref())
+                .map(|s| s.offset)
+        };
+        assert_eq!(
+            offset("Default"),
+            Some(2.0),
+            "the engine's default is Outer"
+        );
+        assert_eq!(offset("Outer"), Some(2.0));
+        assert_eq!(offset("Center"), Some(0.0));
+        assert_eq!(offset("Inner"), Some(-2.0));
+    }
+
+    #[test]
+    fn a_painted_box_is_on_the_pixel_grid_and_meets_its_neighbour() {
+        // 100 AND 420 SHARE 200 AS 92.31 AND 107.69 in layout, which is what a
+        // guest reads back. Painted, both edges land on whole pixels, and the
+        // shared edge lands on the same one, so the two neither overlap nor
+        // leave a gap.
+        let frame = render(
+            r#"
+            local panel = Instance.new("Frame")
+            panel.Name = "Panel"
+            panel.Size = UDim2.fromOffset(200, 20)
+            local layout = Instance.new("UIListLayout")
+            layout.FillDirection = Enum.FillDirection.Horizontal
+            layout.SortOrder = Enum.SortOrder.LayoutOrder
+            layout.Parent = panel
+            for i, width in { 100, 140 } do
+                local child = Instance.new("Frame")
+                child.Name = if i == 1 then "A" else "B"
+                child.LayoutOrder = i
+                child.Size = UDim2.fromOffset(width, 20)
+                local flex = Instance.new("UIFlexItem")
+                flex.FlexMode = Enum.UIFlexMode.Custom
+                flex.ShrinkRatio = if i == 1 then 1 else 3
+                flex.Parent = child
+                child.Parent = panel
+            end
+            panel.Parent = root
+            "#,
+            200.0,
+            20.0,
+        );
+        let rect = |name: &str| frame.nodes.iter().find(|n| n.name == name).unwrap().rect;
+        let (a, b) = (rect("A"), rect("B"));
+        for r in [a, b] {
+            for edge in [r.x, r.y, r.x + r.w, r.y + r.h] {
+                assert_eq!(edge, edge.round(), "{r:?} has an edge off the grid");
+            }
+        }
+        assert_eq!(a.x + a.w, b.x, "A ends where B starts");
+        assert_eq!(
+            (a.w, b.w),
+            (92.0, 108.0),
+            "92.31 and 107.69, rounded at their edges"
+        );
     }
 
     #[test]

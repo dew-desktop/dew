@@ -960,10 +960,31 @@ pub fn run_case_with_options(
         by_name.insert(node.name.clone(), node);
     }
 
+    // WHERE LAYOUT PUT EACH BOX, which is what a case expects: its numbers are
+    // the engine's `AbsolutePosition` and `AbsoluteSize` read back in Studio,
+    // and those keep their fractions (92.31 in a flex overflow). The painted
+    // node is the same box snapped to the pixel grid, so it is the right thing
+    // to compare pixels against and the wrong thing to compare layout against.
+    let laid_out: HashMap<String, crate::datamodel::render::Box2> = {
+        let guard = dom.lock().expect("dom");
+        crate::datamodel::render::display_list(
+            &guard,
+            root_id,
+            case.surface.width,
+            case.surface.height,
+        )
+        .into_iter()
+        .filter_map(|placed| guard.name_of(placed.id).map(|name| (name, placed.rect)))
+        .collect()
+    };
+
     // 6. Evaluate expectations
     for exp in &case.expect {
-        let actual = match by_name.get(&exp.name) {
-            Some(n) => *n,
+        let actual = match laid_out
+            .get(&exp.name)
+            .filter(|_| by_name.contains_key(&exp.name))
+        {
+            Some(rect) => rect,
             None => {
                 let detail = format!(
                     "no node named '{}' in the display list (a node solved to zero width or height is dropped, so it may have been built and measured to nothing)",
@@ -975,41 +996,29 @@ pub fn run_case_with_options(
         };
 
         if let Some(expected_x) = exp.x {
-            if (actual.rect.x - expected_x).abs() > TOLERANCE {
-                let detail = format!(
-                    "{}: x: expected {expected_x}, got {}",
-                    exp.name, actual.rect.x
-                );
+            if (actual.x - expected_x).abs() > TOLERANCE {
+                let detail = format!("{}: x: expected {expected_x}, got {}", exp.name, actual.x);
                 let remediation = diagnose_remediation(case, &detail);
                 return finalize_result(case, detail, Some(remediation));
             }
         }
         if let Some(expected_y) = exp.y {
-            if (actual.rect.y - expected_y).abs() > TOLERANCE {
-                let detail = format!(
-                    "{}: y: expected {expected_y}, got {}",
-                    exp.name, actual.rect.y
-                );
+            if (actual.y - expected_y).abs() > TOLERANCE {
+                let detail = format!("{}: y: expected {expected_y}, got {}", exp.name, actual.y);
                 let remediation = diagnose_remediation(case, &detail);
                 return finalize_result(case, detail, Some(remediation));
             }
         }
         if let Some(expected_w) = exp.w {
-            if (actual.rect.w - expected_w).abs() > TOLERANCE {
-                let detail = format!(
-                    "{}: w: expected {expected_w}, got {}",
-                    exp.name, actual.rect.w
-                );
+            if (actual.w - expected_w).abs() > TOLERANCE {
+                let detail = format!("{}: w: expected {expected_w}, got {}", exp.name, actual.w);
                 let remediation = diagnose_remediation(case, &detail);
                 return finalize_result(case, detail, Some(remediation));
             }
         }
         if let Some(expected_h) = exp.h {
-            if (actual.rect.h - expected_h).abs() > TOLERANCE {
-                let detail = format!(
-                    "{}: h: expected {expected_h}, got {}",
-                    exp.name, actual.rect.h
-                );
+            if (actual.h - expected_h).abs() > TOLERANCE {
+                let detail = format!("{}: h: expected {expected_h}, got {}", exp.name, actual.h);
                 let remediation = diagnose_remediation(case, &detail);
                 return finalize_result(case, detail, Some(remediation));
             }

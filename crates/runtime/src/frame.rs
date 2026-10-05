@@ -49,6 +49,13 @@ pub struct Stroke {
     pub thickness: f32,
     /// Already inverted from the engine `Transparency` by Live.luau: 1 is opaque.
     pub alpha: f32,
+    /// How far the stroke's centre line sits outside the box edge, in pixels:
+    /// `thickness / 2` draws it wholly outside (`BorderStrokePosition.Outer`,
+    /// the engine's default), 0 straddles the edge, and `-thickness / 2` draws
+    /// it wholly inside. The painter grows the box and its corner radius by
+    /// this before stroking, which is exact: a rounded rectangle offset by `d`
+    /// is the rounded rectangle with radius `r + d`.
+    pub offset: f32,
 }
 
 /// A colour ramp stop.
@@ -547,6 +554,7 @@ impl Node {
             colour: Rgb::from_table(s.get("colour").ok()),
             thickness: s.get("thickness").unwrap_or(1.0),
             alpha: s.get("alpha").unwrap_or(1.0),
+            offset: s.get("offset").unwrap_or(0.0),
         });
 
         let gradient = t.get::<Option<LuaTable>>("gradient")?.map(|g| {
