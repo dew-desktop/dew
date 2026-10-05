@@ -1832,7 +1832,22 @@ pub extern "C" fn ar_png(ptr: *mut Surface, path: *const u8, len: u32) -> u32 {
     } else {
         s.pixmap.data()
     };
-    let buf = match image::RgbaImage::from_raw(w, h, src.to_vec()) {
+    // STRAIGHT ALPHA, WHICH IS WHAT A PNG HOLDS. Both backends keep pixels
+    // premultiplied, the form compositing and `UpdateLayeredWindow` want, and
+    // writing those bytes as they are darkened every pixel that was not
+    // fully opaque: the anti-aliased edge of a rounded widget on a
+    // transparent surface came out as a dark fringe. An opaque pixel, which
+    // is every pixel of a snapshot on a solid background, is unchanged.
+    let mut straight = src.to_vec();
+    for px in straight.chunks_exact_mut(4) {
+        let a = px[3] as u32;
+        if a != 0 && a != 255 {
+            for c in &mut px[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    let buf = match image::RgbaImage::from_raw(w, h, straight) {
         Some(b) => b,
         None => return 4,
     };
@@ -2271,6 +2286,37 @@ mod gpu_abi {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A PNG HOLDS STRAIGHT ALPHA. Half-transparent red over nothing is
+    /// stored premultiplied as (128, 0, 0, 128); written as it is, it reads
+    /// back as half-transparent dark red. Both backends.
+    #[test]
+    fn a_png_is_written_with_straight_alpha() {
+        for backend in [0, 1] {
+            let s = ar_surface_new_backend(4, 4, backend);
+            ar_begin_alpha(s, 0, 0, 0, 0);
+            ar_fill_rect(s, 0.0, 0.0, 4.0, 4.0, 0.0, 255, 0, 0, 128, 0);
+            let path = std::env::temp_dir().join(format!("dew-straight-alpha-{backend}.png"));
+            let text = path.to_string_lossy().into_owned();
+            assert_eq!(
+                ar_png(s, text.as_ptr(), text.len() as u32),
+                0,
+                "backend {backend}"
+            );
+            ar_surface_free(s);
+            let px = image::open(&path)
+                .expect("png")
+                .to_rgba8()
+                .get_pixel(1, 1)
+                .0;
+            let _ = std::fs::remove_file(&path);
+            assert_eq!(px[3], 128, "backend {backend}: alpha {px:?}");
+            assert!(
+                px[0] >= 253 && px[1] == 0 && px[2] == 0,
+                "backend {backend}: {px:?}"
+            );
+        }
+    }
 
     /// vello's OWN documented example, verbatim in shape, to separate "vello is
     /// misused here" from "vello does not work in this build".

@@ -81,6 +81,7 @@ While running, Dew manages the widget lifecycle, handles window dragging and sna
 | `dew <path>` | Run the applet in the specified directory |
 | `dew check <path>...` | Validate manifests and entry points |
 | `dew snapshot <path> -o out.png` | Render a single frame to PNG headlessly |
+| `dew snapshot <applet-id> -o out.png` | Save the frame a running applet is showing, or render its installed copy if it is not running |
 | `dew test <path>` | Run an applet's interaction tests |
 | `dew compat` | Report which applets are portable across environments |
 | `--stats` | Print a granular breakdown of layout and paint frame time |

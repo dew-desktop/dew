@@ -83,6 +83,18 @@ const LIBRARY_CHANGED_PIPE_NAME: &str = r"\\.\pipe\DewLibraryChanged";
 /// either needing to know which it is.
 const UNLOAD_PIPE_NAME: &str = r"\\.\pipe\DewUnload";
 
+/// A fifth pipe, duplex like `QUERY_PIPE_NAME` because it is a question with
+/// an answer: `dew snapshot <id>` asks the running applet with that manifest
+/// id to write the frame it is showing to a PNG, and is told whether it did.
+/// Its own pipe rather than a second kind of query, so `query_running`'s
+/// one-byte answer stays the whole of that protocol.
+const SNAPSHOT_PIPE_NAME: &str = r"\\.\pipe\DewSnapshot";
+
+/// How long `dew snapshot <id>` waits for the applet's own thread to write
+/// its frame. It looks once per frame, so anything near this is a hung
+/// applet rather than a busy one.
+const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Whether this invocation is the one Dew process, or a request handed to it.
 pub enum Role {
     /// The first `dew run` reaching this machine. Holds the mutex alive for
@@ -377,6 +389,202 @@ fn spawn_query_server() {
     });
 }
 
+/// One request for a running applet's current frame.
+pub(crate) struct SnapshotRequest {
+    /// Absolute, because it was resolved in the asking process's own working
+    /// directory, not this one's.
+    pub path: PathBuf,
+    /// The frame's size on success, or why it could not be written.
+    pub reply: mpsc::Sender<Result<(u32, u32), String>>,
+}
+
+/// Where to send a snapshot request for each running applet, by manifest id.
+/// Each entry is added by that applet's own thread when its loop starts and
+/// removed when the loop ends; see [`SnapshotInbox`]. The `u64` tells two
+/// instances of one id apart, so the first ending does not remove the second.
+static SNAPSHOT_TARGETS: Mutex<Vec<(String, u64, mpsc::Sender<SnapshotRequest>)>> =
+    Mutex::new(Vec::new());
+
+/// The receiving end of one running applet's snapshot requests.
+///
+/// HELD BY THE APPLET'S OWN THREAD, which is the only one that may touch its
+/// canvas, and checked once a frame with a receive that never waits. Dropping
+/// it unregisters the applet, so a request can never reach an applet whose
+/// loop has already ended.
+pub(crate) struct SnapshotInbox {
+    token: u64,
+    rx: mpsc::Receiver<SnapshotRequest>,
+}
+
+impl SnapshotInbox {
+    /// Register the applet with manifest id `id` for snapshot requests.
+    pub(crate) fn open(id: &str) -> SnapshotInbox {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let token = NEXT.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel();
+        if let Ok(mut targets) = SNAPSHOT_TARGETS.lock() {
+            targets.push((id.to_string(), token, tx));
+        }
+        SnapshotInbox { token, rx }
+    }
+
+    /// The next waiting request, if there is one. Never blocks.
+    pub(crate) fn take(&self) -> Option<SnapshotRequest> {
+        self.rx.try_recv().ok()
+    }
+}
+
+impl Drop for SnapshotInbox {
+    fn drop(&mut self) {
+        if let Ok(mut targets) = SNAPSHOT_TARGETS.lock() {
+            targets.retain(|(_, token, _)| *token != self.token);
+        }
+    }
+}
+
+/// What asking a running Dew for an applet's frame came to.
+pub enum LiveSnapshot {
+    /// Written to the path asked for, at this size.
+    Written(u32, u32),
+    /// Nothing named that is running, or no Dew is: render it fresh instead.
+    NotRunning,
+}
+
+/// Ask the running coordinator for the frame the applet `id` is showing,
+/// written to `path`.
+pub fn snapshot_running(id: &str, path: &Path) -> Result<LiveSnapshot, String> {
+    let pipe_name = wide(SNAPSHOT_PIPE_NAME);
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(pipe_name.as_ptr()),
+            FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0,
+            FILE_SHARE_MODE::default(),
+            None,
+            OPEN_EXISTING,
+            FILE_ATTRIBUTE_NORMAL,
+            None,
+        )
+    };
+    let Ok(handle) = handle else {
+        return Ok(LiveSnapshot::NotRunning);
+    };
+
+    // ONE MESSAGE, THE ID AND THE PATH ON TWO LINES. A manifest id has no
+    // newline in it, so the first one ends it.
+    let request = format!("{id}\n{}", path.display());
+    let wrote = unsafe { WriteFile(handle, Some(request.as_bytes()), None, None) };
+    if wrote.is_err() {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Ok(LiveSnapshot::NotRunning);
+    }
+
+    let mut buf = [0u8; 1024];
+    let mut read = 0u32;
+    let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    got.map_err(|e| format!("the running Dew did not answer for '{id}': {e}"))?;
+    let answer = String::from_utf8_lossy(&buf[..read as usize]).into_owned();
+    parse_snapshot_answer(&answer)
+}
+
+/// The client's reading of the server's one-line answer.
+fn parse_snapshot_answer(answer: &str) -> Result<LiveSnapshot, String> {
+    if answer == "missing" {
+        return Ok(LiveSnapshot::NotRunning);
+    }
+    if let Some(size) = answer.strip_prefix("ok ") {
+        let parsed = size
+            .split_once('x')
+            .and_then(|(w, h)| Some((w.parse().ok()?, h.parse().ok()?)));
+        if let Some((w, h)) = parsed {
+            return Ok(LiveSnapshot::Written(w, h));
+        }
+    }
+    Err(answer.strip_prefix("error ").unwrap_or(answer).to_string())
+}
+
+/// The server's answer to one request, read from `SNAPSHOT_TARGETS`.
+fn answer_snapshot(request: &str) -> String {
+    let Some((id, path)) = request.split_once('\n') else {
+        return "error a snapshot request names an applet id and a path".to_string();
+    };
+    let target = SNAPSHOT_TARGETS.lock().ok().and_then(|targets| {
+        targets
+            .iter()
+            .find(|(running, _, _)| running == id)
+            .map(|(_, _, tx)| tx.clone())
+    });
+    let Some(tx) = target else {
+        return "missing".to_string();
+    };
+    let (reply, answer) = mpsc::channel();
+    let sent = tx.send(SnapshotRequest {
+        path: PathBuf::from(path),
+        reply,
+    });
+    if sent.is_err() {
+        return "missing".to_string();
+    }
+    match answer.recv_timeout(SNAPSHOT_TIMEOUT) {
+        Ok(Ok((w, h))) => format!("ok {w}x{h}"),
+        Ok(Err(e)) => format!("error {e}"),
+        Err(_) => format!(
+            "error '{id}' did not write its frame within {}s",
+            SNAPSHOT_TIMEOUT.as_secs()
+        ),
+    }
+}
+
+/// Answer `snapshot_running` calls forever. One at a time, which is plenty
+/// for a command a person types, and each waits at most `SNAPSHOT_TIMEOUT`
+/// on the applet it asked.
+///
+/// `pub(crate)` FOR THE SAME REASON AS `spawn_library_changed_server`: a
+/// test can start this one function without the whole coordinator.
+pub(crate) fn spawn_snapshot_server() {
+    thread::spawn(move || loop {
+        let name = wide(SNAPSHOT_PIPE_NAME);
+        let handle = unsafe {
+            CreateNamedPipeW(
+                PCWSTR(name.as_ptr()),
+                PIPE_ACCESS_DUPLEX,
+                PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT,
+                PIPE_UNLIMITED_INSTANCES,
+                1024,
+                4096,
+                0,
+                None,
+            )
+        };
+        if handle.is_invalid() {
+            thread::sleep(Duration::from_secs(1));
+            continue;
+        }
+
+        let connected = unsafe { ConnectNamedPipe(handle, None) };
+        let ok = connected.is_ok() || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+        if ok {
+            let mut buf = [0u8; 4096];
+            let mut read = 0u32;
+            let got = unsafe { ReadFile(handle, Some(&mut buf), Some(&mut read), None) };
+            if got.is_ok() && read > 0 {
+                let request = String::from_utf8_lossy(&buf[..read as usize]).into_owned();
+                let answer = answer_snapshot(&request);
+                let _ = unsafe { WriteFile(handle, Some(answer.as_bytes()), None, None) };
+            }
+        }
+
+        unsafe {
+            let _ = DisconnectNamedPipe(handle);
+            let _ = CloseHandle(handle);
+        }
+    });
+}
+
 /// Answer `notify_library_changed` pings forever. INBOUND ONLY, like
 /// `spawn_pipe_server` -- a ping is not a question, and nothing here ever
 /// writes back. What arrives is never inspected (see
@@ -582,6 +790,8 @@ pub fn run(
 
     spawn_query_server();
 
+    spawn_snapshot_server();
+
     spawn_library_changed_server();
 
     spawn_unload_server();
@@ -721,4 +931,70 @@ pub fn run(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_snapshot_answer_reads_as_written_missing_or_an_error() {
+        assert!(matches!(
+            parse_snapshot_answer("ok 300x719"),
+            Ok(LiveSnapshot::Written(300, 719))
+        ));
+        assert!(matches!(
+            parse_snapshot_answer("missing"),
+            Ok(LiveSnapshot::NotRunning)
+        ));
+        assert_eq!(
+            parse_snapshot_answer("error could not write x.png")
+                .err()
+                .as_deref(),
+            Some("could not write x.png")
+        );
+    }
+
+    /// THE WHOLE TRIP, through the real pipe: a client names an id and a
+    /// path, the server finds that id's inbox, and the thread holding the
+    /// inbox writes the file and answers. A stand-in thread plays the applet,
+    /// because the applet's own loop needs a window.
+    ///
+    /// The server is started directly, not through `run`, for the reason
+    /// `dew_library_changed_pipe_bumps_the_generation_from_any_process`
+    /// gives: `run` takes the single-instance mutex.
+    #[test]
+    fn a_running_applet_writes_its_frame_when_asked_by_id() {
+        spawn_snapshot_server();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let id = format!("snapshot-test-{}", std::process::id());
+        let inbox = SnapshotInbox::open(&id);
+        let applet = thread::spawn(move || {
+            for _ in 0..500 {
+                if let Some(request) = inbox.take() {
+                    let written = std::fs::write(&request.path, b"frame")
+                        .map(|()| (3, 4))
+                        .map_err(|e| e.to_string());
+                    let _ = request.reply.send(written);
+                    return;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+        });
+
+        let path = std::env::temp_dir().join(format!("{id}.png"));
+        let answer = snapshot_running(&id, &path).expect("an answer");
+        applet.join().expect("the stand-in applet");
+        assert!(matches!(answer, LiveSnapshot::Written(3, 4)));
+        assert_eq!(std::fs::read(&path).expect("the file"), b"frame");
+        let _ = std::fs::remove_file(&path);
+
+        // ITS INBOX IS GONE WITH ITS THREAD, so the same id now reads as not
+        // running and the caller renders it fresh instead.
+        assert!(matches!(
+            snapshot_running(&id, &path),
+            Ok(LiveSnapshot::NotRunning)
+        ));
+    }
 }
