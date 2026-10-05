@@ -113,6 +113,41 @@ cargo run -- test examples/widgets/grid-layout-demo
 rojo serve examples/widgets/grid-layout-demo
 ```
 
+## `system/`
+
+Applets that read the machine through `desktop.System`, granted by the `system`
+permission: CPU load per core, memory, drives, network throughput, battery,
+uptime, and the busiest processes by name. One host thread samples once a
+second for every applet holding the permission, keeps a minute of history, and
+`System.OnSample` calls back on the applet's own frame when a new sample lands,
+so neither applet redraws more than once a second.
+
+`monitor` is a dark panel laid out the way menu-bar monitors like iStat Menus
+and Stats lay out their dropdowns: one solid surface in the dashboard's own
+colour tokens, sections divided by hairlines, grey labels beside white values.
+The Dew gradient is only the accent on the data: the CPU and per-core bars,
+the memory and drive meters, and the two network series (download is the sky
+end, upload the periwinkle one). Memory is two segments sized by
+`UIFlexItem.GrowRatio`, the graphs are lists with `HorizontalFlex = Fill`, and
+the top five processes have a CPU / MEM switch kept in `desktop.Storage`. Its
+tree is the same shape on every machine: sixteen core bars and four drive rows
+are built once and the unused ones are hidden, and past sixteen threads each
+bar averages a run of neighbours.
+
+`vitals` is the clock's size, docks 8px under it by default, and uses the same
+dark surface and accent. A click switches its three columns between meters and
+a twenty-second graph each.
+
+```sh
+cargo run -- examples/system/monitor
+cargo run -- examples/system/vitals
+cargo run -- test examples/system/monitor
+cargo run -- snapshot examples/system/monitor --after 6 -o monitor.png
+```
+
+`--after` runs an applet's frames for that many seconds before the snapshot is
+drawn, so the graphs have something in them.
+
 ## `aether/`
 
 Applets built with [Aether](https://github.com/project-aether-ui/aether), a UI
@@ -210,6 +245,8 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 | `host/widget-behaviors/keep-on-screen` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `host/widget-behaviors/save-position` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
 | `host/widget-behaviors/snap-to-edges` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part) | 4 |
+| `system/monitor` | Dew-only | `desktop.Widget` (mount), `desktop.Storage`, `desktop.System`, permission `system` | `TextButton.AutoButtonColor`, `TextButton.FontFace` (in part), `TextLabel.FontFace` (in part), `TextLabel.TextTruncate` (in part), `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 737 |
+| `system/vitals` | Dew-only | `desktop.Widget` (mount), `desktop.Storage`, `desktop.System`, permission `system` | `TextButton.AutoButtonColor`, `TextLabel.FontFace` (in part), `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 148 |
 | `widgets/flex-item-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 68 |
 | `widgets/flex-list-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part) | 57 |
 | `widgets/grid-layout-demo` | Roblox-ahead | `desktop.Widget` (mount) | `UICorner.CornerRadius` (in part), `UIPadding.PaddingBottom` (in part), `UIPadding.PaddingLeft` (in part), `UIPadding.PaddingRight` (in part), `UIPadding.PaddingTop` (in part), `UIStroke.Thickness` (in part), `UIStroke.Transparency` (in part) | 80 |
@@ -218,8 +255,10 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 Read in part, in the renderer's own words:
 
 - `ImageLabel.ScaleType`: Stretch, Fit and Crop are drawn; Slice and Tile fall back to Stretch
+- `TextButton.FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
 - `TextLabel.Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
 - `TextLabel.FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
+- `TextLabel.TextTruncate`: AtEnd is drawn with an ellipsis; SplitWord is drawn as None
 - `UICorner.CornerRadius`: the offset rounds the corners; the scale is dropped
 - `UIPadding.PaddingBottom`: the offset insets the content; the scale is discarded
 - `UIPadding.PaddingLeft`: the offset insets the content; the scale is discarded
