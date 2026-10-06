@@ -14,38 +14,54 @@
 
 <br />
 
-![Dew Applets Quick Panel and running Desktop Clock widget](assets/showcase.png)
+![Dew Applets Quick Panel, running Desktop Clock widget, and System Monitor HUD](assets/showcase.png)
 
 <br />
-<sub>Dew's quick panel managing installed applets alongside a running desktop clock widget</sub>
+<sub>Dew's quick panel managing installed applets alongside running desktop widgets</sub>
 
 </div>
 
 ---
 
-Dew runs desktop utilities called **applets**: desktop clocks, status HUDs, quick-launch panels, or scratchpads. Each one is authored in Luau. Dew executes it in an isolated guest sandbox and renders it using an independent, native Rust rasteriser - no browser engine, Electron bundle, or external engine required.
+Dew runs sandboxed desktop utilities called **applets**: clocks, hardware monitors, and HUDs. Each applet is authored in Luau, runs in an isolated guest environment, and renders using a native Rust rasteriser - no browser engine, Electron, or external runtimes required.
 
-Applets construct their interface using the declarative UI object model familiar to Luau developers (`Frame`, `TextLabel`, `TextButton`, `UIListLayout`, `UDim2`, `Color3`). Dew implements this object model from scratch in Rust, allowing components to run seamlessly across desktop environments and engine viewports.
+Applets construct their interface using declarative UI datamodel objects that are familiar to Luau developers (`Frame`, `TextLabel`, `TextButton`, `UIListLayout`, `UDim2`, `Color3`, etc.), implemented standalone, from scratch, in Rust, to run natively on desktop.
 
-## Featured Applet: Desktop Clock
+## Featured Applets
 
-The repository includes [`examples/clock`](examples/clock), a clean, floating desktop clock widget. It demonstrates host window management, reactive updates, and local state persistence without requiring any external packages.
+### System Monitor
+
+[`examples/system/monitor/monitor.luau`](examples/system/monitor/monitor.luau) is a real-time hardware telemetry HUD showcasing dynamic visualizations and host telemetry gated by `desktop.System`.
+
+<div align="center">
+
+![System Monitor HUD](assets/system-monitor.png)
+
+</div>
+
+```toml
+id = "monitor"
+name = "System Monitor"
+description = "CPU, cores, memory, network, storage and top processes, live"
+
+# Capabilities granted to the guest VM
+permissions = ["widget", "storage", "system"]
+```
+
+- **Live hardware telemetry:** Monitors CPU utilization, memory pressure, network throughput, disk space, and top active processes.
+- **Dynamic visualizations:** 60-second rolling CPU graph, 16 individual core bars, dual-channel network waveform, and memory consumption meters.
+- **Window management:** Smooth dragging with display edge snapping (`snapToEdges = true`) and position persistence across restarts (`savePosition = true`).
+- **Capability-governed:** Access to telemetry is strictly gated by the host under the `system` permission.
+
+### Desktop Clock
+
+[`examples/clock/clock.luau`](examples/clock/clock.luau) is a minimalist, floating desktop clock widget demonstrating reactive UI updates and state persistence without external dependencies.
 
 <div align="center">
 
 ![Desktop Clock HUD](assets/clock.png)
 
 </div>
-
-- **Branded vertical gradient:** Rounded widget styled with Dew's water-droplet gradient colors (`UIGradient`, `UICorner`, `UIStroke`) floating cleanly on the desktop.
-- **Draggable & sticky:** Click and drag the clock to move it anywhere on screen. It automatically snaps to display edges (`snapToEdges = true`) and remembers its saved position across restarts (`savePosition = true`).
-- **Interactive toggle:** Click anywhere on the clock to toggle between 12-hour and 24-hour formats. Preference is preserved across launches via `desktop.Storage`.
-- **Automatic timezone detection:** Automatically resolves local time and timezone offsets via `desktop.Time`.
-- **Zero dependencies:** Built directly on Dew's native DataModel primitives with zero external packages.
-
-### Manifest (`dew.toml`)
-
-The applet declares its permissions upfront. Dew inspects and validates the manifest before executing any guest code:
 
 ```toml
 id = "clock"
@@ -56,36 +72,42 @@ description = "A minimalist, draggable desktop clock with live seconds and forma
 permissions = ["widget", "storage"]
 ```
 
-The full implementation is authored in pure Luau under [`examples/clock/clock.luau`](examples/clock/clock.luau).
+- **Vertical gradient styling:** Rounded widget with vertical gradient fill and outline styling (`UIGradient`, `UICorner`, `UIStroke`).
+- **Window management:** Smooth dragging with display edge snapping (`snapToEdges = true`) and position persistence across restarts (`savePosition = true`).
+- **Interactive toggle:** Click anywhere on the clock to toggle between 12-hour and 24-hour formats, saved across launches via `desktop.Storage`.
+- **Automatic timezone detection:** Resolves local time and timezone offsets via `desktop.Time`.
 
 ## Quick start
 
 **Requirements:** a Rust toolchain (`rust-toolchain.toml`) and [Rokit](https://github.com/rojo-rbx/rokit).
 
 ```sh
+# Clone the repository
 git clone https://github.com/dew-desktop/dew
 cd dew
 
-rokit install            # pinned developer tools (lune, etc.)
+# Install pinned developer tools (lune, etc.)
+rokit install
 
-# Run the desktop clock applet
-cargo run -p dew-host -- examples/clock
+# Run the applets
+cargo run examples/system/monitor
+cargo run examples/clock
 ```
 
 While running, Dew manages the widget lifecycle, handles window dragging and snapping, and sits quietly in the Windows system tray.
 
 ### CLI Reference
 
-| Command | What it does |
-| :--- | :--- |
-| `dew <path>` | Run the applet in the specified directory |
-| `dew check <path>...` | Validate manifests and entry points |
-| `dew snapshot <path> -o out.png` | Render a single frame to PNG headlessly |
+| Command                               | What it does                                                                                  |
+| :--------------------------------------| :----------------------------------------------------------------------------------------------|
+| `dew <path>`                          | Run the applet in the specified directory                                                     |
+| `dew check <path>...`                 | Validate manifests and entry points                                                           |
+| `dew snapshot <path> -o out.png`      | Render a single frame to PNG headlessly                                                       |
 | `dew snapshot <applet-id> -o out.png` | Save the frame a running applet is showing, or render its installed copy if it is not running |
-| `dew test <path>` | Run an applet's interaction tests |
-| `dew compat` | Report which applets are portable across environments |
-| `--stats` | Print a granular breakdown of layout and paint frame time |
-| `--bench` | Force repaints every frame to measure continuous drag workload |
+| `dew test <path>`                     | Run an applet's interaction tests                                                             |
+| `dew compat`                          | Report which applets are portable across environments                                         |
+| `--stats`                             | Print a granular breakdown of layout and paint frame time                                     |
+| `--bench`                             | Force repaints every frame to measure continuous drag workload                                |
 
 ## Architecture
 
@@ -115,7 +137,7 @@ flowchart LR
 | [`crates/raster`](crates/raster) | Translates display lists to pixels. CPU rasterization by default, GPU acceleration via feature flag |
 | [`crates/window`](crates/window) | Native window management, swapchains, system tray, and input events on Windows |
 
-## Highlights
+### Highlights
 
 - **Deny-by-default sandbox.** Every applet runs in its own isolated Luau VM with no raw `io`, `os`, or FFI access. An applet can only reach capabilities explicitly granted in its manifest (e.g. storage, notifications, clipboard). The host injects each capability as a function, keeping security boundaries strictly auditable and testable in Rust.
 - **Engine-independent DataModel in Rust.** The class hierarchy, properties, and defaults are driven by an engine reflection database, allowing the host to statically reject properties that do not exist on a class before values reach the layout pipeline. It covers 139 of 139 in-scope GUI properties.
