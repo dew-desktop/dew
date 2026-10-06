@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1340 400" width="100%" height="100%">
+  <defs>
+    <!-- Soft Drop Shadow on the Enclosing Boxes for physical elevation on GitHub -->
+    <filter id="box-shadow" x="-8%" y="-8%" width="116%" height="120%" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+
+    <!-- Arrow Marker: Crisp, wide arrowhead -->
+    <marker id="arrow" viewBox="0 0 10 10" refX="6.5" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M 1 1 L 8.5 5 L 1 9 z" fill="#cbd5e1"/>
+    </marker>
+  </defs>
+
+  <style><![CDATA[
+    .mono-title { font-family: 'JetBrains Mono', Consolas, 'SF Mono', monospace; font-size: 14px; font-weight: 700; fill: #f8fafc; letter-spacing: 0.3px; }
+    .mono-pill { font-family: 'JetBrains Mono', Consolas, 'SF Mono', monospace; font-size: 13px; font-weight: 700; fill: #ffffff; letter-spacing: 0.3px; }
+    .mono-sub { font-family: 'JetBrains Mono', Consolas, 'SF Mono', monospace; font-size: 11.5px; font-weight: 500; fill: #a3a3a3; }
+    .box-heading { font-family: 'Segoe UI', Arial, sans-serif; font-size: 15px; font-weight: 700; fill: #ffffff; letter-spacing: 0.2px; }
+  ]]></style>
+
+  <!-- Option A: Canvas is completely transparent, blending seamlessly into GitHub's page (#0d1117) -->
+
+  <!-- ==================== 1. HOST: DEW-HOST (LEFT) ==================== -->
+  <!-- Outer Outline: Rust Orange (#e45b2b). Container fill: #201714 -->
+  <g transform="translate(45, 45)" filter="url(#box-shadow)">
+    <rect width="260" height="295" rx="8" fill="#201714" stroke="#e45b2b" stroke-width="2"/>
+    <text x="130" y="-12" text-anchor="middle" class="mono-title">Host: dew-host (Rust)</text>
+
+    <!-- Top Node: Capability Injection -->
+    <g transform="translate(20, 19)">
+      <rect width="220" height="70" rx="6" fill="#35201a" stroke="#190f0b" stroke-width="1.8"/>
+      <text x="110" y="32" text-anchor="middle" class="box-heading">Capability</text>
+      <text x="110" y="52" text-anchor="middle" class="box-heading">Injection</text>
+    </g>
+
+    <!-- Middle Node: DataModel -->
+    <g transform="translate(20, 112)">
+      <rect width="220" height="70" rx="6" fill="#35201a" stroke="#190f0b" stroke-width="1.8"/>
+      <text x="110" y="32" text-anchor="middle" class="box-heading">DataModel</text>
+      <text x="110" y="52" text-anchor="middle" class="mono-sub">(Reflection DB)</text>
+    </g>
+
+    <!-- Downward arrow: DataModel -> Layout & Text Shaping -->
+    <path d="M 130 182 L 130 203" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <!-- Bottom Node: Layout & Text Shaping -->
+    <g transform="translate(20, 205)">
+      <rect width="220" height="70" rx="6" fill="#35201a" stroke="#190f0b" stroke-width="1.8"/>
+      <text x="110" y="32" text-anchor="middle" class="box-heading">Layout &amp;</text>
+      <text x="110" y="52" text-anchor="middle" class="box-heading">Text Shaping</text>
+    </g>
+  </g>
+
+  <!-- ==================== 2. GUEST (LUAU) (CENTER) ==================== -->
+  <!-- Outer Outline: Dew Sky (#56a4f0). Container fill: #141a20 -->
+  <g transform="translate(510, 45)" filter="url(#box-shadow)">
+    <rect width="250" height="295" rx="8" fill="#141a20" stroke="#56a4f0" stroke-width="2"/>
+    <text x="125" y="-12" text-anchor="middle" class="mono-title">Guest (Luau, Sandboxed)</text>
+
+    <!-- Inner Node: clock.luau -->
+    <g transform="translate(25, 19)">
+      <rect width="200" height="256" rx="6" fill="#192837" stroke="#0b121a" stroke-width="1.8"/>
+      <text x="100" y="105" text-anchor="middle" class="box-heading">clock.luau</text>
+      <text x="100" y="130" text-anchor="middle" class="mono-sub">declarative UI</text>
+      <text x="100" y="155" text-anchor="middle" class="mono-sub">isolated guest VM</text>
+    </g>
+  </g>
+
+  <!-- ==================== 3. PLATFORM CRATES (RIGHT) ==================== -->
+  <!-- Outer Outline: Dew Lilac (#9686ec). Container fill: #191820 -->
+  <g transform="translate(890, 45)" filter="url(#box-shadow)">
+    <rect width="385" height="295" rx="8" fill="#191820" stroke="#9686ec" stroke-width="2"/>
+    <text x="192" y="-12" text-anchor="middle" class="mono-title">Platform Crates</text>
+
+    <!-- Inner Node: dew_raster -->
+    <g transform="translate(25, 110)">
+      <rect width="150" height="140" rx="6" fill="#262437" stroke="#11101a" stroke-width="1.8"/>
+      <text x="75" y="62" text-anchor="middle" class="box-heading">dew_raster</text>
+      <text x="75" y="86" text-anchor="middle" class="mono-sub">(vello_cpu)</text>
+    </g>
+
+    <!-- Inner arrow: dew_raster -> dew_window -->
+    <path d="M 175 180 L 203 180" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+    <!-- Inner Node: dew_window -->
+    <g transform="translate(205, 110)">
+      <rect width="155" height="140" rx="6" fill="#262437" stroke="#11101a" stroke-width="1.8"/>
+      <text x="77" y="62" text-anchor="middle" class="box-heading">dew_window</text>
+      <text x="77" y="86" text-anchor="middle" class="mono-sub">(Win32)</text>
+    </g>
+  </g>
+
+  <!-- ==================== CONNECTORS & PILL LABELS ==================== -->
+
+  <!-- Flow 1: Capability Injection (right edge x=285, y=100) -> clock.luau (left edge x=535, y=100) [grants] -->
+  <g>
+    <path d="M 285 100 L 533 100" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <rect x="372" y="86" width="75" height="28" rx="4" fill="#0d1117" stroke="#30363d" stroke-width="1.4"/>
+    <text x="409" y="105" text-anchor="middle" class="mono-pill">grants</text>
+  </g>
+
+  <!-- Flow 2: clock.luau (left edge x=535, y=192) -> DataModel (right edge x=285, y=192) [DOM mutations] -->
+  <g>
+    <path d="M 535 192 L 287 192" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <rect x="346" y="178" width="128" height="28" rx="4" fill="#0d1117" stroke="#30363d" stroke-width="1.4"/>
+    <text x="410" y="197" text-anchor="middle" class="mono-pill">DOM mutations</text>
+  </g>
+
+  <!-- Flow 3: Layout & Text Shaping (bottom edge x=175, y=320) -> dew_raster (left edge x=915, y=200) [render tree] -->
+  <g>
+    <path d="M 175 320 L 175 365 L 850 365 L 850 200 L 913 200" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <rect x="532" y="351" width="112" height="28" rx="4" fill="#0d1117" stroke="#30363d" stroke-width="1.4"/>
+    <text x="588" y="370" text-anchor="middle" class="mono-pill">render tree</text>
+  </g>
+
+  <!-- Flow 4: dew_window (top edge x=1172, y=155) -> clock.luau (right edge x=735, y=100) [input events] -->
+  <g>
+    <path d="M 1172 155 L 1172 100 L 737 100" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <rect x="910" y="86" width="120" height="28" rx="4" fill="#0d1117" stroke="#30363d" stroke-width="1.4"/>
+    <text x="970" y="105" text-anchor="middle" class="mono-pill">input events</text>
+  </g>
+
+</svg>
