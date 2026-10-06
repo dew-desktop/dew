@@ -111,24 +111,10 @@ While running, Dew manages the widget lifecycle, handles window dragging and sna
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    subgraph Guest["Applet (Luau, sandboxed)"]
-        A["clock.luau<br/>(declarative UI)"]
-    end
-    subgraph Host["dew-host (Rust)"]
-        M["Manifest and<br/>capability injection"]
-        D["DataModel<br/>(reflection DB)"]
-        L["Layout and text shaping"]
-    end
-    R["dew_raster<br/>vello_cpu / vello_hybrid"]
-    W["dew_window<br/>Win32 surface, tray, input"]
+<p align="center">
+  <img src="assets/architecture.png" alt="Dew Architecture" width="100%">
+</p>
 
-    A -- "Instance.new / property writes" --> D
-    M -- "granted capabilities only" --> A
-    D --> L --> R --> W
-    W -- "pointer / keyboard events" --> A
-```
 
 | Crate | Responsibility |
 | :--- | :--- |
