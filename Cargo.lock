@@ -713,7 +713,7 @@ dependencies = [
 [[package]]
 name = "glifo"
 version = "0.4.0"
-source = "git+https://github.com/es9-dev/vello?branch=perf%2Fglyph-atlas-dirty-rect#9dc68e1630d2c28eee7324c183f4ee3335de5ecf"
+source = "git+https://github.com/es9-dev/vello?branch=perf%2Fglyph-atlas-dirty-rect#20641c332d1ce83f0f04d7d3ac248b3189318814"
 dependencies = [
  "bytemuck",
  "foldhash 0.2.0",
@@ -2450,7 +2450,7 @@ dependencies = [
 [[package]]
 name = "vello_common"
 version = "0.3.0"
-source = "git+https://github.com/es9-dev/vello?branch=perf%2Fglyph-atlas-dirty-rect#9dc68e1630d2c28eee7324c183f4ee3335de5ecf"
+source = "git+https://github.com/es9-dev/vello?branch=perf%2Fglyph-atlas-dirty-rect#20641c332d1ce83f0f04d7d3ac248b3189318814"
 dependencies = [
  "bytemuck",
  "fearless_simd 0.7.0",
@@ -2465,7 +2465,7 @@ dependencies = [
 [[package]]
 name = "vello_cpu"
 version = "0.3.0"
-source = "git+https://github.com/es9-dev/vello?branch=perf%2Fglyph-atlas-dirty-rect#9dc68e1630d2c28eee7324c183f4ee3335de5ecf"
+source = "git+https://github.com/es9-dev/vello?branch=perf%2Fglyph-atlas-dirty-rect#20641c332d1ce83f0f04d7d3ac248b3189318814"
 dependencies = [
  "bytemuck",
  "glifo 0.4.0",
