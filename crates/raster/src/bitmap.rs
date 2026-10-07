@@ -85,7 +85,15 @@ impl BitmapStore {
         }
 
         let (w16, h16) = (width as u16, height as u16);
-        let pixmap = VPixmap::from_parts(vello, w16, h16, vello_cpu::PixelMetadata::new(vello_cpu::peniko::ImageAlphaType::AlphaPremultiplied, may_have_transparency));
+        let pixmap = VPixmap::from_parts(
+            vello,
+            w16,
+            h16,
+            vello_cpu::PixelMetadata::new(
+                vello_cpu::peniko::ImageAlphaType::AlphaPremultiplied,
+                may_have_transparency,
+            ),
+        );
 
         self.next += 1;
         let id = self.next;

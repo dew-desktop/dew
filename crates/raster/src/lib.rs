@@ -58,8 +58,8 @@ use vello_cpu::peniko::{
     Gradient as VGradient, ImageQuality, ImageSampler, Mix as VMix,
 };
 use vello_cpu::{
-    Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap,
-    RasterizerSettings, RenderContext, RenderMode, RenderSettings, Resources,
+    Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap, RasterizerSettings,
+    RenderContext, RenderMode, RenderSettings, Resources,
 };
 // `Tint` and `TintMode` ONLY. See `Cargo.toml`: vello_cpu takes them in
 // `set_tint`'s signature and does not re-export them, so they come from its own
@@ -241,7 +241,8 @@ pub extern "C" fn ar_fill_text(
     let count = glyphs.len() as u32;
     v.ctx
         .set_paint(AlphaColor::<Srgb>::from_rgba8(r, g, b, alpha));
-    let _ = v.ctx
+    let _ = v
+        .ctx
         .glyph_run(&mut v.resources, &data)
         .font_size(size)
         .hint(true)
@@ -2358,7 +2359,9 @@ mod tests {
             &mut resources,
             RasterizerSettings {
                 render_mode: RenderMode::OptimizeSpeed,
-                target_init: vello_cpu::TargetInit::Clear(vello_cpu::color::AlphaColor::TRANSPARENT),
+                target_init: vello_cpu::TargetInit::Clear(
+                    vello_cpu::color::AlphaColor::TRANSPARENT,
+                ),
                 ..Default::default()
             },
         );
