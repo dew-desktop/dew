@@ -114,10 +114,10 @@ While running, Dew manages the widget lifecycle, handles window dragging and sna
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/architecture-light.png">
-    <img src="assets/architecture-dark.png" alt="Dew Architecture" width="100%">
+    <img src="assets/architecture-light.png" alt="Dew Architecture" width="100%">
   </picture>
 </p>
+
 
 
 | Crate | Responsibility |
