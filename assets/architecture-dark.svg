@@ -106,9 +106,9 @@
     <text x="410" y="197" text-anchor="middle" class="mono-pill">DOM mutations</text>
   </g>
 
-  <!-- Flow 3: Layout & Text Shaping (bottom edge x=175, y=320) -> dew_raster (left edge x=915, y=200) [render tree] -->
+  <!-- Flow 3: Layout & Text Shaping (bottom edge x=175, y=320) -> dew_raster (left edge x=915, y=225) [render tree] -->
   <g>
-    <path d="M 175 320 L 175 365 L 850 365 L 850 200 L 913 200" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
+    <path d="M 175 320 L 175 365 L 850 365 L 850 225 L 913 225" fill="none" stroke="#cbd5e1" stroke-width="1.6" marker-end="url(#arrow)"/>
     <rect x="532" y="351" width="112" height="28" rx="4" fill="#0d1117" stroke="#30363d" stroke-width="1.4"/>
     <text x="588" y="370" text-anchor="middle" class="mono-pill">render tree</text>
   </g>
