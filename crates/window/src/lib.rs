@@ -26,8 +26,8 @@ mod gpu;
 mod win32;
 
 pub use win32::{
-    clipboard_text, screen_size, set_clipboard_text, set_live_resize_hook, shift_held, Pump,
-    SurfaceId, Window,
+    clipboard_text, screen_size, set_clipboard_text, set_live_resize_hook, shift_held,
+    DisplayTopology, Edge, MonitorInfo, Pump, Rect, SurfaceId, Window,
 };
 
 /// A window's tier in the desktop's z-order.
@@ -164,5 +164,7 @@ pub enum Event {
     },
     /// The surface must be fully repainted; nothing can be patched.
     Exposed,
+    /// Display configuration or monitor work area changed (WM_DISPLAYCHANGE / WM_SETTINGCHANGE).
+    DisplayChanged,
     CloseRequested,
 }

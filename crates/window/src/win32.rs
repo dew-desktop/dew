@@ -4,11 +4,14 @@ use crate::gpu::Presenter;
 use crate::{Button, Event, Surface, ZOrder};
 use std::cell::RefCell;
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{
+    BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint, GetDC,
-    ReleaseDC, ScreenToClient, SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO,
-    BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS, HBITMAP, PAINTSTRUCT,
+    BeginPaint, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, EndPaint,
+    EnumDisplayMonitors, GetDC, GetMonitorInfoW, MonitorFromRect, ReleaseDC, ScreenToClient,
+    SelectObject, AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION,
+    DIB_RGB_COLORS, HBITMAP, HDC, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONEAREST, PAINTSTRUCT,
 };
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -353,6 +356,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             // between frames.
             LRESULT(1)
         }
+        WM_DISPLAYCHANGE => {
+            push(hwnd, Event::DisplayChanged);
+            LRESULT(0)
+        }
+        WM_SETTINGCHANGE => {
+            // SPI_SETWORKAREA notifies that taskbar or work area bounds changed.
+            const SPI_SETWORKAREA_VAL: usize = 0x002F;
+            if wp.0 == SPI_SETWORKAREA_VAL {
+                push(hwnd, Event::DisplayChanged);
+            }
+            DefWindowProcW(hwnd, msg, wp, lp)
+        }
         WM_CLOSE => {
             push(hwnd, Event::CloseRequested);
             LRESULT(0)
@@ -369,6 +384,259 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_DESTROY => LRESULT(0),
         _ => DefWindowProcW(hwnd, msg, wp, lp),
     }
+}
+
+/// A 2D integer bounding box in virtual desktop screen space.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+impl Rect {
+    pub fn new(left: i32, top: i32, right: i32, bottom: i32) -> Self {
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    pub fn width(&self) -> i32 {
+        self.right - self.left
+    }
+
+    pub fn height(&self) -> i32 {
+        self.bottom - self.top
+    }
+
+    pub fn contains_point(&self, x: i32, y: i32) -> bool {
+        x >= self.left && x < self.right && y >= self.top && y < self.bottom
+    }
+
+    pub fn intersects(&self, other: &Rect) -> bool {
+        self.left < other.right
+            && self.right > other.left
+            && self.top < other.bottom
+            && self.bottom > other.top
+    }
+}
+
+/// Details of a single physical display monitor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorInfo {
+    /// Device identifier (e.g. `\\.\DISPLAY1`).
+    pub device_name: String,
+    /// Total physical monitor rectangle in virtual screen coordinates.
+    pub monitor_rect: Rect,
+    /// Usable work area rectangle excluding taskbars and docked appbars.
+    pub work_area: Rect,
+    /// Whether this monitor is the primary display (origin at 0, 0).
+    pub is_primary: bool,
+}
+
+/// Snapshot of the multi-monitor desktop arrangement.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DisplayTopology {
+    pub monitors: Vec<MonitorInfo>,
+}
+
+impl DisplayTopology {
+    /// Query the active display topology from Win32.
+    pub fn current() -> Self {
+        let mut monitors = Vec::new();
+
+        unsafe extern "system" fn enum_proc(
+            hmonitor: HMONITOR,
+            _hdc: HDC,
+            _rect: *mut RECT,
+            lparam: LPARAM,
+        ) -> BOOL {
+            let list = &mut *(lparam.0 as *mut Vec<MonitorInfo>);
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+
+            if GetMonitorInfoW(hmonitor, &mut info as *mut _ as *mut _).as_bool() {
+                let r_mon = info.monitorInfo.rcMonitor;
+                let r_work = info.monitorInfo.rcWork;
+                let is_primary = (info.monitorInfo.dwFlags & 1) != 0; // MONITORINFOF_PRIMARY = 1
+
+                let mut name_len = 0;
+                while name_len < info.szDevice.len() && info.szDevice[name_len] != 0 {
+                    name_len += 1;
+                }
+                let device_name = String::from_utf16_lossy(&info.szDevice[..name_len]);
+
+                list.push(MonitorInfo {
+                    device_name,
+                    monitor_rect: Rect::new(r_mon.left, r_mon.top, r_mon.right, r_mon.bottom),
+                    work_area: Rect::new(r_work.left, r_work.top, r_work.right, r_work.bottom),
+                    is_primary,
+                });
+            }
+
+            BOOL(1)
+        }
+
+        unsafe {
+            let _ = EnumDisplayMonitors(
+                None,
+                None,
+                Some(enum_proc),
+                LPARAM(&mut monitors as *mut _ as isize),
+            );
+        }
+
+        if monitors.is_empty() {
+            // Headless or fallback: construct a plausible primary monitor.
+            let (w, h) = screen_size();
+            monitors.push(MonitorInfo {
+                device_name: "PRIMARY".to_string(),
+                monitor_rect: Rect::new(0, 0, w, h),
+                work_area: Rect::new(0, 0, w, h),
+                is_primary: true,
+            });
+        }
+
+        DisplayTopology { monitors }
+    }
+
+    /// The primary monitor, or the first available monitor if none is marked primary.
+    pub fn primary(&self) -> &MonitorInfo {
+        self.monitors
+            .iter()
+            .find(|m| m.is_primary)
+            .unwrap_or(&self.monitors[0])
+    }
+
+    /// Locate the monitor whose work area or physical area has affinity with the window centroid.
+    pub fn find_by_centroid(&self, x: i32, y: i32, w: u32, h: u32) -> &MonitorInfo {
+        let cx = x + (w as i32) / 2;
+        let cy = y + (h as i32) / 2;
+
+        // 1. First test if centroid is inside any monitor's work area.
+        for m in &self.monitors {
+            if m.work_area.contains_point(cx, cy) {
+                return m;
+            }
+        }
+
+        // 2. Test if centroid is inside any monitor's full rectangle (e.g. over a taskbar).
+        for m in &self.monitors {
+            if m.monitor_rect.contains_point(cx, cy) {
+                return m;
+            }
+        }
+
+        // 3. Fallback: query Win32 MonitorFromRect / MonitorFromPoint directly if on live Windows.
+        let rect = RECT {
+            left: x,
+            top: y,
+            right: x + w as i32,
+            bottom: y + h as i32,
+        };
+        unsafe {
+            let hmon = MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFOEXW::default();
+            info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            if GetMonitorInfoW(hmon, &mut info as *mut _ as *mut _).as_bool() {
+                let mon_rect = Rect::new(
+                    info.monitorInfo.rcMonitor.left,
+                    info.monitorInfo.rcMonitor.top,
+                    info.monitorInfo.rcMonitor.right,
+                    info.monitorInfo.rcMonitor.bottom,
+                );
+                if let Some(matched) = self.monitors.iter().find(|m| m.monitor_rect == mon_rect) {
+                    return matched;
+                }
+            }
+        }
+
+        // 4. Fallback to primary.
+        self.primary()
+    }
+
+    /// Check if a window rectangle intersects the usable work area of any connected monitor.
+    pub fn intersects_any_work_area(&self, window_rect: &Rect) -> bool {
+        self.monitors
+            .iter()
+            .any(|m| m.work_area.intersects(window_rect))
+    }
+
+    /// Determine if an edge of `monitor` is an outer screen edge or adjacent to another monitor.
+    ///
+    /// When dragging a window, snapping to an outer edge is helpful, but snapping to
+    /// an inter-monitor seam gets in the way of smooth cross-monitor transitions.
+    pub fn is_outer_edge(&self, monitor: &MonitorInfo, edge: Edge) -> bool {
+        const ADJACENCY_TOLERANCE: i32 = 4;
+        let m_rect = &monitor.monitor_rect;
+
+        for other in &self.monitors {
+            if other.device_name == monitor.device_name
+                && other.monitor_rect == monitor.monitor_rect
+            {
+                continue;
+            }
+            let o_rect = &other.monitor_rect;
+
+            match edge {
+                Edge::Left => {
+                    // Another monitor touches or is immediately adjacent to the left edge:
+                    // o_rect.right is close to m_rect.left, and vertically they overlap.
+                    if (o_rect.right - m_rect.left).abs() <= ADJACENCY_TOLERANCE
+                        && o_rect.top < m_rect.bottom
+                        && o_rect.bottom > m_rect.top
+                    {
+                        return false;
+                    }
+                }
+                Edge::Right => {
+                    // Another monitor touches or is immediately adjacent to the right edge:
+                    // o_rect.left is close to m_rect.right, and vertically they overlap.
+                    if (o_rect.left - m_rect.right).abs() <= ADJACENCY_TOLERANCE
+                        && o_rect.top < m_rect.bottom
+                        && o_rect.bottom > m_rect.top
+                    {
+                        return false;
+                    }
+                }
+                Edge::Top => {
+                    // Another monitor touches or is immediately adjacent to the top edge:
+                    // o_rect.bottom is close to m_rect.top, and horizontally they overlap.
+                    if (o_rect.bottom - m_rect.top).abs() <= ADJACENCY_TOLERANCE
+                        && o_rect.left < m_rect.right
+                        && o_rect.right > m_rect.left
+                    {
+                        return false;
+                    }
+                }
+                Edge::Bottom => {
+                    // Another monitor touches or is immediately adjacent to the bottom edge:
+                    // o_rect.top is close to m_rect.bottom, and horizontally they overlap.
+                    if (o_rect.top - m_rect.bottom).abs() <= ADJACENCY_TOLERANCE
+                        && o_rect.left < m_rect.right
+                        && o_rect.right > m_rect.left
+                    {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+}
+
+/// The four outer boundaries of a display monitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Edge {
+    Left,
+    Right,
+    Top,
+    Bottom,
 }
 
 /// The primary display's size in pixels.
@@ -944,5 +1212,57 @@ mod tests {
                 .any(|(id, e)| *id == second.id() && *e == Event::PointerMove { x: 33.0, y: 44.0 }),
             "the surviving surface stopped receiving input, saw {events:?}"
         );
+    }
+
+    #[test]
+    fn topology_centroid_affinity_and_seam_detection() {
+        // Mock a 2-monitor topology:
+        // Monitor 1 (Secondary, to the left): x: -1920..0, y: 0..1080, work area: -1920..0, 0..1040 (taskbar at bottom)
+        // Monitor 2 (Primary, landscape 4K):   x: 0..3840,     y: 0..2160, work area: 0..3840,     0..2112 (taskbar at bottom)
+        let secondary = MonitorInfo {
+            device_name: r"\\.\DISPLAY1".to_string(),
+            monitor_rect: Rect::new(-1920, 0, 0, 1080),
+            work_area: Rect::new(-1920, 0, 0, 1040),
+            is_primary: false,
+        };
+        let primary = MonitorInfo {
+            device_name: r"\\.\DISPLAY2".to_string(),
+            monitor_rect: Rect::new(0, 0, 3840, 2160),
+            work_area: Rect::new(0, 0, 3840, 2112),
+            is_primary: true,
+        };
+        let topology = DisplayTopology {
+            monitors: vec![secondary.clone(), primary.clone()],
+        };
+
+        // Window placed at negative coordinates on secondary display (-500, 100, 300, 200).
+        // Centroid is (-350, 200), strictly inside secondary.
+        let found = topology.find_by_centroid(-500, 100, 300, 200);
+        assert_eq!(found.device_name, secondary.device_name);
+
+        // Window placed on primary display (100, 100, 300, 200). Centroid (250, 200).
+        let found = topology.find_by_centroid(100, 100, 300, 200);
+        assert_eq!(found.device_name, primary.device_name);
+
+        // Seam detection:
+        // For secondary, Right edge is adjacent to Primary (seam, NOT outer edge).
+        assert!(!topology.is_outer_edge(&secondary, Edge::Right));
+        // Left, Top, Bottom are outer edges.
+        assert!(topology.is_outer_edge(&secondary, Edge::Left));
+        assert!(topology.is_outer_edge(&secondary, Edge::Top));
+        assert!(topology.is_outer_edge(&secondary, Edge::Bottom));
+
+        // For primary, Left edge is adjacent to Secondary (seam, NOT outer edge).
+        assert!(!topology.is_outer_edge(&primary, Edge::Left));
+        // Right, Top, Bottom are outer edges.
+        assert!(topology.is_outer_edge(&primary, Edge::Right));
+        assert!(topology.is_outer_edge(&primary, Edge::Top));
+        assert!(topology.is_outer_edge(&primary, Edge::Bottom));
+
+        // Intersects work area check
+        assert!(topology.intersects_any_work_area(&Rect::new(-100, 10, 50, 60)));
+        assert!(topology.intersects_any_work_area(&Rect::new(10, 10, 50, 60)));
+        // Far away orphaned rect does not intersect
+        assert!(!topology.intersects_any_work_area(&Rect::new(-5000, -5000, -4800, -4800)));
     }
 }
