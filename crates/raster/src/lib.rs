@@ -58,7 +58,7 @@ use vello_cpu::peniko::{
     Gradient as VGradient, ImageQuality, ImageSampler, Mix as VMix,
 };
 use vello_cpu::{
-    CompositeMode, Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap,
+    Image as VImage, ImageSource as VImageSource, Pixmap as VPixmap,
     RasterizerSettings, RenderContext, RenderMode, RenderSettings, Resources,
 };
 // `Tint` and `TintMode` ONLY. See `Cargo.toml`: vello_cpu takes them in
@@ -241,7 +241,7 @@ pub extern "C" fn ar_fill_text(
     let count = glyphs.len() as u32;
     v.ctx
         .set_paint(AlphaColor::<Srgb>::from_rgba8(r, g, b, alpha));
-    v.ctx
+    let _ = v.ctx
         .glyph_run(&mut v.resources, &data)
         .font_size(size)
         .hint(true)
@@ -268,7 +268,7 @@ pub extern "C" fn ar_fill_text(
         // atlas saves on a frame of steady text is not worth a stall each time
         // the text changes; turn it back on when a vello release stops
         // re-rendering the page.
-        .atlas_cache(false)
+        .atlas_cache(true)
         .fill_glyphs(glyphs.into_iter().map(|p| vello_cpu::Glyph {
             id: p.id,
             x: x + p.x,
@@ -734,7 +734,7 @@ fn vello_begin(s: &mut Surface, r: u8, g: u8, b: u8, a: u8, damage: Option<(i32,
         None => return,
     };
     while v.depth > 0 {
-        v.ctx.pop_clip_path();
+        v.ctx.pop_clip();
         v.depth -= 1;
     }
     v.ctx.reset();
@@ -1649,7 +1649,7 @@ pub extern "C" fn ar_clip_pop(ptr: *mut Surface) {
         if s.which == Which::VelloCpu {
             if let Some(v) = s.vello.as_mut() {
                 if v.depth > 0 {
-                    v.ctx.pop_clip_path();
+                    v.ctx.pop_clip();
                     v.depth -= 1;
                 }
             }
@@ -1694,7 +1694,7 @@ fn vello_render(s: &mut Surface) {
     }
     // Clips must be balanced before rendering; an outstanding one panics.
     while v.depth > 0 {
-        v.ctx.pop_clip_path();
+        v.ctx.pop_clip();
         v.depth -= 1;
     }
     v.ctx.flush();
@@ -1707,10 +1707,10 @@ fn vello_render(s: &mut Surface) {
     // `SrcOver` leaves them. Inside the rect the background fill is opaque, so it
     // overwrites regardless, and the result is identical to a full repaint --
     // which is what `--damage-check` asserts rather than assumes.
-    let composite = if damaged {
-        CompositeMode::SrcOver
+    let target_init = if damaged {
+        vello_cpu::TargetInit::SrcOver
     } else {
-        CompositeMode::Replace
+        vello_cpu::TargetInit::Clear(vello_cpu::color::AlphaColor::TRANSPARENT)
     };
     // OptimizeSpeed selects the u8 pipeline, which is what the crate recommends
     // for application rendering; OptimizeQuality is for snapshot tests.
@@ -1719,7 +1719,7 @@ fn vello_render(s: &mut Surface) {
         &mut v.resources,
         RasterizerSettings {
             render_mode: RenderMode::OptimizeSpeed,
-            composite_mode: composite,
+            target_init,
             ..Default::default()
         },
     );
@@ -2358,7 +2358,7 @@ mod tests {
             &mut resources,
             RasterizerSettings {
                 render_mode: RenderMode::OptimizeSpeed,
-                composite_mode: CompositeMode::Replace,
+                target_init: vello_cpu::TargetInit::Clear(vello_cpu::color::AlphaColor::TRANSPARENT),
                 ..Default::default()
             },
         );
@@ -2376,14 +2376,14 @@ mod tests {
         ctx.push_clip_path(&clip.to_path(0.1));
         ctx.set_paint(AlphaColor::<Srgb>::from_rgba8(0, 0, 255, 255));
         ctx.fill_rect(&clip);
-        ctx.pop_clip_path();
+        ctx.pop_clip();
         ctx.flush();
         ctx.render_with(
             &mut target,
             &mut resources,
             RasterizerSettings {
                 render_mode: RenderMode::OptimizeSpeed,
-                composite_mode: CompositeMode::SrcOver,
+                target_init: vello_cpu::TargetInit::SrcOver,
                 ..Default::default()
             },
         );

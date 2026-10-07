@@ -20,7 +20,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use vello_cpu::peniko::color::PremulRgba8;
 use vello_cpu::Pixmap as VPixmap;
 
 ///
@@ -60,7 +59,7 @@ impl BitmapStore {
         }
 
         let mut may_have_transparency = false;
-        let mut vello = Vec::with_capacity(rgba.len() / 4);
+        let mut vello = Vec::with_capacity(rgba.len());
         let mut skia = match tiny_skia::Pixmap::new(width, height) {
             Some(p) => p,
             None => return 0,
@@ -76,7 +75,7 @@ impl BitmapStore {
             // rounded differently.
             let mul = |c: u8| (((c as u32 * a as u32) + 127) / 255) as u8;
             let (r, g, b) = (mul(px[0]), mul(px[1]), mul(px[2]));
-            vello.push(PremulRgba8 { r, g, b, a });
+            vello.extend_from_slice(&[r, g, b, a]);
             // `from_rgba` refuses a premultiplied triple that exceeds its alpha,
             // which the rounding above cannot produce; the fallback is a
             // transparent pixel rather than an unwrap that takes a desktop down
@@ -86,7 +85,7 @@ impl BitmapStore {
         }
 
         let (w16, h16) = (width as u16, height as u16);
-        let pixmap = VPixmap::from_parts_with_opacity(vello, w16, h16, may_have_transparency);
+        let pixmap = VPixmap::from_parts(vello, w16, h16, vello_cpu::PixelMetadata::new(vello_cpu::peniko::ImageAlphaType::AlphaPremultiplied, may_have_transparency));
 
         self.next += 1;
         let id = self.next;

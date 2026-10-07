@@ -16,7 +16,7 @@ raw-window-handle = { version = "0.6", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"] }
 skrifa = "0.44"
 tiny-skia = "0.11"
-vello_cpu = "0.2.0"
+vello_cpu = { git = "https://github.com/es9-dev/vello", branch = "perf/glyph-atlas-dirty-rect" }
 
 # `Tint`, AND NOTHING ELSE. `ImageColor3` multiplies a colour through an image's
 # own pixels, and vello_cpu's `RenderContext::set_tint` does exactly that for an
@@ -27,7 +27,7 @@ vello_cpu = "0.2.0"
 #
 # THE ALTERNATIVE WAS TINTING THE PIXELS OURSELVES, per node per frame, which is
 # the arithmetic `bitmap.rs` exists to do once.
-vello_common = "0.2.0"
+vello_common = { git = "https://github.com/es9-dev/vello", branch = "perf/glyph-atlas-dirty-rect" }
 vello_hybrid = { version = "0.2.0", optional = true }
 wgpu = { version = "29", optional = true }
 
@@ -49,7 +49,13 @@ wgpu = { version = "29", optional = true }
 #     lune run scripts/poison_matrix.luau
 poison = []
 
-gpu = ["dep:vello_hybrid", "dep:wgpu", "dep:pollster", "dep:bytemuck", "dep:raw-window-handle"]
+gpu = [
+    "dep:vello_hybrid",
+    "dep:wgpu",
+    "dep:pollster",
+    "dep:bytemuck",
+    "dep:raw-window-handle",
+]
 # The old name for the same set, kept so the recorded probe command still works.
 gpu_probe = ["gpu"]
 
