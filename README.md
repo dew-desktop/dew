@@ -112,10 +112,8 @@ While running, Dew manages the widget lifecycle, handles window dragging and sna
 ## Architecture
 
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/architecture-dark.png">
-    <img src="assets/architecture-light.png" alt="Dew Architecture" width="100%">
-  </picture>
+  <img src="assets/architecture-light.png#gh-light-mode-only" alt="Dew Architecture" width="100%">
+  <img src="assets/architecture-dark.png#gh-dark-mode-only" alt="Dew Architecture" width="100%">
 </p>
 
 
