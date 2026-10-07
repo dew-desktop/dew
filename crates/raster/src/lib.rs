@@ -268,7 +268,7 @@ pub extern "C" fn ar_fill_text(
         // atlas saves on a frame of steady text is not worth a stall each time
         // the text changes; turn it back on when a vello release stops
         // re-rendering the page.
-        .atlas_cache(false)
+        .atlas_cache(true)
         .fill_glyphs(glyphs.into_iter().map(|p| vello_cpu::Glyph {
             id: p.id,
             x: x + p.x,
