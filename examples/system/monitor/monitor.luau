@@ -323,7 +323,8 @@ local battery = blank(header, "Battery", 3, UDim2.new(0, 0, 1, 0))
 battery.AutomaticSize = Enum.AutomaticSize.X
 list(battery, Enum.FillDirection.Horizontal, 5, { VerticalAlignment = Enum.VerticalAlignment.Center })
 local cell = blank(battery, "Cell", 1, UDim2.fromOffset(19, 9))
-local shell = make("Frame", { Name = "Shell", Size = UDim2.fromOffset(16, 9), BackgroundTransparency = 1, Parent = cell })
+local shell =
+	make("Frame", { Name = "Shell", Size = UDim2.fromOffset(16, 9), BackgroundTransparency = 1, Parent = cell })
 rounded(shell, 2)
 make("UIStroke", {
 	Thickness = 1,
@@ -346,7 +347,8 @@ make("Frame", {
 	BackgroundColor3 = MUTED,
 	Parent = cell,
 })
-local batteryText = text(battery, { Name = "Percent", LayoutOrder = 2, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
+local batteryText =
+	text(battery, { Name = "Percent", LayoutOrder = 2, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
 battery.Visible = false
 
 local uptime = text(header, { Name = "Uptime", LayoutOrder = 4, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
@@ -403,7 +405,8 @@ local coresHeading = row("CoresHeading", 14)
 list(coresHeading, Enum.FillDirection.Horizontal, 6, { VerticalAlignment = Enum.VerticalAlignment.Center })
 local coresLabel = text(coresHeading, { Name = "Label", LayoutOrder = 1, TextColor3 = MUTED, TextSize = 12 })
 spacer(coresHeading, 2)
-local busiest = text(coresHeading, { Name = "Busiest", LayoutOrder = 3, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
+local busiest =
+	text(coresHeading, { Name = "Busiest", LayoutOrder = 3, FontFace = MONO, TextSize = 11, TextColor3 = MUTED })
 
 gap(6)
 
@@ -462,7 +465,8 @@ local function segment(name: string, order: number, colour: Color3): (Frame, UIF
 		Parent = memBar,
 	})
 	rounded(frame, 3)
-	local flex = make("UIFlexItem", { FlexMode = Enum.UIFlexMode.Custom, GrowRatio = 1, ShrinkRatio = 0, Parent = frame })
+	local flex =
+		make("UIFlexItem", { FlexMode = Enum.UIFlexMode.Custom, GrowRatio = 1, ShrinkRatio = 0, Parent = frame })
 	return frame, flex
 end
 local usedSegment, usedFlex = segment("Used", 1, WHITE)
@@ -526,7 +530,10 @@ local upBars = bars(upHalf, 60, Enum.VerticalAlignment.Top, LILAC)
 gap(6)
 local scaleRow = row("Scale", 14)
 list(scaleRow, Enum.FillDirection.Horizontal, 6)
-text(scaleRow, { Name = "Window", LayoutOrder = 1, Text = "last 60 s", FontFace = MONO, TextSize = 10, TextColor3 = FAINT })
+text(
+	scaleRow,
+	{ Name = "Window", LayoutOrder = 1, Text = "last 60 s", FontFace = MONO, TextSize = 10, TextColor3 = FAINT }
+)
 spacer(scaleRow, 2)
 local peakText = text(scaleRow, { Name = "Peak", LayoutOrder = 3, FontFace = MONO, TextSize = 10, TextColor3 = FAINT })
 
@@ -571,7 +578,8 @@ for i = 1, MAX_DISKS do
 	})
 	rounded(track, 2)
 	grow(track)
-	local used = make("Frame", { Name = "Used", Size = UDim2.fromScale(0, 1), BackgroundColor3 = WHITE, Parent = track })
+	local used =
+		make("Frame", { Name = "Used", Size = UDim2.fromScale(0, 1), BackgroundColor3 = WHITE, Parent = track })
 	rounded(used, 2)
 	accent(used, 0)
 	local free = text(frame, {
@@ -795,7 +803,7 @@ local root = widget({
 	offset = { x = 24, y = 24 },
 	draggable = true,
 	savePosition = true,
-	snapToEdges = true,
+	snapToEdges = false,
 	keepOnScreen = true,
 })
 card.Parent = root

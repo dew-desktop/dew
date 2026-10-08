@@ -566,6 +566,27 @@ impl DisplayTopology {
             .any(|m| m.work_area.intersects(window_rect))
     }
 
+    /// The overall bounding box encompassing the work areas of all connected monitors.
+    pub fn bounding_work_area(&self) -> Rect {
+        if self.monitors.is_empty() {
+            let (w, h) = screen_size();
+            return Rect::new(0, 0, w, h);
+        }
+        let mut left = i32::MAX;
+        let mut top = i32::MAX;
+        let mut right = i32::MIN;
+        let mut bottom = i32::MIN;
+
+        for m in &self.monitors {
+            left = left.min(m.work_area.left);
+            top = top.min(m.work_area.top);
+            right = right.max(m.work_area.right);
+            bottom = bottom.max(m.work_area.bottom);
+        }
+
+        Rect::new(left, top, right, bottom)
+    }
+
     /// Determine if an edge of `monitor` is an outer screen edge or adjacent to another monitor.
     ///
     /// When dragging a window, snapping to an outer edge is helpful, but snapping to
@@ -622,6 +643,55 @@ impl DisplayTopology {
                     {
                         return false;
                     }
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Check if a window rectangle is completely covered by the union of monitor work areas
+    /// (i.e. every pixel of the window is within some monitor's work area, with no part
+    /// hanging off into dead void space).
+    pub fn is_window_fully_on_screen(&self, rect: &Rect) -> bool {
+        // Collect all horizontal coordinate boundaries (x-splits) within rect
+        let mut x_splits = vec![rect.left, rect.right];
+        // Collect all vertical coordinate boundaries (y-splits) within rect
+        let mut y_splits = vec![rect.top, rect.bottom];
+
+        for m in &self.monitors {
+            if m.work_area.left > rect.left && m.work_area.left < rect.right {
+                x_splits.push(m.work_area.left);
+            }
+            if m.work_area.right > rect.left && m.work_area.right < rect.right {
+                x_splits.push(m.work_area.right);
+            }
+            if m.work_area.top > rect.top && m.work_area.top < rect.bottom {
+                y_splits.push(m.work_area.top);
+            }
+            if m.work_area.bottom > rect.top && m.work_area.bottom < rect.bottom {
+                y_splits.push(m.work_area.bottom);
+            }
+        }
+
+        x_splits.sort_unstable();
+        x_splits.dedup();
+        y_splits.sort_unstable();
+        y_splits.dedup();
+
+        // Every sub-cell (x0..x1, y0..y1) must be covered by at least one monitor's work area.
+        for x_window in x_splits.windows(2) {
+            let (x0, x1) = (x_window[0], x_window[1]);
+            for y_window in y_splits.windows(2) {
+                let (y0, y1) = (y_window[0], y_window[1]);
+                let mid_x = x0 + (x1 - x0) / 2;
+                let mid_y = y0 + (y1 - y0) / 2;
+                let covered = self
+                    .monitors
+                    .iter()
+                    .any(|m| m.work_area.contains_point(mid_x, mid_y));
+                if !covered {
+                    return false;
                 }
             }
         }
