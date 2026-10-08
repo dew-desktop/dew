@@ -46,7 +46,7 @@ use dew_host::services::{self, SharedClock};
 use dew_raster::Backend;
 use dew_runtime::{RasterPainter, Rgb};
 #[cfg(windows)]
-use dew_window::{Button, Event, Pump, Surface, Window};
+use dew_window::{Button, DisplayTopology, Event, Pump, Rect, Surface, Window};
 use mlua::Lua;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1609,46 +1609,247 @@ struct DragState {
     dragging: bool,
 }
 
-/// Apply `snapToEdges` and then `keepOnScreen` to a candidate window position.
+/// Apply `snapToEdges` and then `keepOnScreen` to a candidate window position,
+/// evaluated against multi-monitor desktop topology.
 ///
 /// SNAP FIRST, CLAMP SECOND — clamping after snapping is what keeps a widget
 /// near the bottom-right corner from being snapped to an edge and then shoved
 /// back off it by the clamp; running them the other way could undo the snap.
+#[cfg(windows)]
+fn valid_y_for_x(topology: &DisplayTopology, x: i32, w: i32, h: i32) -> Option<(i32, i32)> {
+    let mut intervals: Vec<(i32, i32)> = Vec::new();
+
+    // 1. Single monitors covering [x, x + w]
+    for m in &topology.monitors {
+        if m.work_area.left <= x && m.work_area.right >= x + w {
+            intervals.push((m.work_area.top, m.work_area.bottom));
+        }
+    }
+
+    // 2. Pairs of horizontally adjacent monitors whose seam is within [x, x + w]
+    for m1 in &topology.monitors {
+        for m2 in &topology.monitors {
+            if m1.work_area.right == m2.work_area.left
+                && m1.work_area.left <= x
+                && m2.work_area.right >= x + w
+            {
+                let top = m1.work_area.top.max(m2.work_area.top);
+                let bottom = m1.work_area.bottom.min(m2.work_area.bottom);
+                if top < bottom {
+                    intervals.push((top, bottom));
+                }
+            }
+        }
+    }
+
+    let mut best: Option<(i32, i32)> = None;
+    for (start, end) in intervals {
+        if start <= end - h {
+            let valid = (start, end - h);
+            best = match best {
+                None => Some(valid),
+                Some(b) => Some((b.0.min(valid.0), b.1.max(valid.1))),
+            };
+        }
+    }
+    best
+}
+
+#[cfg(windows)]
+fn valid_x_for_y(topology: &DisplayTopology, y: i32, w: i32, h: i32) -> Option<(i32, i32)> {
+    let mut intervals: Vec<(i32, i32)> = Vec::new();
+
+    // 1. Single monitors covering [y, y + h]
+    for m in &topology.monitors {
+        if m.work_area.top <= y && m.work_area.bottom >= y + h {
+            intervals.push((m.work_area.left, m.work_area.right));
+        }
+    }
+
+    // 2. Pairs of vertically adjacent monitors whose seam is within [y, y + h]
+    for m1 in &topology.monitors {
+        for m2 in &topology.monitors {
+            if m1.work_area.bottom == m2.work_area.top
+                && m1.work_area.top <= y
+                && m2.work_area.bottom >= y + h
+            {
+                let left = m1.work_area.left.max(m2.work_area.left);
+                let right = m1.work_area.right.min(m2.work_area.right);
+                if left < right {
+                    intervals.push((left, right));
+                }
+            }
+        }
+    }
+
+    let mut best: Option<(i32, i32)> = None;
+    for (start, end) in intervals {
+        if start <= end - w {
+            let valid = (start, end - w);
+            best = match best {
+                None => Some(valid),
+                Some(b) => Some((b.0.min(valid.0), b.1.max(valid.1))),
+            };
+        }
+    }
+    best
+}
+
+/// Project a candidate position onto valid monitor topology spans when no history is available.
+#[cfg(windows)]
+fn static_place_widget(
+    (x, y): (i32, i32),
+    (w, h): (i32, i32),
+    work: &Rect,
+    topology: &DisplayTopology,
+) -> (i32, i32) {
+    let proj_x = valid_y_for_x(topology, x, w, h).map(|(min_y, max_y)| (x, y.clamp(min_y, max_y)));
+    let proj_y = valid_x_for_y(topology, y, w, h).map(|(min_x, max_x)| (x.clamp(min_x, max_x), y));
+
+    match (proj_x, proj_y) {
+        (Some(px), Some(py)) => {
+            let dist_sq_x = (px.0 as i64 - x as i64).pow(2) + (px.1 as i64 - y as i64).pow(2);
+            let dist_sq_y = (py.0 as i64 - x as i64).pow(2) + (py.1 as i64 - y as i64).pow(2);
+            if dist_sq_x <= dist_sq_y {
+                px
+            } else {
+                py
+            }
+        }
+        (Some(px), None) => px,
+        (None, Some(py)) => py,
+        (None, None) => {
+            let desk = topology.bounding_work_area();
+            let cx = x.clamp(desk.left.min(desk.right - w), desk.left.max(desk.right - w));
+            let cy = y.clamp(desk.top.min(desk.bottom - h), desk.top.max(desk.bottom - h));
+            let min_x = work.left.min(work.right - w);
+            let max_x = work.left.max(work.right - w);
+            let min_y = work.top.min(work.bottom - h);
+            let max_y = work.top.max(work.bottom - h);
+            (cx.clamp(min_x, max_x), cy.clamp(min_y, max_y))
+        }
+    }
+}
+
+/// Apply `snapToEdges` and then `keepOnScreen` to a candidate window position,
+/// evaluated against multi-monitor desktop topology.
 #[cfg(windows)]
 fn place_widget(
     candidate: (i32, i32),
     size: (u32, u32),
     snap_to_edges: bool,
     keep_on_screen: bool,
+    topology: &DisplayTopology,
 ) -> (i32, i32) {
-    let screen = dew_window::screen_size();
+    place_widget_with_history(
+        candidate,
+        size,
+        snap_to_edges,
+        keep_on_screen,
+        topology,
+        None,
+    )
+}
+
+/// Apply `snapToEdges` and `keepOnScreen` with hysteresis history of the current window position
+/// to prevent erratic snapping when sliding along clamped edges and around multi-monitor corners.
+#[cfg(windows)]
+fn place_widget_with_history(
+    candidate: (i32, i32),
+    size: (u32, u32),
+    snap_to_edges: bool,
+    keep_on_screen: bool,
+    topology: &DisplayTopology,
+    current: Option<(i32, i32)>,
+) -> (i32, i32) {
     let (mut x, mut y) = candidate;
     let (w, h) = (size.0 as i32, size.1 as i32);
 
+    let monitor = topology.find_by_centroid(x, y, size.0, size.1);
+    let work = monitor.work_area;
+
     if snap_to_edges {
         const THRESHOLD: i32 = 12;
-        if x.abs() <= THRESHOLD {
-            x = 0;
+
+        // Snap to Left edge of current monitor work area
+        if (x - work.left).abs() <= THRESHOLD {
+            x = work.left;
         }
-        if (screen.0 - (x + w)).abs() <= THRESHOLD {
-            x = screen.0 - w;
+
+        // Snap to Right edge of current monitor work area
+        if (work.right - (x + w)).abs() <= THRESHOLD {
+            x = work.right - w;
         }
-        if y.abs() <= THRESHOLD {
-            y = 0;
+
+        // Snap to Top edge of current monitor work area
+        if (y - work.top).abs() <= THRESHOLD {
+            y = work.top;
         }
-        if (screen.1 - (y + h)).abs() <= THRESHOLD {
-            y = screen.1 - h;
+
+        // Snap to Bottom edge of current monitor work area
+        if (work.bottom - (y + h)).abs() <= THRESHOLD {
+            y = work.bottom - h;
         }
     }
 
     if keep_on_screen {
-        // A HARD CLAMP, AFTER SNAPPING. `min`/`max` swap places when the widget
-        // is wider (or taller) than the screen, so the widget still ends up
-        // fully on screen rather than the range becoming empty.
-        let (min_x, max_x) = ((screen.0 - w).min(0), (screen.0 - w).max(0));
-        let (min_y, max_y) = ((screen.1 - h).min(0), (screen.1 - h).max(0));
-        x = x.clamp(min_x, max_x);
-        y = y.clamp(min_y, max_y);
+        if snap_to_edges {
+            let min_x = work.left.min(work.right - w);
+            let max_x = work.left.max(work.right - w);
+            let min_y = work.top.min(work.bottom - h);
+            let max_y = work.top.max(work.bottom - h);
+
+            x = x.clamp(min_x, max_x);
+            y = y.clamp(min_y, max_y);
+        } else {
+            let rect = dew_window::Rect::new(x, y, x + w, y + h);
+            if !topology.is_window_fully_on_screen(&rect) {
+                let chosen = if let Some((cur_x, cur_y)) = current {
+                    let cand_a = valid_x_for_y(topology, cur_y, w, h).and_then(|(min_x, max_x)| {
+                        let ax = x.clamp(min_x, max_x);
+                        valid_y_for_x(topology, ax, w, h)
+                            .map(|(min_y, max_y)| (ax, y.clamp(min_y, max_y)))
+                    });
+
+                    let cand_b = valid_y_for_x(topology, cur_x, w, h).and_then(|(min_y, max_y)| {
+                        let by = y.clamp(min_y, max_y);
+                        valid_x_for_y(topology, by, w, h)
+                            .map(|(min_x, max_x)| (x.clamp(min_x, max_x), by))
+                    });
+
+                    match (cand_a, cand_b) {
+                        (Some(a), Some(b)) => {
+                            let dist_a =
+                                (a.0 as i64 - x as i64).pow(2) + (a.1 as i64 - y as i64).pow(2);
+                            let dist_b =
+                                (b.0 as i64 - x as i64).pow(2) + (b.1 as i64 - y as i64).pow(2);
+                            if dist_a < dist_b {
+                                a
+                            } else if dist_b < dist_a {
+                                b
+                            } else {
+                                let cur_dist_a = (a.0 as i64 - cur_x as i64).pow(2)
+                                    + (a.1 as i64 - cur_y as i64).pow(2);
+                                let cur_dist_b = (b.0 as i64 - cur_x as i64).pow(2)
+                                    + (b.1 as i64 - cur_y as i64).pow(2);
+                                if cur_dist_a <= cur_dist_b {
+                                    a
+                                } else {
+                                    b
+                                }
+                            }
+                        }
+                        (Some(a), None) => a,
+                        (None, Some(b)) => b,
+                        (None, None) => static_place_widget((x, y), (w, h), &work, topology),
+                    }
+                } else {
+                    static_place_widget((x, y), (w, h), &work, topology)
+                };
+                x = chosen.0;
+                y = chosen.1;
+            }
+        }
     }
 
     (x, y)
@@ -1806,15 +2007,55 @@ fn run_applet(
         _ => None,
     };
 
-    let mut resolved = surface.resolve(screen, (width, height));
+    let mut topology = DisplayTopology::current();
+    let primary_work = topology.primary().work_area;
+    let mut resolved = surface.resolve_in_work_area(
+        (
+            primary_work.left,
+            primary_work.top,
+            primary_work.width(),
+            primary_work.height(),
+        ),
+        (width, height),
+    );
 
     // A SAVED POSITION OVERRIDES THE DECLARED ANCHOR, exactly like a real
     // Rainmeter skin: the anchor is what a widget that has never been
     // dragged falls back to, and a drag that happened once wins from then
     // on until the next drag replaces it.
-    if let (Surface::Widget { x, y, .. }, Some((_, _, _, true))) = (&mut resolved, drag_options) {
+    if let (Surface::Widget { x, y, .. }, Some((_, keep_on_screen, snap_to_edges, true))) =
+        (&mut resolved, drag_options)
+    {
         if let Some(saved) = positions::load(&manifest.id) {
-            (*x, *y) = saved;
+            let candidate_rect = Rect::new(
+                saved.0,
+                saved.1,
+                saved.0 + width as i32,
+                saved.1 + height as i32,
+            );
+            if topology.intersects_any_work_area(&candidate_rect) {
+                // If it intersects an active display, clamp it to ensure it obeys keepOnScreen
+                let placed = place_widget(
+                    saved,
+                    (width, height),
+                    snap_to_edges,
+                    keep_on_screen,
+                    &topology,
+                );
+                (*x, *y) = placed;
+            } else {
+                // ORPHANED SURFACE RECOVERY: the monitor it was saved on is no longer
+                // connected or arranged here. Re-home to primary display's work area.
+                let primary_work = topology.primary().work_area;
+                let rehomed = place_widget(
+                    (primary_work.left + 24, primary_work.top + 24),
+                    (width, height),
+                    snap_to_edges,
+                    keep_on_screen,
+                    &topology,
+                );
+                (*x, *y) = rehomed;
+            }
         }
     }
 
@@ -1939,7 +2180,22 @@ fn run_applet(
                     // repositioned once — see `DragState`'s doc comment.
                     let mut forward = true;
                     if let Some(ds) = &mut drag {
+                        // Use actual screen cursor coordinates via GetCursorPos when on Windows.
+                        // When a window position is clamped on an axis, calculating screen coordinates
+                        // from `position + (x, y)` drifts because `position` was clamped and
+                        // client-relative mouse events during capture reflect the clamped window offset.
+                        #[cfg(windows)]
+                        let screen_now = {
+                            let mut pt = windows::Win32::Foundation::POINT::default();
+                            unsafe {
+                                let _ =
+                                    windows::Win32::UI::WindowsAndMessaging::GetCursorPos(&mut pt);
+                            }
+                            (pt.x as f32, pt.y as f32)
+                        };
+                        #[cfg(not(windows))]
                         let screen_now = (position.0 as f32 + x, position.1 as f32 + y);
+
                         if !ds.dragging {
                             let (dx, dy) = (
                                 screen_now.0 - ds.press_screen.0,
@@ -1962,11 +2218,13 @@ fn run_applet(
                             let candidate = (ds.window_origin.0 + dx, ds.window_origin.1 + dy);
                             let (_, keep_on_screen, snap_to_edges, _) =
                                 drag_options.expect("drag only arms for a widget");
-                            let placed = place_widget(
+                            let placed = place_widget_with_history(
                                 candidate,
                                 (width, height),
                                 snap_to_edges,
                                 keep_on_screen,
+                                &topology,
+                                Some(position),
                             );
                             window.borrow().set_position(placed.0, placed.1);
                             position = placed;
@@ -1984,8 +2242,22 @@ fn run_applet(
                     if button == Button::Left {
                         if let Some((draggable, _, _, _)) = drag_options {
                             if draggable {
+                                #[cfg(windows)]
+                                let press_screen = {
+                                    let mut pt = windows::Win32::Foundation::POINT::default();
+                                    unsafe {
+                                        let _ =
+                                            windows::Win32::UI::WindowsAndMessaging::GetCursorPos(
+                                                &mut pt,
+                                            );
+                                    }
+                                    (pt.x as f32, pt.y as f32)
+                                };
+                                #[cfg(not(windows))]
+                                let press_screen = (position.0 as f32 + x, position.1 as f32 + y);
+
                                 drag = Some(DragState {
-                                    press_screen: (position.0 as f32 + x, position.1 as f32 + y),
+                                    press_screen,
                                     window_origin: position,
                                     dragging: false,
                                 });
@@ -2039,6 +2311,49 @@ fn run_applet(
                     height = h;
                 }
                 Event::Exposed => renderer.borrow_mut().invalidate(),
+                Event::DisplayChanged => {
+                    // Update our topology snapshot from Win32
+                    topology = DisplayTopology::current();
+
+                    if let Some((_, keep_on_screen, snap_to_edges, save_position)) = drag_options {
+                        let current_rect = Rect::new(
+                            position.0,
+                            position.1,
+                            position.0 + width as i32,
+                            position.1 + height as i32,
+                        );
+
+                        let new_pos = if topology.intersects_any_work_area(&current_rect) {
+                            place_widget(
+                                position,
+                                (width, height),
+                                snap_to_edges,
+                                keep_on_screen,
+                                &topology,
+                            )
+                        } else {
+                            // Surface was orphaned by a disconnected / rearranged monitor.
+                            // Re-home to the primary monitor work area.
+                            let primary_work = topology.primary().work_area;
+                            place_widget(
+                                (primary_work.left + 24, primary_work.top + 24),
+                                (width, height),
+                                snap_to_edges,
+                                keep_on_screen,
+                                &topology,
+                            )
+                        };
+
+                        if new_pos != position {
+                            window.borrow().set_position(new_pos.0, new_pos.1);
+                            position = new_pos;
+                            if save_position {
+                                positions::save(&manifest.id, position);
+                            }
+                        }
+                    }
+                    renderer.borrow_mut().invalidate();
+                }
                 // UNLOADS THIS APPLET, AND NOTHING ELSE. The process used to
                 // exit the moment its one window closed; the coordinator
                 // outlives every applet now, so this thread simply ends and
@@ -4445,5 +4760,318 @@ mod tests {
             .eval()
             .expect("click");
         assert!(clicked, "a click at the button's centre did not reach it");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_multi_monitor_place_widget_negative_and_seam_avoidance() {
+        use dew_window::{DisplayTopology, MonitorInfo, Rect};
+
+        // Monitor 1: Secondary to the left (-1920..0, 0..1080) with taskbar on bottom (rcWork -1920..0, 0..1040)
+        let secondary = MonitorInfo {
+            device_name: r"\\.\DISPLAY1".to_string(),
+            monitor_rect: Rect::new(-1920, 0, 0, 1080),
+            work_area: Rect::new(-1920, 0, 0, 1040),
+            is_primary: false,
+        };
+        // Monitor 2: Primary landscape (0..1920, 0..1080) with taskbar on bottom (rcWork 0..1920, 0..1040)
+        let primary = MonitorInfo {
+            device_name: r"\\.\DISPLAY2".to_string(),
+            monitor_rect: Rect::new(0, 0, 1920, 1080),
+            work_area: Rect::new(0, 0, 1920, 1040),
+            is_primary: true,
+        };
+        let topology = DisplayTopology {
+            monitors: vec![secondary.clone(), primary.clone()],
+        };
+
+        let widget_size = (300, 200);
+
+        // 1. Clamping to secondary monitor with negative coordinates
+        // Candidate (-1000, 500) inside secondary
+        let placed = place_widget((-1000, 500), widget_size, true, true, &topology);
+        assert_eq!(placed, (-1000, 500));
+
+        // Candidate (-2000, 500) extending past secondary left edge
+        // Should clamp to work.left (-1920)
+        let placed = place_widget((-2000, 500), widget_size, false, true, &topology);
+        assert_eq!(placed.0, -1920);
+
+        // 2. Snapping to outer left edge on secondary monitor
+        let placed = place_widget((-1915, 500), widget_size, true, true, &topology);
+        assert_eq!(placed.0, -1920);
+
+        // 3. Seam snapping: when snap_to_edges is true, candidate right edge near x = 0 (e.g. x = -305, right = -5)
+        // snaps cleanly to the seam (x = -300, so right is exactly 0).
+        let placed = place_widget((-305, 500), widget_size, true, true, &topology);
+        assert_eq!(
+            placed.0, -300,
+            "snaps cleanly to right edge of secondary monitor"
+        );
+
+        // 4. Inter-monitor straddling: when snap_to_edges is false, widget can sit freely
+        // halfway across the boundary (e.g. x = -150: 150px on secondary, 150px on primary).
+        let placed = place_widget((-150, 500), widget_size, false, true, &topology);
+        assert_eq!(
+            placed.0, -150,
+            "allows free placement straddling two monitors when snap_to_edges is false"
+        );
+
+        // 5. Clamping on Primary monitor bottom boundary (taskbar at 1040)
+        // Candidate at (500, 900), height is 200 -> bottom would be 1100 (past 1040).
+        let placed = place_widget((500, 900), widget_size, false, true, &topology);
+        assert_eq!(
+            placed.1,
+            1040 - 200,
+            "must clamp to primary work area bottom"
+        );
+
+        // 6. L-shaped / multi-monitor void protection:
+        // Consider an L-shaped topology where secondary monitor is taller (-444..1604)
+        // while primary is only (0..1080).
+        // A candidate at (500, -200) lies inside the union bounding box [-1920..1920, -444..1604],
+        // but completely outside the primary monitor (0..1920, 0..1040) where it has centroid affinity.
+        let l_secondary = MonitorInfo {
+            device_name: r"\\.\DISPLAY1".to_string(),
+            monitor_rect: Rect::new(-1920, -444, 0, 1604),
+            work_area: Rect::new(-1920, -444, 0, 1604),
+            is_primary: false,
+        };
+        let l_topology = DisplayTopology {
+            monitors: vec![l_secondary, primary.clone()],
+        };
+        let placed = place_widget((500, -200), widget_size, false, true, &l_topology);
+        assert!(
+            l_topology.intersects_any_work_area(&Rect::new(
+                placed.0,
+                placed.1,
+                placed.0 + widget_size.0 as i32,
+                placed.1 + widget_size.1 as i32
+            )),
+            "widget must not remain in dead space void outside all monitor work areas"
+        );
+        assert_eq!(
+            placed.1, 0,
+            "clamped back to top of primary monitor work area"
+        );
+
+        // Candidate partially dragged off the top of the middle monitor (e.g. y = -50)
+        // With snapToEdges = false and keepOnScreen = true, because Edge::Top has no monitor above it,
+        // it must clamp cleanly to work.top (0), rather than floating into the void above.
+        let placed_top_drag = place_widget((500, -50), widget_size, false, true, &l_topology);
+        assert_eq!(
+            placed_top_drag.1, 0,
+            "partially dragged off top of middle monitor clamps to work.top"
+        );
+
+        // 7. Corner seam sliding:
+        // Widget of size (300, 200). Suppose secondary monitor spans Y: 0..1040,
+        // and candidate on primary monitor is at (-100, 950).
+        // Since Y: 950..1150 exceeds secondary monitor's bottom (1040), the widget cannot
+        // stay at Y=950 while straddling X=-100.
+        // Instead of snapping discontinuously across the centroid, it slides to the closest
+        // valid on-screen location: Y clamps to 840 (so bottom is 1040), allowing X to remain at -100!
+        let staggered_secondary = MonitorInfo {
+            device_name: r"\\.\DISPLAY1".to_string(),
+            monitor_rect: Rect::new(-1920, 0, 0, 1040),
+            work_area: Rect::new(-1920, 0, 0, 1040),
+            is_primary: false,
+        };
+        let staggered_topology = DisplayTopology {
+            monitors: vec![staggered_secondary, primary.clone()],
+        };
+        // Candidate (-100, 950): overlaps seam to the left, but bottom is 1150 (past 1040).
+        let placed_corner =
+            place_widget((-100, 950), widget_size, false, true, &staggered_topology);
+        assert_eq!(placed_corner.0, -100, "widget slides smoothly on x axis");
+        assert_eq!(
+            placed_corner.1,
+            1040 - 200,
+            "widget y clamps smoothly to 840 so the entire widget stays on screen"
+        );
+
+        // 8. Dragging along top edge towards a taller monitor:
+        // Left monitor spans (-1920..0, -444..1604), Middle monitor spans (0..1920, 0..1040).
+        // Candidate (-100, -100) or (-250, -100): The user is dragging clamped along the top edge of Middle monitor (y = 0),
+        // moving leftwards towards the taller Left monitor.
+        // As long as the widget still partially overlaps Middle monitor (x + w > 0), it is clamped vertically
+        // to Middle monitor's top edge (y = 0), and X slides completely freely without being clamped horizontally to -300!
+        let placed_l_corner = place_widget((-100, -100), widget_size, false, true, &l_topology);
+        assert_eq!(placed_l_corner.0, -100);
+        assert_eq!(placed_l_corner.1, 0);
+
+        // Candidate (-250, -100) is closer to the vertical wall at x = -300 (dist 50) than to ceiling y = 0 (dist 100),
+        // so it clamps horizontally to x = -300 without snapping down onto middle monitor:
+        let placed_l_wall = place_widget((-250, -100), widget_size, false, true, &l_topology);
+        assert_eq!(placed_l_wall.0, -300);
+        assert_eq!(placed_l_wall.1, -100);
+
+        // Once the widget has completely cleared Middle monitor's top edge (x + w <= 0, e.g. x = -300),
+        // it is 100% within the taller Left monitor and can move vertically upwards (y < 0):
+        let placed_cleared = place_widget((-350, -100), widget_size, false, true, &l_topology);
+        assert_eq!(placed_cleared.0, -350);
+        assert_eq!(placed_cleared.1, -100);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_drag_instrumentation_user_monitors() {
+        let display1 = dew_window::MonitorInfo {
+            device_name: r"\\.\DISPLAY1".to_string(),
+            monitor_rect: Rect::new(-1152, -444, 0, 1604),
+            work_area: Rect::new(-1152, -444, 0, 1604),
+            is_primary: false,
+        };
+        let display3 = dew_window::MonitorInfo {
+            device_name: r"\\.\DISPLAY3".to_string(),
+            monitor_rect: Rect::new(0, 0, 2560, 1440),
+            work_area: Rect::new(0, 0, 2560, 1440),
+            is_primary: true,
+        };
+        let display2 = dew_window::MonitorInfo {
+            device_name: r"\\.\DISPLAY2".to_string(),
+            monitor_rect: Rect::new(2560, 162, 4480, 1242),
+            work_area: Rect::new(2560, 162, 4480, 1242),
+            is_primary: false,
+        };
+        let topology = DisplayTopology {
+            monitors: vec![display1, display3, display2],
+        };
+        let size = (300, 695);
+
+        let check_path = |name: &str, start: (i32, i32), end: (i32, i32)| -> Vec<String> {
+            let mut snaps = Vec::new();
+            let steps = (end.0 - start.0).abs().max((end.1 - start.1).abs());
+            let mut prev = place_widget(start, size, false, true, &topology);
+            for i in 1..=steps {
+                let cand_x = start.0 + (end.0 - start.0) * i / steps;
+                let cand_y = start.1 + (end.1 - start.1) * i / steps;
+                let curr = place_widget_with_history(
+                    (cand_x, cand_y),
+                    size,
+                    false,
+                    true,
+                    &topology,
+                    Some(prev),
+                );
+                let dx = (curr.0 - prev.0).abs();
+                let dy = (curr.1 - prev.1).abs();
+                if dx > 1 || dy > 1 {
+                    snaps.push(format!(
+                        "[{name}] step {i}/{steps} at cand ({cand_x}, {cand_y}): jumped from {prev:?} to {curr:?}, delta=({dx}, {dy})"
+                    ));
+                }
+                prev = curr;
+            }
+            snaps
+        };
+
+        // 1. Sliding left along top edge of middle monitor into tall left monitor (y clamped at 0)
+        // Along the top edge from 300 down to -299, there must be ZERO snaps (smooth sliding along ceiling at y = 0)
+        let snaps1_ceiling = check_path(
+            "Slide Left along Middle Top to Seam",
+            (300, -50),
+            (-299, -50),
+        );
+        assert!(
+            snaps1_ceiling.is_empty(),
+            "snaps1_ceiling had {} snaps: {:#?}",
+            snaps1_ceiling.len(),
+            snaps1_ceiling
+        );
+        // At x = -300, the widget completely clears Middle monitor's top edge and snaps vertically to candidate y = -50:
+        let placed_300 =
+            place_widget_with_history((-300, -50), size, false, true, &topology, Some((-299, 0)));
+        assert_eq!(
+            placed_300,
+            (-300, -50),
+            "widget snaps vertically only once cleared at x = -300"
+        );
+
+        // 2. Dragging right against seam wall in tall left monitor at y = -100 (where middle monitor does not exist)
+        // Window must clamp to x = -300 without snapping down onto middle monitor (y remains -100)
+        let snaps2 = check_path("Push Right into Seam at y=-100", (-500, -100), (200, -100));
+        assert!(
+            snaps2.is_empty(),
+            "snaps2 had {} snaps: {:#?}",
+            snaps2.len(),
+            snaps2
+        );
+
+        // 2b. Dragging right from the top-right corner of vertical monitor at y = -50:
+        // Window must remain clamped at x = -300 and y = -50 without re-engaging vertical clamping at y = 0
+        let snaps2_top_right = check_path(
+            "Push Right from Top-Right Corner at y=-50",
+            (-300, -50),
+            (200, -50),
+        );
+        assert!(
+            snaps2_top_right.is_empty(),
+            "snaps2_top_right had {} snaps: {:#?}",
+            snaps2_top_right.len(),
+            snaps2_top_right
+        );
+
+        // 3. Sliding left along bottom edge of middle monitor towards left monitor (bottom = 1440, so y = 745)
+        // Along the bottom edge from 300 down to -299, there must be ZERO snaps (smooth sliding along floor at y = 745)
+        let snaps3_floor = check_path(
+            "Slide Left along Middle Bottom to Seam",
+            (300, 800),
+            (-299, 800),
+        );
+        assert!(
+            snaps3_floor.is_empty(),
+            "snaps3_floor had {} snaps: {:#?}",
+            snaps3_floor.len(),
+            snaps3_floor
+        );
+        let placed_bottom_300 =
+            place_widget_with_history((-300, 800), size, false, true, &topology, Some((-299, 745)));
+        assert_eq!(
+            placed_bottom_300,
+            (-300, 800),
+            "widget snaps vertically only once cleared at bottom x = -300"
+        );
+
+        // 3b. Dragging right from the bottom-right corner of vertical monitor at y = 800:
+        // Window must remain clamped at x = -300 and y = 800 without re-engaging vertical clamping at y = 745
+        let snaps3_bottom_right = check_path(
+            "Push Right from Bottom-Right Corner at y=800",
+            (-300, 800),
+            (200, 800),
+        );
+        assert!(
+            snaps3_bottom_right.is_empty(),
+            "snaps3_bottom_right had {} snaps: {:#?}",
+            snaps3_bottom_right.len(),
+            snaps3_bottom_right
+        );
+
+        // 4. Sliding right along top edge of middle monitor towards right monitor (which starts at y = 162)
+        // From 2000 to 2260, window slides smoothly along top edge at y = 0, clamping against right monitor's wall
+        let snaps4 = check_path(
+            "Slide Right along Middle Top towards Right",
+            (2000, 50),
+            (2500, 50),
+        );
+        assert!(
+            snaps4.is_empty(),
+            "snaps4 had {} snaps: {:#?}",
+            snaps4.len(),
+            snaps4
+        );
+
+        // 5. Sliding right along bottom edge of middle monitor towards right monitor (which ends at y = 1242)
+        let snaps5 = check_path(
+            "Slide Right along Middle Bottom towards Right",
+            (2000, 600),
+            (2500, 600),
+        );
+        assert!(
+            snaps5.is_empty(),
+            "snaps5 had {} snaps: {:#?}",
+            snaps5.len(),
+            snaps5
+        );
     }
 }

@@ -51,18 +51,29 @@ impl Anchor {
         })
     }
 
-    /// Resolve to a screen position for a widget of this size.
-    fn resolve(self, screen: (i32, i32), size: (i32, i32), offset: (i32, i32)) -> (i32, i32) {
-        let (sw, sh) = screen;
+    /// Resolve to a screen position for a widget of this size within a monitor work area.
+    pub fn resolve_in_work_area(
+        self,
+        work_area: (i32, i32, i32, i32),
+        size: (i32, i32),
+        offset: (i32, i32),
+    ) -> (i32, i32) {
+        let (wx, wy, ww, wh) = work_area;
         let (w, h) = size;
         let (ox, oy) = offset;
         match self {
-            Anchor::TopLeft => (ox, oy),
-            Anchor::TopRight => (sw - w - ox, oy),
-            Anchor::BottomLeft => (ox, sh - h - oy),
-            Anchor::BottomRight => (sw - w - ox, sh - h - oy),
-            Anchor::Center => ((sw - w) / 2 + ox, (sh - h) / 2 + oy),
+            Anchor::TopLeft => (wx + ox, wy + oy),
+            Anchor::TopRight => (wx + ww - w - ox, wy + oy),
+            Anchor::BottomLeft => (wx + ox, wy + wh - h - oy),
+            Anchor::BottomRight => (wx + ww - w - ox, wy + wh - h - oy),
+            Anchor::Center => (wx + (ww - w) / 2 + ox, wy + (wh - h) / 2 + oy),
         }
+    }
+
+    /// Resolve to a screen position for a widget of this size.
+    #[allow(dead_code)]
+    fn resolve(self, screen: (i32, i32), size: (i32, i32), offset: (i32, i32)) -> (i32, i32) {
+        self.resolve_in_work_area((0, 0, screen.0, screen.1), size, offset)
     }
 }
 
@@ -222,9 +233,13 @@ impl Declared {
         }
     }
 
-    /// Turn the declaration into a concrete surface for a screen of this size.
+    /// Turn the declaration into a concrete surface for a specific monitor work area.
     #[cfg(windows)]
-    pub fn resolve(&self, screen: (i32, i32), size: (u32, u32)) -> Surface {
+    pub fn resolve_in_work_area(
+        &self,
+        work_area: (i32, i32, i32, i32),
+        size: (u32, u32),
+    ) -> Surface {
         fn to_window_z_order(z: ZOrder) -> dew_window::ZOrder {
             match z {
                 ZOrder::Bottom => dew_window::ZOrder::Bottom,
@@ -251,7 +266,8 @@ impl Declared {
                 z_order,
                 ..
             } => {
-                let (x, y) = anchor.resolve(screen, (size.0 as i32, size.1 as i32), *offset);
+                let (x, y) =
+                    anchor.resolve_in_work_area(work_area, (size.0 as i32, size.1 as i32), *offset);
                 Surface::Widget {
                     x,
                     y,
@@ -260,6 +276,13 @@ impl Declared {
                 }
             }
         }
+    }
+
+    /// Turn the declaration into a concrete surface for a screen of this size.
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    pub fn resolve(&self, screen: (i32, i32), size: (u32, u32)) -> Surface {
+        self.resolve_in_work_area((0, 0, screen.0, screen.1), size)
     }
 
     /// Whether this surface is composited from its own alpha.
