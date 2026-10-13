@@ -1,0 +1,30 @@
+---
+import Default from '@astrojs/starlight/components/PageTitle.astro';
+import { editUrl, rawUrl, sourcePath } from '../repository.mjs';
+
+const { entry } = Astro.locals.starlightRoute;
+const { crumbs } = Astro.locals.dew;
+const source = sourcePath(entry.filePath);
+---
+
+{
+	crumbs.length > 0 && (
+		<nav class="dew-crumbs" aria-label="Breadcrumbs">
+			<ol>
+				{crumbs.map((crumb) => (
+					<li>{crumb.href ? <a href={crumb.href}>{crumb.label}</a> : <span>{crumb.label}</span>}</li>
+				))}
+			</ol>
+		</nav>
+	)
+}
+<Default />
+{entry.data.description && <p class="dew-lede">{entry.data.description}</p>}
+{
+	source && (
+		<div class="dew-page-actions print:hidden">
+			<a href={rawUrl(source)}>View as Markdown</a>
+			<a href={editUrl(source)}>Edit this page</a>
+		</div>
+	)
+}

@@ -2,23 +2,68 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { satteri } from '@astrojs/markdown-satteri';
-import { relativeLinks } from './src/relative-links.mjs';
-import { group } from './src/sidebar.mjs';
+import { callouts } from './src/markdown/callouts.mjs';
+import { trees } from './src/markdown/trees.mjs';
+import { relativeLinks } from './src/markdown/relative-links.mjs';
+import { REPOSITORY } from './src/repository.mjs';
+import { sidebar } from './src/sidebar.mjs';
+import { TOPICS } from './src/topics.mjs';
 
 // https://astro.build/config
 export default defineConfig({
 	markdown: {
-		processor: satteri({ mdastPlugins: [relativeLinks] }),
+		processor: satteri({ mdastPlugins: [relativeLinks, callouts, trees] }),
 	},
 	integrations: [
 		starlight({
 			title: 'Dew Docs',
-			description: 'The modern desktop applet platform powered by sandboxed Luau and Vello rendering.',
-			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/dew-desktop/dew' }],
-			// EACH GROUP IS A DIRECTORY OF `docs/`, so a page is in the navigation by
-			// existing. See `src/sidebar.mjs` for why this is not `autogenerate`.
-			sidebar: [group('Guides', 'guides'), group('Reference', 'reference'), group('Specification', 'spec')],
+			description: 'Build desktop applets in Luau over a native DataModel.',
+			social: [{ icon: 'github', label: 'GitHub', href: REPOSITORY }],
+			// EACH TOPIC IS A DIRECTORY OF `docs/` (`src/topics.mjs`), and each of its
+			// groups a subdirectory. A page is in the navigation by existing; see
+			// `src/sidebar.mjs`, and `src/route-data.ts` for how a topic becomes a tab.
+			sidebar: sidebar(TOPICS),
+			routeMiddleware: './src/route-data.ts',
+			components: {
+				Header: './src/components/Header.astro',
+				PageTitle: './src/components/PageTitle.astro',
+				Footer: './src/components/Footer.astro',
+				MarkdownContent: './src/components/MarkdownContent.astro',
+			},
+			pagination: false,
+			expressiveCode: {
+				emitExternalStylesheet: false,
+				// ONE THEME IN BOTH MODES. Code sits on the System Monitor's dark panel
+				// either way, and a light syntax theme on it is unreadable.
+				themes: ['github-dark-default'],
+				useThemedScrollbars: false,
+				styleOverrides: {
+					borderRadius: '8px',
+					borderWidth: '1px',
+					codeBackground: '#090b0f',
+					borderColor: '#222734',
+					uiFontFamily: 'var(--sl-font-code)',
+					codeFontFamily: 'var(--sl-font-code)',
+					uiFontSize: '0.8rem',
+					codeFontSize: '0.85rem',
+					frames: {
+						frameBoxShadowCssValue: 'none',
+						editorTabBarBackground: '#131620',
+						editorActiveTabBackground: '#090b0f',
+						editorActiveTabForeground: '#56a4f0',
+						editorActiveTabBorderColor: '#222734',
+						editorActiveTabIndicatorTopColor: 'transparent',
+						editorActiveTabIndicatorBottomColor: 'transparent',
+						terminalTitlebarBackground: '#11141c',
+						terminalTitlebarDotsForeground: '#56a4f0',
+						terminalTitlebarDotsOpacity: '0.85',
+						terminalBackground: '#090b0f',
+					},
+				},
+			},
 			customCss: [
+				'@fontsource-variable/inter',
+				'@fontsource-variable/jetbrains-mono',
 				'./src/styles/custom.css',
 			],
 		}),

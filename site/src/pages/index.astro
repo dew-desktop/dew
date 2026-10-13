@@ -1,38 +1,68 @@
 ---
 import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
-import { Card, CardGrid } from '@astrojs/starlight/components';
+import TopicIndex from '../components/TopicIndex.astro';
+
+/**
+ * Stripe's home: a title and a lede, two ways in, then every topic as a column
+ * of doors. `not-content` keeps the article styles off what is navigation.
+ */
 ---
 
 <StarlightPage
 	frontmatter={{
-		title: 'Dew Docs',
-		description: 'Build native desktop applets and widgets using sandboxed Luau and Vello GPU rendering.',
+		title: 'Dew documentation',
+		description: 'Build desktop applets in Luau over a native DataModel.',
 		template: 'splash',
-		hero: {
-			tagline:
-				'The modern desktop applet platform powered by sandboxed Luau, least-privilege capabilities, and Vello/DirectComposition rendering.',
-			actions: [
-				{ text: 'Quickstart', link: '/guides/quickstart/', icon: 'right-arrow', variant: 'primary' },
-				{ text: 'Manifest Specification', link: '/reference/manifest/', icon: 'document', variant: 'secondary' },
-				{ text: 'GitHub Repository', link: 'https://github.com/dew-desktop/dew', icon: 'external', variant: 'minimal' },
-			],
-		},
 	}}
 >
-	<h2>Core Architecture</h2>
+	<div class="not-content">
+		<div class="dew-home-actions">
+			<a class="dew-button dew-button--primary" href="/get-started/quickstart/">Get started</a>
+			<a class="dew-button" href="/spec/applet_contract/">Read the applet contract</a>
+		</div>
 
-	<CardGrid stagger>
-		<Card title="DirectComposition & Vello" icon="rocket">
-			Direct hardware presentation without Electron or browser DOM overhead. Renders native frames tear-free at display refresh rate.
-		</Card>
-		<Card title="Least-Privilege Sandboxing" icon="shield">
-			Applets execute within isolated Luau guests. File system access and OS features require explicit capabilities in <code>dew.toml</code>.
-		</Card>
-		<Card title="DataModel Class Hierarchy" icon="puzzle">
-			Roblox-standard classes (<code>Frame</code>, <code>TextLabel</code>, <code>UDim2</code>, <code>Color3</code>) paired with reactive signal subscriptions.
-		</Card>
-		<Card title="Development Inner Loop" icon="laptop">
-			Sub-second hot-reloading via <code>dew run</code>, typed definitions for <code>luau-lsp</code>, and headless testing suites.
-		</Card>
-	</CardGrid>
+		<h2 class="dew-home-heading">Browse by topic</h2>
+		<TopicIndex />
+	</div>
 </StarlightPage>
+
+<style>
+	.dew-home-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.75rem;
+		margin-top: 1.5rem;
+	}
+
+	.dew-button {
+		padding: 0.5rem 1rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+		font-size: var(--sl-text-sm);
+		font-weight: 600;
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+
+	.dew-button:hover {
+		border-color: var(--sl-color-gray-4);
+	}
+
+	.dew-button--primary {
+		border-color: var(--sl-color-accent);
+		background-color: var(--sl-color-accent);
+		color: var(--sl-color-black);
+	}
+
+	.dew-button--primary:hover {
+		border-color: var(--sl-color-accent-high);
+		background-color: var(--sl-color-accent-high);
+	}
+
+	.dew-home-heading {
+		margin-top: 3.5rem;
+		font-size: 1.25rem;
+		font-weight: 650;
+		color: var(--sl-color-white);
+	}
+</style>

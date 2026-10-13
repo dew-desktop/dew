@@ -3,8 +3,6 @@ title: Quickstart
 description: Create and run your first Dew desktop applet in under 60 seconds.
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
-
 Dew applets are self-contained desktop widgets and background daemons powered by sandboxed Luau, Vello/DirectComposition rendering, and reactive state.
 
 ---

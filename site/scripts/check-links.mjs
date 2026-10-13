@@ -53,9 +53,10 @@ for (const page of pages(DIST)) {
 	}
 }
 
-// EVERY PAGE IN `docs/` IS IN THE NAVIGATION. The sidebar is on every one of
-// those pages, so each of them has to link to all the others. A sidebar that
-// builds and lists nothing passes every check above.
+// EVERY PAGE IN `docs/` IS IN THE NAVIGATION. A page's sidebar lists its own
+// topic, the first directory of its path, so each page has to link to every
+// other page in that topic. A sidebar that builds and lists nothing passes every
+// check above.
 const DOCS = fileURLToPath(new URL('../../docs/', import.meta.url));
 /** @param {string} dir @returns {string[]} */
 const markdown = (dir) =>
@@ -69,7 +70,8 @@ for (const route of routes) {
 	const file = fileFor(route);
 	if (!file) continue;
 	const html = readFileSync(file, 'utf8');
-	for (const other of routes) {
+	const topic = route.split('/')[1];
+	for (const other of routes.filter((r) => r.split('/')[1] === topic)) {
 		if (!html.includes(`href="${other}"`)) broken.push(`${route} does not link ${other} (missing from the navigation)`);
 	}
 }

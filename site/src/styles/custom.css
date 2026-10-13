@@ -1,557 +1,542 @@
-/* System & Web-Safe Font Stacks (Zero remote network blocking FOUC) */
+/* =====================================================================
+   PALETTE. The System Monitor's colours, mapped onto the tokens Starlight
+   actually reads. Dark is the default, as it is in Starlight.
+   ===================================================================== */
+
 :root {
-	--sl-font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-	--sl-font-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-	--sl-font-headings: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--sl-font: 'Inter Variable', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+	--sl-font-code: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
-	/* Light Mode Surfaces & Textures (Clean Slate with Dew Sky & Lilac accents) */
-	--sl-color-bg: #f8fafc;
-	--sl-color-bg-nav: #ffffff;
-	--sl-color-bg-sidebar: #f1f5f9;
-	--sl-color-bg-card: #ffffff;
-	--sl-color-bg-card-hover: #ffffff;
-	--sl-color-bg-table-header: #f1f5f9;
-	--sl-color-bg-table-hover: #f8fafc;
-	--sl-color-bg-chip: #e2e8f0;
-	--sl-color-bg-chip-hover: #cbd5e1;
+	--sl-color-white: #e9eff9; /* TEXT, headings */
+	--sl-color-gray-1: #d3dbe8;
+	--sl-color-gray-2: #b4c0d3; /* body */
+	--sl-color-gray-3: #92a2bc; /* MUTED */
+	--sl-color-gray-4: #606a7c; /* FAINT */
+	--sl-color-gray-5: #262a36; /* RULE */
+	--sl-color-gray-6: #181b22; /* CARD */
+	--sl-color-black: #12141a; /* SURFACE */
 
-	--sl-color-hairline-shade: #e2e8f0;
-	--sl-color-hairline-light: #cbd5e1;
+	--sl-color-accent-low: #142538;
+	--sl-color-accent: #56a4f0; /* SKY */
+	--sl-color-accent-high: #a9d3fb;
+	--dew-lilac: #9686ec;
 
-	--sl-color-text: #0f172a;
-	--sl-color-text-muted: #64748b;
-	--sl-color-text-subtle: #94a3b8;
-	--sl-color-text-invert: #ffffff;
-
-	--sl-color-accent: #0284c7;
-	--sl-color-accent-purple: #7c3aed;
-	--sl-color-accent-high: #0369a1;
-	--sl-color-accent-wash: rgba(2, 132, 199, 0.08);
-
-	--sl-btn-primary-bg: #0f172a;
-	--sl-btn-primary-text: #ffffff;
-	--sl-btn-primary-border: #0f172a;
-	--sl-btn-primary-hover: #1e293b;
-
-	--sl-btn-secondary-bg: #ffffff;
-	--sl-btn-secondary-text: #0f172a;
-	--sl-btn-secondary-border: #cbd5e1;
-	--sl-btn-secondary-hover: #f1f5f9;
+	--sl-color-bg-nav: var(--sl-color-black);
+	--sl-color-bg-sidebar: var(--sl-color-black);
+	--sl-color-hairline: var(--sl-color-gray-5);
+	--sl-color-hairline-light: var(--sl-color-gray-5);
+	--sl-color-hairline-shade: var(--sl-color-gray-5);
+	--sl-color-bg-inline-code: var(--sl-color-gray-6);
 }
 
-:root[data-theme='dark'] {
-	/* Dark Mode: Full System Monitor Atmosphere */
-	--sl-color-bg: #12141a;              /* SURFACE */
-	--sl-color-bg-nav: #161922;          /* Elevated Surface */
-	--sl-color-bg-sidebar: #0e1015;      /* Deep Shelf */
-	--sl-color-bg-card: #181b22;         /* Card Panel */
-	--sl-color-bg-card-hover: #1c202a;
-	--sl-color-bg-table-header: #1c202a;
-	--sl-color-bg-table-hover: #1e232e;
-	--sl-color-bg-chip: #20242e;         /* TRACK */
-	--sl-color-bg-chip-hover: #262a36;
+:root[data-theme='light'] {
+	--sl-color-white: #0f172a;
+	--sl-color-gray-1: #1e293b;
+	--sl-color-gray-2: #334155;
+	--sl-color-gray-3: #64748b;
+	--sl-color-gray-4: #94a3b8;
+	--sl-color-gray-5: #e2e8f0;
+	--sl-color-gray-6: #f1f5f9;
+	--sl-color-gray-7: #f8fafc;
+	--sl-color-black: #ffffff;
 
-	--sl-color-hairline-shade: #262a36;  /* RULE */
-	--sl-color-hairline-light: #323848;
+	--sl-color-accent-low: #e0f2fe;
+	--sl-color-accent: #0369a1;
+	--sl-color-accent-high: #0c4a6e;
+	--dew-lilac: #6d28d9;
 
-	--sl-color-text: #e9eff9;           /* TEXT */
-	--sl-color-text-muted: #92a2bc;     /* MUTED */
-	--sl-color-text-subtle: #606a7c;    /* FAINT */
-	--sl-color-text-invert: #12141a;
-
-	/* Dew Primary Accents */
-	--sl-color-accent: #56a4f0;         /* SKY */
-	--sl-color-accent-purple: #9686ec;  /* LILAC */
-	--sl-color-accent-high: #bae6fd;
-	--sl-color-accent-wash: rgba(86, 164, 240, 0.08);
-
-	--sl-btn-primary-bg: #e9eff9;
-	--sl-btn-primary-text: #12141a;
-	--sl-btn-primary-border: #e9eff9;
-	--sl-btn-primary-hover: #ffffff;
-
-	--sl-btn-secondary-bg: #181b22;
-	--sl-btn-secondary-text: #e9eff9;
-	--sl-btn-secondary-border: #262a36;
-	--sl-btn-secondary-hover: #20242e;
-}
-
-/* Subtle top hairline banner gradient in Dark Mode linking Dew Sky & Lilac */
-:root[data-theme='dark'] header.header {
-	border-bottom: 1px solid var(--sl-color-hairline-shade) !important;
-	box-shadow: inset 0 -1px 0 rgba(86, 164, 240, 0.15);
+	--sl-color-bg-inline-code: var(--sl-color-gray-6);
 }
 
 /* =====================================================================
-   TYPOGRAPHY
+   FRAME. Stripe's proportions: a header of two rows, a narrow sidebar, a
+   reading column, and the table of contents on wide screens.
    ===================================================================== */
-h1, h2, h3, h4, h5, h6 {
-	font-family: var(--sl-font-headings) !important;
-	letter-spacing: -0.02em;
-	font-weight: 600;
-	color: var(--sl-color-text) !important;
-	-webkit-text-fill-color: initial !important;
-	background: none !important;
+
+:root {
+	--dew-header-row: 3.5rem;
+	--dew-topics-row: 2.75rem;
+	--sl-nav-height: calc(var(--dew-header-row) + var(--dew-topics-row));
+	--sl-sidebar-width: 16.5rem;
+	--sl-content-width: 46rem;
+	--sl-line-height: 1.65;
 }
 
-h1 {
-	font-size: 2.25rem !important;
-	line-height: 1.25 !important;
-	margin-bottom: 1rem;
+@media (min-width: 50rem) {
+	:root {
+		--dew-header-row: 4rem;
+	}
 }
 
-h2 {
-	font-size: 1.45rem !important;
-	margin-top: 2rem;
-	padding-bottom: 0.35rem;
-	border-bottom: 1px solid var(--sl-color-hairline-shade);
+/* The header element is Starlight's; the two rows inside it are ours. */
+.header {
+	padding-block: 0;
 }
 
-/* =====================================================================
-   HEADER & NAVBAR
-   ===================================================================== */
-header.header {
-	background-color: var(--sl-color-bg-nav) !important;
-	border-bottom: 1px solid var(--sl-color-hairline-shade) !important;
-	backdrop-filter: none !important;
-	-webkit-backdrop-filter: none !important;
-}
-
-/* =====================================================================
-   LEFT SIDEBAR (NAVIGATION)
-   ===================================================================== */
-nav.sidebar {
-	background-color: var(--sl-color-bg-sidebar) !important;
-	border-right: 1px solid var(--sl-color-hairline-shade) !important;
-}
-
-.sidebar-content summary {
-	font-size: 0.75rem !important;
-	font-weight: 700 !important;
-	text-transform: uppercase !important;
-	letter-spacing: 0.06em !important;
-	color: var(--sl-color-text-subtle) !important;
-	padding: 0.5rem 0.6rem !important;
-	border-radius: 4px;
-	transition: color 0.15s ease;
-}
-
-.sidebar-content summary:hover {
-	color: var(--sl-color-text) !important;
-}
-
-.sidebar-content a {
-	font-size: 0.875rem !important;
-	border-radius: 6px;
-	padding: 0.45rem 0.75rem !important;
-	margin: 1px 0;
-	color: var(--sl-color-text-muted) !important;
-	transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
-}
-
-.sidebar-content a:hover {
-	background-color: var(--sl-color-bg-chip) !important;
-	color: var(--sl-color-text) !important;
-	transform: translateX(2px);
-}
-
-.sidebar-content a[aria-current='page'] {
-	background-color: var(--sl-color-bg-chip) !important;
-	color: var(--sl-color-accent) !important;
-	font-weight: 600 !important;
-	border-left: 2px solid var(--sl-color-accent) !important;
-	border-radius: 0 6px 6px 0 !important;
-	transform: none !important;
-}
-
-/* =====================================================================
-   RIGHT SIDEBAR: "ON THIS PAGE" (TOC)
-   ===================================================================== */
-starlight-toc {
-	border-left: 1px solid var(--sl-color-hairline-shade);
-	padding-left: 1.25rem;
-}
-
-starlight-toc h2 {
-	font-size: 0.75rem !important;
-	font-weight: 700 !important;
-	text-transform: uppercase !important;
-	letter-spacing: 0.08em !important;
-	color: var(--sl-color-text-subtle) !important;
-	margin-bottom: 0.75rem !important;
-	padding-bottom: 0 !important;
-	border-bottom: none !important;
+.dew-header {
 	display: flex;
-	align-items: center;
-	gap: 0.45rem;
+	flex-direction: column;
+	height: 100%;
 }
 
-starlight-toc h2::before {
-	content: '';
-	display: inline-block;
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background-color: var(--sl-color-accent-purple); /* Dew Lilac indicator pip */
+.dew-header-row {
+	height: var(--dew-header-row);
+	flex-shrink: 0;
 }
 
-starlight-toc nav ul {
-	position: relative;
-	border-left: 1px solid var(--sl-color-hairline-shade);
-	margin-left: 0.25rem;
-	padding-left: 0;
-	list-style: none;
+.dew-header-row > .header {
+	height: 100%;
 }
 
-starlight-toc nav li {
-	margin: 0;
-	position: relative;
+/* The mobile menu button belongs to the first row, as a plain icon. */
+.sl-menu-button {
+	top: calc((var(--dew-header-row) - var(--sl-menu-button-size)) / 2);
+	background-color: transparent;
+	color: var(--sl-color-white);
+	box-shadow: none;
 }
 
-starlight-toc nav li a {
-	display: block;
-	font-size: 0.8125rem !important;
-	line-height: 1.5;
-	color: var(--sl-color-text-muted) !important;
-	padding: 0.35rem 0 0.35rem 1rem !important;
-	border-left: 2px solid transparent;
-	margin-left: -1px;
-	transition: all 0.15s ease-in-out;
-	text-decoration: none !important;
+.sl-menu-button:has(~ :popover-open) {
+	background-color: var(--sl-color-gray-6);
 }
 
-starlight-toc nav li a:hover {
-	color: var(--sl-color-text) !important;
-	border-left-color: var(--sl-color-hairline-light);
-}
-
-starlight-toc nav li a[aria-current='true'],
-starlight-toc nav li a.current {
-	color: var(--sl-color-accent) !important;
-	font-weight: 600 !important;
-	border-left-color: var(--sl-color-accent) !important;
-	background: linear-gradient(90deg, var(--sl-color-accent-wash) 0%, transparent 100%);
-}
-
-starlight-toc nav li ul {
-	margin-left: 1rem;
-	border-left: 1px dashed var(--sl-color-hairline-shade);
-}
-
-starlight-toc nav li ul li a {
-	font-size: 0.775rem !important;
-	padding-left: 0.75rem !important;
-	color: var(--sl-color-text-subtle) !important;
-}
-
-starlight-toc nav li ul li a:hover {
-	color: var(--sl-color-text) !important;
-}
-
-starlight-toc nav li ul li a[aria-current='true'],
-starlight-toc nav li ul li a.current {
-	color: var(--sl-color-accent-purple) !important;
-	border-left-color: var(--sl-color-accent-purple) !important;
-}
-
-/* =====================================================================
-   HERO SECTION
-   ===================================================================== */
-.hero {
-	padding-top: 3.5rem !important;
-	padding-bottom: 2.75rem !important;
-	border-bottom: 1px solid var(--sl-color-hairline-shade);
-	margin-bottom: 2.5rem;
-}
-
-.hero::before {
-	display: none !important;
-}
-
-.hero h1 {
-	font-size: 2.75rem !important;
-	font-weight: 700 !important;
-	letter-spacing: -0.03em;
-	color: var(--sl-color-text) !important;
-}
-
-.hero .tagline {
-	font-size: 1.15rem !important;
-	color: var(--sl-color-text-muted) !important;
-	line-height: 1.6;
-	max-width: 42rem;
-}
-
-.hero .actions a {
-	border-radius: 6px !important;
-	font-weight: 500 !important;
-	padding: 0.6rem 1.25rem !important;
-	box-shadow: none !important;
-	transition: background-color 0.15s ease, border-color 0.15s ease !important;
-}
-
-.hero .actions a.primary {
-	background-color: var(--sl-btn-primary-bg) !important;
-	color: var(--sl-btn-primary-text) !important;
-	border: 1px solid var(--sl-btn-primary-border) !important;
-}
-
-.hero .actions a.primary:hover {
-	background-color: var(--sl-btn-primary-hover) !important;
-	transform: none !important;
-}
-
-.hero .actions a.secondary {
-	border: 1px solid var(--sl-btn-secondary-border) !important;
-	background-color: var(--sl-btn-secondary-bg) !important;
-	color: var(--sl-btn-secondary-text) !important;
-}
-
-.hero .actions a.secondary:hover {
-	background-color: var(--sl-btn-secondary-hover) !important;
-	transform: none !important;
-}
-
-/* =====================================================================
-   CARDS & MATERIAL PANELS
-   ===================================================================== */
-.card-grid .card {
-	background-color: var(--sl-color-bg-card) !important;
-	border: 1px solid var(--sl-color-hairline-shade) !important;
-	border-radius: 8px !important;
-	padding: 1.5rem !important;
-	box-shadow: none !important;
-	transition: border-color 0.15s ease, background-color 0.15s ease !important;
-}
-
-.card-grid .card:hover {
-	transform: none !important;
-	background-color: var(--sl-color-bg-card-hover) !important;
-	border-color: var(--sl-color-hairline-light) !important;
-	box-shadow: none !important;
-}
-
-.card-grid .card .title {
-	font-size: 1rem;
+.site-title {
+	font-size: var(--sl-text-lg);
 	font-weight: 600;
-	color: var(--sl-color-text) !important;
-	margin-bottom: 0.5rem;
-}
-
-.card-grid .card .body {
-	color: var(--sl-color-text-muted) !important;
-	font-size: 0.9rem;
-	line-height: 1.5;
-}
-
-/* Card Icons: Dew Lilac & Sky */
-.card-grid .card svg {
-	color: var(--sl-color-accent) !important;
-}
-
-/* =====================================================================
-   CODE BLOCKS: ENHANCED CONTRAST & VISUAL TYPE DIFFERENTIATION
-   - Deep Black-Navy Canvas: #090b0f (High contrast against #12141a page)
-   - Code Frame Stroke: #222734 (Clean hairline boundary)
-   - Source Code Tab (Luau/Toml): Elevated Navy #141720 with Sky/Lilac accents
-   - Terminal Frame (bash/sh): Dark Shell #0f1118 with distinct prompt pip
-   ===================================================================== */
-
-:root[data-theme='dark'] {
-	--ec-brdCol: #222734;
-	--ec-brdRad: 8px;
-	--ec-codeBg: #090b0f;              /* Deep black-slate for maximum contrast */
-	--ec-codeFg: #f0f4fc;
-	--ec-frame-frameBoxShdCssVal: 0 4px 16px -4px rgba(0, 0, 0, 0.45);
-	--ec-frame-editorTabsBg: #131620;
-	--ec-frame-editorActiveTabBg: #090b0f;
-	--ec-frame-editorActiveTabFg: #56a4f0;
-	--ec-frame-editorActiveTabBrdCol: #222734;
-	--ec-frame-editorTabBrdCol: #1a1e29;
-	--ec-frm-trmTtbBg: #11141c;
-	--ec-frm-trmTtbFg: #92a2bc;
-	--ec-frm-trmTtbDotsFg: #56a4f0;
-	--ec-frm-trmTtbDotsOpa: 0.9;
-	--ec-termBg: #090b0f;
-	--ec-termFg: #f0f4fc;
-	--ec-termTitleBg: #11141c;
-	--ec-termTitleFg: #92a2bc;
-	--ec-sbThumbBg: #222734;
-	--ec-sbThumbHoverBg: #56a4f0;
-}
-
-:root {
-	--ec-brdCol: #cbd5e1;
-	--ec-brdRad: 8px;
-	--ec-codeBg: #f1f5f9;              /* Distinct contrast against #f8fafc page */
-	--ec-codeFg: #0f172a;
-	--ec-frame-frameBoxShdCssVal: 0 2px 8px -2px rgba(15, 23, 42, 0.08);
-	--ec-frame-editorTabsBg: #e2e8f0;
-	--ec-frame-editorActiveTabBg: #f1f5f9;
-	--ec-frame-editorActiveTabFg: #0284c7;
-	--ec-frame-editorActiveTabBrdCol: #cbd5e1;
-	--ec-frame-editorTabBrdCol: #e2e8f0;
-	--ec-frm-trmTtbBg: #1e293b;
-	--ec-frm-trmTtbFg: #94a3b8;
-	--ec-frm-trmTtbDotsFg: #64748b;
-	--ec-frm-trmTtbDotsOpa: 0.85;
-	--ec-termBg: #0f172a;
-	--ec-termFg: #f8fafc;
-	--ec-termTitleBg: #1e293b;
-	--ec-termTitleFg: #94a3b8;
-}
-
-.expressive-code {
-	margin: 1.5rem 0;
-}
-
-.expressive-code .frame {
-	border-radius: 8px !important;
-	border: 1px solid var(--ec-brdCol) !important;
-	background-color: var(--ec-codeBg) !important;
-	box-shadow: var(--ec-frame-frameBoxShdCssVal) !important;
-	overflow: hidden;
-}
-
-/* File Editor Tab Header */
-.expressive-code .frame.has-title:not(.is-terminal) .header {
-	background-color: var(--ec-frame-editorTabsBg) !important;
-	border-bottom: 1px solid var(--ec-brdCol) !important;
-	padding: 0 0.5rem;
-}
-
-.expressive-code .frame.has-title:not(.is-terminal) .title {
-	font-family: var(--sl-font-code) !important;
-	font-size: 0.8rem !important;
-	color: #56a4f0 !important;
-	background-color: var(--ec-codeBg) !important;
-	border: 1px solid var(--ec-brdCol) !important;
-	border-bottom: none !important;
-	padding: 0.35rem 0.85rem !important;
-	border-radius: 6px 6px 0 0 !important;
-}
-
-/* Terminal Header Bar (Native Expressive Code Terminal) */
-.expressive-code .frame.is-terminal .header {
-	background-color: var(--ec-frm-trmTtbBg) !important;
-	border-bottom: 1px solid var(--ec-brdCol) !important;
-	min-height: 2.25rem;
-}
-
-.expressive-code .frame.is-terminal .header .title {
-	font-family: var(--sl-font-code) !important;
-	font-size: 0.775rem !important;
-	color: var(--ec-frm-trmTtbFg) !important;
-	letter-spacing: 0.04em;
-	font-weight: 500;
-}
-
-.expressive-code pre {
-	background-color: var(--ec-codeBg) !important;
-	padding: 1.15rem 1.25rem !important;
-}
-
-.expressive-code code {
-	font-family: var(--sl-font-code) !important;
-	font-size: 0.85rem !important;
-	line-height: 1.65 !important;
+	color: var(--sl-color-white);
 	letter-spacing: -0.01em;
 }
 
-/* Shiki Tokens in Dark Mode */
-:root[data-theme='dark'] .expressive-code code .token.keyword,
-:root[data-theme='dark'] .expressive-code code span[style*="color:#569cd6"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#569CD6"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#C586C0"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#c586c0"] {
-	color: #56a4f0 !important; /* SKY */
+/* =====================================================================
+   TOPIC BAR. Stripe's second row: the topics as plain text, the current one
+   marked by colour and a rule on the header's bottom edge.
+   ===================================================================== */
+
+.dew-topics {
+	height: var(--dew-topics-row);
+	margin-inline: calc(-1 * var(--sl-nav-pad-x));
+	padding-inline: var(--sl-nav-pad-x);
+	overflow-x: auto;
+	scrollbar-width: none;
 }
 
-:root[data-theme='dark'] .expressive-code code .token.string,
-:root[data-theme='dark'] .expressive-code code span[style*="color:#ce9178"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#CE9178"] {
-	color: #ff7080 !important; /* CORAL */
+.dew-topics ul {
+	display: flex;
+	gap: 1.75rem;
+	height: 100%;
+	margin: 0;
+	padding: 0;
+	list-style: none;
 }
 
-:root[data-theme='dark'] .expressive-code code .token.function,
-:root[data-theme='dark'] .expressive-code code span[style*="color:#dcdcaa"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#DCDCAA"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#4ec9b0"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#4EC9B0"] {
-	color: #9686ec !important; /* LILAC */
+.dew-topics li {
+	display: flex;
 }
 
-:root[data-theme='dark'] .expressive-code code .token.comment,
-:root[data-theme='dark'] .expressive-code code span[style*="color:#6a9955"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#6A9955"] {
-	color: #606a7c !important; /* FAINT */
-	font-style: italic;
+.dew-topics a {
+	display: flex;
+	align-items: center;
+	white-space: nowrap;
+	font-size: var(--sl-text-sm);
+	font-weight: 500;
+	color: var(--sl-color-gray-3);
+	text-decoration: none;
+	border-bottom: 2px solid transparent;
+	/* Sit the rule on the header's own hairline. */
+	margin-bottom: -1px;
 }
 
-:root[data-theme='dark'] .expressive-code code .token.number,
-:root[data-theme='dark'] .expressive-code code span[style*="color:#b5cea8"],
-:root[data-theme='dark'] .expressive-code code span[style*="color:#B5CEA8"] {
-	color: #e9eff9 !important; /* TEXT */
+.dew-topics a:hover {
+	color: var(--sl-color-white);
 }
 
-.expressive-code .copy button {
-	border: 1px solid var(--ec-brdCol) !important;
-	border-radius: 4px !important;
-	background-color: var(--ec-frame-editorTabsBg) !important;
-	color: #92a2bc !important;
-	transition: all 0.15s ease;
-}
-
-.expressive-code .copy button:hover {
-	background-color: #20242e !important;
-	color: #e9eff9 !important;
-	border-color: #56a4f0 !important;
+.dew-topics a[data-current] {
+	color: var(--sl-color-accent);
+	border-bottom-color: var(--sl-color-accent);
 }
 
 /* =====================================================================
-   TABLES
+   SIDEBAR. Groups are small uppercase labels that do not collapse; links are
+   plain text, and the current one is coloured rather than filled.
    ===================================================================== */
-table {
-	border-collapse: collapse;
-	width: 100%;
-	margin: 1.5rem 0;
-	border: 1px solid var(--sl-color-hairline-shade);
-	border-radius: 6px;
-	background-color: var(--sl-color-bg-card);
+
+.sidebar-pane {
+	border-inline-end: 1px solid var(--sl-color-hairline);
 }
 
-th {
-	background-color: var(--sl-color-bg-table-header);
+.sidebar-content {
+	padding-top: 1.5rem;
+}
+
+.sidebar-content ul.top-level > li + li {
+	margin-top: 0.125rem;
+}
+
+.sidebar-content ul.top-level > li:has(> details) {
+	margin-top: 1.5rem;
+}
+
+.sidebar-content ul.top-level > li:has(> details) > details > summary {
+	pointer-events: none;
+	padding-block: 0 0.375rem;
+}
+
+.sidebar-content ul.top-level > li > details > summary .large {
+	font-size: 0.75rem;
 	font-weight: 600;
-	font-size: 0.85rem;
+	letter-spacing: 0.06em;
 	text-transform: uppercase;
-	letter-spacing: 0.04em;
-	color: var(--sl-color-text-muted);
-	padding: 0.75rem 1rem;
-	border-bottom: 1px solid var(--sl-color-hairline-shade);
-	border-right: 1px solid var(--sl-color-hairline-shade);
+	color: var(--sl-color-gray-3);
 }
 
-th:last-child {
-	border-right: none;
+.sidebar-content ul.top-level > li > details > summary .caret {
+	display: none;
 }
 
-td {
-	padding: 0.75rem 1rem;
-	font-size: 0.9rem;
-	border-bottom: 1px solid var(--sl-color-hairline-shade);
-	border-right: 1px solid var(--sl-color-hairline-shade);
-	color: var(--sl-color-text);
+.sidebar-content ul ul li {
+	margin-inline-start: 0;
+	border-inline-start: 0;
+	padding-inline-start: 0;
 }
 
-td:last-child {
-	border-right: none;
+.sidebar-content a,
+.sidebar-content a.large {
+	font-size: var(--sl-text-sm);
+	font-weight: 500;
+	color: var(--sl-color-gray-2);
+	padding: 0.3125rem 0.5rem;
+	border-radius: 0.375rem;
 }
 
-tr:last-child td {
-	border-bottom: none;
+.sidebar-content a:hover {
+	color: var(--sl-color-white);
+	background-color: var(--sl-color-gray-6);
 }
 
-tr:hover td {
-	background-color: var(--sl-color-bg-table-hover);
+.sidebar-content a[aria-current='page'],
+.sidebar-content a[aria-current='page']:hover {
+	color: var(--sl-color-accent);
+	background-color: transparent;
+	font-weight: 600;
+}
+
+/* =====================================================================
+   PAGE HEAD. Breadcrumbs, the title, a one-sentence lede, and the actions.
+   ===================================================================== */
+
+.content-panel:first-of-type {
+	padding-top: 2rem;
+}
+
+.dew-crumbs ol {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.375rem;
+	margin: 0 0 0.75rem;
+	padding: 0;
+	list-style: none;
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
+}
+
+.dew-crumbs li + li::before {
+	content: '/';
+	margin-inline-end: 0.375rem;
+	color: var(--sl-color-gray-4);
+}
+
+.dew-crumbs a {
+	color: var(--sl-color-gray-3);
+	text-decoration: none;
+}
+
+.dew-crumbs a:hover {
+	color: var(--sl-color-accent);
+}
+
+h1#_top {
+	margin-top: 0;
+	font-size: 2rem;
+	line-height: 1.2;
+	font-weight: 650;
+	letter-spacing: -0.02em;
+}
+
+.dew-lede {
+	margin-top: 0.5rem;
+	font-size: var(--sl-text-lg);
+	line-height: 1.5;
+	color: var(--sl-color-gray-3);
+}
+
+.dew-page-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+	margin-top: 1rem;
+}
+
+.dew-page-actions a {
+	padding: 0.25rem 0.625rem;
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.375rem;
+	font-size: var(--sl-text-xs);
+	font-weight: 500;
+	color: var(--sl-color-gray-2);
+	text-decoration: none;
+}
+
+.dew-page-actions a:hover {
+	color: var(--sl-color-white);
+	border-color: var(--sl-color-gray-4);
+}
+
+/* The title's own panel ends in a rule in Starlight; Stripe's does not. */
+.content-panel + .content-panel {
+	border-top: 0;
+}
+
+/* =====================================================================
+   BODY. Stripe's reading rhythm: no rules under headings, generous space
+   above them, and links that look like links.
+   ===================================================================== */
+
+.sl-markdown-content {
+	font-size: 0.9375rem;
+}
+
+.sl-markdown-content :is(h2, h3, h4):not(:where(.not-content *)) {
+	letter-spacing: -0.01em;
+	color: var(--sl-color-white);
+}
+
+.sl-markdown-content h2:not(:where(.not-content *)) {
+	margin-top: 2.5rem;
+	font-size: 1.375rem;
+	font-weight: 650;
+}
+
+.sl-markdown-content h3:not(:where(.not-content *)) {
+	margin-top: 2rem;
+	font-size: 1.125rem;
+	font-weight: 600;
+}
+
+.sl-markdown-content h4:not(:where(.not-content *)) {
+	font-size: 1rem;
+	font-weight: 600;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)) {
+	color: var(--sl-color-accent);
+	text-decoration: none;
+}
+
+.sl-markdown-content a:not(:where(.not-content *)):hover {
+	text-decoration: underline;
+	text-underline-offset: 0.2em;
+}
+
+.sl-markdown-content :not(pre) > code:not(:where(.not-content *)) {
+	padding: 0.125rem 0.3125rem;
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.25rem;
+	font-size: 0.85em;
+}
+
+.sl-markdown-content table {
+	font-size: var(--sl-text-sm);
+}
+
+.sl-markdown-content th {
+	font-weight: 600;
+	color: var(--sl-color-white);
+	background-color: var(--sl-color-gray-6);
+}
+
+/* =====================================================================
+   TABLE OF CONTENTS. Quiet, as Stripe's right column is.
+   ===================================================================== */
+
+.right-sidebar {
+	border-inline-start: 0;
+}
+
+.right-sidebar h2 {
+	font-size: 0.75rem;
+	font-weight: 600;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--sl-color-gray-3);
+}
+
+.right-sidebar a {
+	font-size: var(--sl-text-xs);
+	color: var(--sl-color-gray-3);
+}
+
+.right-sidebar a[aria-current='true'] {
+	color: var(--sl-color-accent);
+}
+
+/* =====================================================================
+   FOOTER. Stripe's: one line per question, no previous and next.
+   ===================================================================== */
+
+.dew-footer {
+	margin-top: 4rem;
+	padding-top: 1.5rem;
+	border-top: 1px solid var(--sl-color-hairline);
+	font-size: var(--sl-text-sm);
+	color: var(--sl-color-gray-3);
+}
+
+.dew-footer p {
+	margin: 0.25rem 0;
+}
+
+.dew-footer span {
+	font-weight: 600;
+	color: var(--sl-color-gray-2);
+	margin-inline-end: 0.375rem;
+}
+
+.dew-footer a {
+	color: var(--sl-color-accent);
+	text-decoration: none;
+}
+
+.dew-footer a:hover {
+	text-decoration: underline;
+}
+
+/* =====================================================================
+   CALLOUTS, from GitHub's alert syntax (`src/markdown/callouts.mjs`).
+   Stripe's are a quiet box with a bold title; so are these.
+   ===================================================================== */
+
+.sl-markdown-content .dew-callout {
+	margin-block: 1.5rem;
+	padding: 0.875rem 1rem;
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.5rem;
+	background-color: var(--sl-color-gray-6);
+}
+
+.sl-markdown-content .dew-callout > * + * {
+	margin-top: 0.5rem;
+}
+
+.sl-markdown-content .dew-callout-title {
+	font-size: var(--sl-text-sm);
+	font-weight: 650;
+	color: var(--sl-color-white);
+}
+
+.sl-markdown-content .dew-callout--note .dew-callout-title {
+	color: var(--sl-color-accent);
+}
+
+.sl-markdown-content .dew-callout--caution {
+	border-color: color-mix(in srgb, var(--sl-color-orange) 45%, var(--sl-color-hairline));
+}
+
+.sl-markdown-content .dew-callout--caution .dew-callout-title {
+	color: var(--sl-color-orange);
+}
+
+:root[data-theme='light'] .sl-markdown-content .dew-callout--caution .dew-callout-title {
+	color: var(--sl-color-orange-high);
+}
+
+/* =====================================================================
+   STEPS. A page with `steps: true` numbers its H2s, and a code span ending
+   one is a tag naming the file that step edits, as Stripe tags a step
+   "Server-side" or "Client-side".
+   ===================================================================== */
+
+.dew-steps .sl-markdown-content {
+	counter-reset: dew-step;
+}
+
+.dew-steps .sl-markdown-content h2 {
+	counter-increment: dew-step;
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0.625rem;
+}
+
+.dew-steps .sl-markdown-content h2::before {
+	content: counter(dew-step);
+	display: inline-grid;
+	place-items: center;
+	flex-shrink: 0;
+	width: 1.75rem;
+	height: 1.75rem;
+	border: 1px solid var(--sl-color-accent);
+	border-radius: 50%;
+	font-size: var(--sl-text-sm);
+	font-weight: 600;
+	color: var(--sl-color-accent);
+}
+
+.dew-steps .sl-markdown-content h2 > code:last-child {
+	padding: 0.125rem 0.5rem;
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 999px;
+	background-color: transparent;
+	font-size: 0.75rem;
+	font-weight: 500;
+	color: var(--sl-color-gray-3);
+}
+
+/* =====================================================================
+   DIRECTORY TREES, from ```tree fences (`src/markdown/trees.mjs`). The
+   layout is the instruction, so it is drawn as one.
+   ===================================================================== */
+
+.sl-markdown-content .dew-tree {
+	margin-block: 1.5rem;
+	padding: 1rem 1.25rem;
+	border: 1px solid var(--sl-color-hairline);
+	border-radius: 0.5rem;
+	font-family: var(--sl-font-code);
+	font-size: 0.8125rem;
+	line-height: 1.9;
+}
+
+.sl-markdown-content .dew-tree ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.sl-markdown-content .dew-tree ul ul {
+	margin-inline-start: 0.4375rem;
+	padding-inline-start: 1rem;
+	border-inline-start: 1px solid var(--sl-color-hairline);
+}
+
+.sl-markdown-content .dew-tree li {
+	margin: 0;
+}
+
+.sl-markdown-content .dew-tree-dir > .dew-tree-name {
+	font-weight: 600;
+	color: var(--sl-color-white);
+}
+
+.sl-markdown-content .dew-tree-file > .dew-tree-name {
+	color: var(--sl-color-gray-1);
+}
+
+.sl-markdown-content .dew-tree-note {
+	margin-inline-start: 1.25rem;
+	font-family: var(--sl-font);
+	color: var(--sl-color-gray-3);
+}
+
+.sl-markdown-content .dew-tree-note code {
+	font-size: 0.95em;
 }

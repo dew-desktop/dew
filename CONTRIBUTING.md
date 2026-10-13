@@ -107,21 +107,50 @@ thing working.
 ## Documentation
 
 `docs/` is the documentation, as plain Markdown that reads correctly on GitHub.
-Pages link to each other by relative path, `[scope](datamodel_scope.md)`, and a
-page is in the site's navigation by being in `guides/`, `reference/` or `spec/`.
+Each top-level directory is a topic on the site (`get-started/`, `build/`,
+`reference/`, `spec/`), and each subdirectory of a topic is a group in its
+sidebar, listed in `site/src/topics.mjs`. A page is in the navigation by
+existing. Pages link to each other by relative path, `[scope](datamodel_scope.md)`.
 `docs/spec/` is the specification and is MIT, under its own `LICENSE`.
 
-`site/` renders it with Starlight. Pages built from components, like the landing
-page, live in `site/src/pages/`. To preview:
+Three conventions render specially on the site and stay readable on GitHub:
+
+- **A directory layout** is a fenced block marked `tree`. Two spaces of indent are
+  one level, a name ending in `/` is a directory, and text after `#` describes
+  the entry.
+- **A callout** is GitHub's alert syntax: `> [!NOTE]`, `> [!TIP]`,
+  `> [!IMPORTANT]`, `> [!WARNING]` or `> [!CAUTION]` on the first line of a quote.
+- **A task page** sets `steps: true` in its frontmatter. Its H2s are numbered
+  steps, and a code span ending a step's heading names the file that step edits:
+  ``## Grant the permission `dew.toml` ``.
+
+How a page reads:
+
+- **Teach the files.** An applet is a directory, and its layout and the contents
+  of its files are the instruction. A `dew` command is one way to run what the
+  files describe today, not the subject of the page.
+- **Title by task or by name.** A task is imperative, "Store settings between
+  runs". A concept is a noun, "Surfaces". A reference page is the thing's name.
+- **One sentence of lede.** The frontmatter `description` says what the reader
+  gets, in under a dozen words, and is shown under the title.
+- **Second person, present tense.** One action per step, and the sentence after
+  the code says what the reader now has.
+- **The default, then how to change it.** State each default and each constraint
+  as its own sentence.
+- **Only what works.** A feature that is declared but not honoured is described
+  as exactly that.
+
+`site/` renders `docs/` with Starlight. Pages built from components, like the
+home page, live in `site/src/pages/`. To preview:
 
 ```sh
 cd site && pnpm install && pnpm dev
 ```
 
-`pnpm build` fails on a link to a page or heading that does not exist.
-`docs/spec/datamodel_scope.md` is generated: change the classification in
-`host/src/bin/datamodel_surface.rs` and run
-`cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown`.
+`pnpm build` fails on a link to a page or heading that does not exist, and on a
+page missing from its topic's navigation. `docs/spec/datamodel_scope.md` is
+generated: change the classification in `host/src/bin/datamodel_surface.rs` and
+run `cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown`.
 
 ## Pull requests
 

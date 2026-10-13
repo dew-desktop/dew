@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const DOCS = fileURLToPath(new URL('../../docs/', import.meta.url));
+const DOCS = fileURLToPath(new URL('../../../docs/', import.meta.url));
 const RELATIVE_MARKDOWN = /^(?![a-z][a-z0-9+.-]*:|\/|#)([^#?]+\.mdx?)(#.*)?$/i;
 
 /**

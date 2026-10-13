@@ -1,4 +1,5 @@
 import { defineCollection } from 'astro:content';
+import { z } from 'astro/zod';
 import { glob } from 'astro/loaders';
 import { docsSchema } from '@astrojs/starlight/schema';
 
@@ -9,6 +10,12 @@ import { docsSchema } from '@astrojs/starlight/schema';
 export const collections = {
 	docs: defineCollection({
 		loader: glob({ base: '../docs', pattern: '**/[^_]*.md' }),
-		schema: docsSchema(),
+		schema: docsSchema({
+			extend: z.object({
+				// A task page: its H2s are numbered steps, and a code span that ends a
+				// step's heading is drawn as a tag naming the file the step edits.
+				steps: z.boolean().default(false),
+			}),
+		}),
 	}),
 };

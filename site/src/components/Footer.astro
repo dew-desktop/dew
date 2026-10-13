@@ -1,0 +1,22 @@
+---
+import { issueUrl, releasesUrl, REPOSITORY, sourcePath } from '../repository.mjs';
+
+const { entry } = Astro.locals.starlightRoute;
+const source = sourcePath(entry.filePath);
+const report = issueUrl(`Docs: ${entry.data.title}${source ? ` (${source})` : ''}`);
+---
+
+<footer class="dew-footer print:hidden">
+	<p>
+		<span>Something wrong or missing?</span>
+		<a href={report}>Report a problem with this page</a>.
+	</p>
+	<p>
+		<span>What changed?</span>
+		<a href={releasesUrl}>Read the release notes</a>.
+	</p>
+	<p>
+		<span>Want to help?</span>
+		<a href={`${REPOSITORY}/blob/main/CONTRIBUTING.md`}>Contribute to Dew</a>.
+	</p>
+</footer>
