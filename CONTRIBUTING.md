@@ -34,9 +34,9 @@ it even when nobody thought to ask for `dew --version` separately.
 None of it is a compatibility promise. It does not say whether a given mod
 still works after an update; that answer lives entirely in
 `experimentalDatamodel`'s revision pinning (see
-[docs/applet_contract.md](docs/applet_contract.md)), not in this number. A
-build with a higher count is not guaranteed to behave the same as one with
-a lower count, and a mod that needs that guarantee should pin the
+[docs/spec/applet_contract.md](docs/spec/applet_contract.md)), not in this
+number. A build with a higher count is not guaranteed to behave the same as one
+with a lower count, and a mod that needs that guarantee should pin the
 revisions it depends on rather than reading this string.
 
 ## Checking it
@@ -100,8 +100,9 @@ separate fix needed.
 
 ## Writing an applet
 
-[docs/applet_contract.md](docs/applet_contract.md) is what a `dew.toml` and an
-entry module have to say. [examples/](examples/) is the same thing working.
+[docs/spec/applet_contract.md](docs/spec/applet_contract.md) is what a
+`dew.toml` and an entry module have to say. [examples/](examples/) is the same
+thing working.
 
 ## Pull requests
 

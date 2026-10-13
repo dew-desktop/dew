@@ -44,7 +44,7 @@
 //!
 //! THE STANDARD QUESTION IS ANSWERED, AND THE SHAPE IS STILL DEW'S. Whether a
 //! conforming host MUST expose text metrics and a frame clock was flagged here
-//! and answered YES on 2026-09-04, in `docs/host_services.md` -- its own
+//! and answered YES on 2026-09-04, in `docs/spec/host_services.md` -- its own
 //! hand-written half of the standard, not a section of the generated
 //! `datamodel_scope.md`, because neither service is a member of any class and
 //! regenerating that document after these landed produced a byte-identical file.

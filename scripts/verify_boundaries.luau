@@ -115,7 +115,7 @@ end
 
 -- 1 - THE HOST IS RUST; THE GUEST BRINGS THE LUAU ----------------------------
 --
--- `docs/applet_contract.md` states it: "Dew ships no Luau of its own". A host that
+-- `docs/spec/applet_contract.md` states it: "Dew ships no Luau of its own". A host that
 -- grew a Luau layer would be a second framework competing with the one its guests
 -- already chose, and the applet contract would stop being a contract.
 
@@ -138,7 +138,7 @@ for _, dir in ipairs({ "host", "crates" }) do
 		if string.match(path, "%.luau?$") and not table.find(HOST_LUAU_ALLOWED, path) then
 			fail(
 				`{path}: Luau inside the host. Dew ships no Luau of its own -- the host is Rust `
-					.. `and the guest brings the Luau. See docs/applet_contract.md.`
+					.. `and the guest brings the Luau. See docs/spec/applet_contract.md.`
 			)
 		end
 	end
@@ -264,7 +264,7 @@ for _, path in ipairs(LOADING_PATH) do
 			fail(
 				`{path}: names Aether in its loading path. The host gives a mod a root and the `
 					.. `\`dew\` table and knows nothing else about what the mod is built from -- `
-					.. `see docs/applet_contract.md.`
+					.. `see docs/spec/applet_contract.md.`
 			)
 		end
 	end

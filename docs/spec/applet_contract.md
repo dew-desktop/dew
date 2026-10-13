@@ -1,4 +1,7 @@
-# The Dew applet contract
+---
+title: The Dew Applet Contract
+description: Architectural contract for applet declaration, lifecycles, and surface mounting.
+---
 
 ## An applet describes itself; it does not perform a registration
 

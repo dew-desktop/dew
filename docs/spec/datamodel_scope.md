@@ -1,11 +1,12 @@
-# DataModel Standard: scope
+---
+title: "DataModel Standard: Scope"
+description: Which DataModel classes, properties, methods and events a conforming host implements.
+---
 
 <!-- GENERATED. Regenerate with:
        lune run scripts/fetch_api_surface.luau   # only to move the engine pin
-       cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown > docs/datamodel_scope.md
-     Do not edit by hand; edit the classification lists in the tool.
-     The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
-     the command it gave had never run. -->
+       cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown
+     Do not edit by hand; edit the classification lists in the tool. -->
 
 Measured against the engine **0.741.19.7411056**, from the engine's API dump pinned
 at that build by `scripts/fetch_api_surface.luau`. Both the property half

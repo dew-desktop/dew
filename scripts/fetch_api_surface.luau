@@ -28,7 +28,7 @@
 
 	WHY IT IS PINNED RATHER THAN LIVE
 	The build this writes is the build the standard is measured against, and it
-	must be a fact rather than a moving target. `docs/datamodel_scope.md` and
+	must be a fact rather than a moving target. `docs/spec/datamodel_scope.md` and
 	`conformance/cases/*.luau` once disagreed about which the engine they describe
 	-- two builds eight apart inside one standard -- because the property half tracked whatever the Rust crate shipped
 	and nobody was told when it moved. Recording the version here is what lets

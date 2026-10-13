@@ -5,13 +5,46 @@
 //! answer is a number rather than an impression, and it is regenerated when
 //! the pinned dump tracks a new upstream build.
 //!
-//! Run with `cargo run --bin datamodel-surface`.
+//! Run with `cargo run --bin datamodel-surface`. `--markdown` writes the
+//! specification's scope document to `docs/spec/datamodel_scope.md`, and
+//! `--markdown --check` fails when the committed one differs.
 
 use dew_host::datamodel::render::honours::{honours, Honour};
 use dew_host::scope::{
     ApiClass, ApiSurface, API_SURFACE_MISSING, INPUT_DEVICE, MODIFIERS, NOT_UI, OUT_OF_SCOPE,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt::Write as _;
+use std::path::Path;
+
+/// Where `--markdown` writes, relative to the repository root.
+const SCOPE_DOCUMENT: &str = "docs/spec/datamodel_scope.md";
+
+/// Writes the scope document, or with `check` compares it against the
+/// committed one. `\r\n` is normalized away first: a Windows checkout hands
+/// back CRLF for content that is byte-identical in the repository.
+fn write_or_check(document: &str, check: bool) {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+    let path = Path::new(&manifest_dir)
+        .parent()
+        .expect("host/ has a parent")
+        .join(SCOPE_DOCUMENT);
+    if check {
+        let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+        if on_disk.replace("\r\n", "\n") == document {
+            println!("{SCOPE_DOCUMENT} is up to date.");
+        } else {
+            eprintln!(
+                "{SCOPE_DOCUMENT} is STALE. Run `cargo run --manifest-path host/Cargo.toml \
+                 --bin datamodel-surface -- --markdown` and commit the result."
+            );
+            std::process::exit(1);
+        }
+        return;
+    }
+    std::fs::write(&path, document).unwrap_or_else(|e| panic!("write {SCOPE_DOCUMENT}: {e}"));
+    println!("wrote {SCOPE_DOCUMENT}");
+}
 
 /// One class's row: its in-scope properties, and three different questions
 /// asked of each.
@@ -236,6 +269,7 @@ fn main() {
     // datamodel surface has a machine-readable source, and a hand-maintained
     // list of 160 properties would be wrong within one upstream release.
     let markdown = std::env::args().any(|a| a == "--markdown");
+    let check = std::env::args().any(|a| a == "--check");
     // NOT GENERATED IS AN ORDINARY STATE, and this says so rather than panicking:
     // the file is gitignored because it derives from a third party's published
     // data (NOTICE), so a fresh clone has never had it.
@@ -515,7 +549,7 @@ fn main() {
     let in_scope_total = covered_total + backlog.len();
 
     if markdown {
-        emit_markdown(
+        let document = emit_markdown(
             &api.version,
             &ui_classes,
             &per_class,
@@ -539,6 +573,7 @@ fn main() {
             implemented_input,
             build_skew,
         );
+        write_or_check(&document, check);
         return;
     }
 
@@ -703,17 +738,30 @@ fn emit_markdown(
     implemented_events: usize,
     implemented_input: usize,
     build_skew: Option<(&str, &str)>,
-) {
-    println!("# DataModel Standard: scope\n");
+) -> String {
+    // THE BODY PRINTS, AND THE PRINTS LAND IN `out`. These two shadow the std
+    // macros for this function only, so the body reads as the text it emits and
+    // `main` decides whether that text is written or compared.
+    let mut out = String::new();
+    macro_rules! println {
+        () => { out.push('\n') };
+        ($($arg:tt)*) => {{ let _ = writeln!(out, $($arg)*); }};
+    }
+    macro_rules! print {
+        ($($arg:tt)*) => {{ let _ = write!(out, $($arg)*); }};
+    }
+
+    println!("---");
+    println!("title: \"DataModel Standard: Scope\"");
+    println!(
+        "description: Which DataModel classes, properties, methods and events a conforming host implements."
+    );
+    println!("---\n");
     println!("<!-- GENERATED. Regenerate with:");
     println!("       lune run scripts/fetch_api_surface.luau   # only to move the engine pin");
     print!("       cargo run --manifest-path host/Cargo.toml --bin datamodel-surface");
-    println!(" -- --markdown > docs/datamodel_scope.md");
-    println!("     Do not edit by hand; edit the classification lists in the tool.");
-    println!(
-        "     The bin is datamodel-surface, hyphenated. This line said datamodel_surface and
-     the command it gave had never run. -->\n"
-    );
+    println!(" -- --markdown");
+    println!("     Do not edit by hand; edit the classification lists in the tool. -->\n");
     println!("Measured against the engine **{version}**, from the engine's API dump pinned");
     println!("at that build by `scripts/fetch_api_surface.luau`. Both the property half");
     println!("and the method/event half come from that one source, which is also the build");
@@ -1010,4 +1058,5 @@ fn emit_markdown(
         println!("satisfy. Closing this means moving the property half onto the pinned dump too,");
         println!("or pinning the crate to the build the dump names.");
     }
+    out
 }

@@ -1,4 +1,7 @@
-# DataModel Standard: host services
+---
+title: "DataModel Standard: Host Services"
+description: Specifications for mandatory host services including text measurement and frame subscriptions.
+---
 
 Written 2026-09-04, after milestone 2's sprints 7 and 8. Hand-written, and
 deliberately not part of [`datamodel_scope.md`](datamodel_scope.md), which is
@@ -150,10 +153,10 @@ here and not an argument that here is right.
 
 The standard's documents are currently split across two repositories:
 
-    dew/docs/datamodel_scope.md      generated; classes, properties, members
-    dew/docs/host_services.md        this file
-    aether/conformance/LAYOUT.md     layout behaviour
-    aether/conformance/cases/*.luau  the cases, run by both implementations
+    dew/docs/spec/datamodel_scope.md   generated; classes, properties, members
+    dew/docs/spec/host_services.md     this file
+    aether/conformance/LAYOUT.md       layout behaviour
+    aether/conformance/cases/*.luau    the cases, run by both implementations
 
 **`LAYOUT.md` sitting in Aether is the odd one, and ADR-004 is why it now reads
 oddly.** ADR-004 says Aether must "run on any host that adheres to the DataModel

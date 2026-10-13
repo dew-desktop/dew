@@ -594,7 +594,7 @@ impl Renderer {
 /// was handed. What a guest reaches through `game` on the engine is the SERVICES
 /// behind it, and those are `desktop.Text` and `desktop.Clock`, installed above: the two
 /// things a guest framework genuinely could not compute for itself, and required
-/// of a conforming host by `docs/host_services.md` since 2026-09-04.
+/// of a conforming host by `docs/spec/host_services.md` since 2026-09-04.
 ///
 /// THIS COMMENT HAS BEEN WRONG IN BOTH DIRECTIONS AND IS NOW SCOPED SO IT CANNOT
 /// BE AGAIN. It first said `game` "arrives when there is enough behind it to be

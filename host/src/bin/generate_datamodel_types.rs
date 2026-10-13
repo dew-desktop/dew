@@ -28,7 +28,7 @@
 //! no events, ever (`scripts/fetch_api_surface.luau`'s own header says so
 //! explicitly, which is why that script exists at all: it vendors a separate,
 //! ~40-class pinned API dump, scoped to the `GuiObject` subtree
-//! `docs/datamodel_scope.md` measures, specifically to recover method/event
+//! `docs/spec/datamodel_scope.md` measures, specifically to recover method/event
 //! signatures this crate cannot provide).
 //!
 //! This generator declaring the whole hierarchy means every one of those
@@ -484,7 +484,7 @@ const HEADER: &str = "\
 -- and commit the result. CI's `Check the generated DataModel editor types are
 -- current` step runs the same binary with `--check`, which regenerates into
 -- memory and diffs against this file without writing, the same discipline
--- `docs/datamodel_scope.md` already asks for in its own header comment.
+-- `docs/spec/datamodel_scope.md` already asks for in its own header comment.
 --
 -- Owns the entire DataModel class and enum hierarchy this host accepts,
 -- including `host/src/datamodel/extensions.rs`'s Dew-original rows
