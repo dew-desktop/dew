@@ -21,9 +21,9 @@
 	IT MOVED, in milestone 2's first sprint: `crates/raster`, `crates/runtime` and
 	`crates/window` are Dew's, and `host/Cargo.toml` names no git dependency on the
 	Aether repository at all. What Dew still takes from Aether is LUAU, and it takes
-	it the way it takes vide -- a pesde dependency pinned by commit in `pesde.toml`,
-	installed into `roblox_packages/` as a guest package. Aether is a GUEST here,
-	never a dependency of the host.
+	it the way it takes vide -- a pesde dependency pinned by commit in each
+	applet's `pesde.toml`, installed into `roblox_packages/` as a guest package.
+	Aether is a GUEST here, never a dependency of the host.
 
 	A BOUNDARY WITH NOTHING CHECKING IT IS A BOUNDARY NOBODY FOLLOWS. This project
 	has found that class five times in one milestone: `rbx_reflection` sat in
@@ -303,33 +303,20 @@ if #retiring > 0 then
 	)
 end
 
---- THE HOST DECLARES NO FRAMEWORK, and this is what keeps that true.
+--- THE HOST DECLARES NO FRAMEWORK, because the repository root has no pesde
+--- manifest to declare one in. An applet names Aether and vide in its own
+--- `pesde.toml` and reaches them through the redirect pesde writes beside it.
 ---
---- Milestone 6 emptied `[dependencies]`: an applet declares Aether and vide in its
---- own manifest and reaches them through the redirect pesde writes beside it, so
---- nothing Dew ships needs a framework. Both stayed on as DEV dependencies,
---- because Dew tests against them and `dew test` reads suites out of a checkout.
----
---- The pressure this resists is an application in the monorepo -- a demo, a
---- sample, a scratch app -- finding it convenient to add its dependency at the
---- root rather than carry its own manifest. That is one line, it works
---- immediately, and it silently re-couples the host to a guest framework.
---- ADR-008 puts the framework demo in this repository on exactly that condition.
-local manifest = fs.readFile("pesde.toml")
-local deps = string.match(manifest, "\n%[dependencies%]\n(.-)\n%[")
-if deps then
-	for line in string.gmatch(deps, "[^\n]+") do
-		local trimmed = string.gsub(line, "^%s+", "")
-		if trimmed ~= "" and string.sub(trimmed, 1, 1) ~= "#" then
-			local name = string.match(trimmed, "^([%w_%-]+)%s*=") or trimmed
-			fail(
-				`pesde.toml declares '{name}' under [dependencies]. The host ships no `
-					.. "framework: an application that needs one carries its own manifest, the "
-					.. "way examples/*/*/pesde.toml do. Move it to [dev_dependencies] if Dew's own "
-					.. "tests need it."
-			)
-		end
-	end
+--- The pressure this resists is an application in the monorepo, a demo or a
+--- scratch app, finding it convenient to install its framework at the root
+--- rather than carry its own manifest. That is one file, it works immediately,
+--- and it silently re-couples the host to a guest framework.
+if fs.isFile("pesde.toml") then
+	fail(
+		"pesde.toml exists at the repository root. The host ships no framework: an "
+			.. "application that needs one carries its own manifest, the way "
+			.. "examples/*/*/pesde.toml do."
+	)
 end
 
 table.sort(outstanding)

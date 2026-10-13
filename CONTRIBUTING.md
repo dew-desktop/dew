@@ -25,11 +25,11 @@ version plus a running build count, for example:
 0.1.0.242
 ```
 
-The first three numbers are `host/Cargo.toml`'s version. The last is a
-plain count of commits, incrementing on every commit regardless of what
-changed. The same identifier appears in the tray's About entry and at the
-top of a panic report, so a crash always carries it even when nobody
-thought to ask for `dew --version` separately.
+The first three numbers are the workspace version, `[workspace.package]` in
+the root `Cargo.toml`. The last is a plain count of commits, incrementing on
+every commit regardless of what changed. The same identifier appears in the
+tray's About entry and at the top of a panic report, so a crash always carries
+it even when nobody thought to ask for `dew --version` separately.
 
 None of it is a compatibility promise. It does not say whether a given mod
 still works after an update; that answer lives entirely in
@@ -114,14 +114,14 @@ runs.
 ## Releases
 
 A release is a tag on `main`, not a branch. Tagging a commit `v0.1.0` (`v`
-plus whatever `host/Cargo.toml`'s `version` field reads at that commit)
-triggers a workflow that builds `dew.exe` in release mode on Windows and
-attaches it to a GitHub Release for that tag. Cutting a release means
-bumping `host/Cargo.toml`'s version in an ordinary pull request first, then
-tagging the resulting commit once it lands: the release workflow checks the
-tag's version against `host/Cargo.toml` and refuses to build if they
-disagree, so a shipped `dew.exe`'s own `--version` output always matches the
-tag it was published under.
+plus the workspace version at that commit) triggers a workflow that builds
+`dew.exe` in release mode on Windows and attaches it to a GitHub Release for
+that tag, with notes generated from the pull requests merged since the last
+one. Cutting a release means bumping `version` under `[workspace.package]` in
+the root `Cargo.toml` in an ordinary pull request first, then tagging the
+resulting commit once it lands. The workflow refuses to build a tag whose
+version disagrees, so a shipped `dew.exe`'s own `--version` output always
+matches the tag it was published under.
 
 There is no `release/x.y` branch maintained alongside ongoing work on
 `main`. The one case that branch is for is reactive: hotfixing something

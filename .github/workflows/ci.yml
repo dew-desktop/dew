@@ -736,27 +736,21 @@ jobs:
           workspaces: .
           shared-key: ${{ runner.os }}-release
 
-      # THE TAG-TO-VERSION DECISION, ENFORCED, NOT JUST STATED. Sprint 3 left
-      # open whether `host/Cargo.toml`'s `version` field, reused as the build
-      # identifier's source, would ever need to serve two masters at once.
-      # A release tag is the concrete case: this sprint decides that cutting
-      # a release requires `Cargo.toml`'s version to already read what the
-      # tag says, checked here rather than left as an unenforced convention,
-      # so a tag and the build identifier it ships can never silently drift.
-      # A tag's own pre-release or build-metadata suffix (`-rc1`, `+test`) is
-      # stripped before comparing, since that suffix describes the TAG
-      # (a staging or verification cut) rather than the crate version it was
-      # built from.
-      - name: Verify the tag's version matches host/Cargo.toml
+      # A TAG MUST NAME THE VERSION IT SHIPS. The version lives once, in the
+      # root Cargo.toml's `[workspace.package]`, and Cargo is asked for it rather
+      # than a manifest being grepped. A suffix (`-rc1`, `+test`) describes the
+      # tag, not the crate, and is stripped before comparing.
+      - name: Verify the tag's version matches the workspace version
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
           core="${tag%%-*}"
           core="${core%%+*}"
-          cargo_version=$(grep -m1 -oE '^version = "[^"]+"' host/Cargo.toml | cut -d'"' -f2)
-          echo "tag: $GITHUB_REF_NAME (core version $core), host/Cargo.toml: $cargo_version"
+          pkgid=$(cargo pkgid --manifest-path host/Cargo.toml)
+          cargo_version="${pkgid##*@}"
+          echo "tag: $GITHUB_REF_NAME (core version $core), workspace: $cargo_version"
           test "$core" = "$cargo_version" || {
-            echo "::error::Tag $GITHUB_REF_NAME's version ($core) does not match host/Cargo.toml's version ($cargo_version). Bump host/Cargo.toml's version in the commit a release tag points at before tagging it."
+            echo "::error::Tag $GITHUB_REF_NAME names $core but the workspace version is $cargo_version. Bump [workspace.package] version in Cargo.toml, merge, then tag that commit."
             exit 1
           }
 
@@ -797,4 +791,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "target/release/dew.exe" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Automated release build for $GITHUB_REF_NAME."
+            --generate-notes
