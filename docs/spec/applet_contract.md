@@ -1,50 +1,34 @@
 ---
-title: The Dew Applet Contract
-description: Architectural contract for applet declaration, lifecycles, and surface mounting.
+title: Applet structure
+description: The files that make up an applet, and how Dew uses them.
+sidebar:
+  order: 1
 ---
 
-## An applet describes itself; it does not perform a registration
+An **applet** is a directory with a `dew.toml` manifest and a Luau entry module in
+it. Dew reads the manifest, loads the module, opens a surface for it to draw into,
+and calls its `mount` function. This page describes each of those steps, so you
+know what to put in each file and what to expect when your applet runs.
 
-```luau
-local Aether = require("@aether")
-local create, source = Aether.create, Aether.source
+## Directory layout
 
-local function mount(desktop, root)
-    local elapsed = source(0)
-    ;(create "Frame" { --[[ ... ]] } :: any).Parent = root
-end
-
-return {
-    id = "timetracker",
-    size = { width = 380, height = 56 },
-    mount = mount,
-}
+```tree
+clock/
+  dew.toml       # what the applet is, and what it can reach
+  clock.luau     # the entry module, named after the manifest's `id`
+  droplet.png    # an image, loaded as `mod://droplet.png`
 ```
 
-Loading an applet **describes** it. It does not **do** anything until the host
-calls `mount`.
+Dew loads the entry module named after the `id` in `dew.toml`, here `clock.luau`.
+If there is no such file, it loads `main.luau` instead.
 
-The previous shape was `dew.hud.registerComponent({ ... })` -- a call with
-effects, made during load. That ordering makes the host's job impossible: to
-find out what a mod is, it had to run the mod, and by then the applet had
-already reached for whatever it wanted. A declaration can be read, checked
-against `dew.toml`, and refused, all before a line of the mod's own logic
-executes.
+## Entry module
 
-This is the same rule the runtime already enforces one layer down: the guest
-VM is deny-by-default and every capability is a function the host installs by
-name. A registration-by-side-effect API quietly undoes that at the layer
-above.
-
-## One loader, one signature, no framework named
-
-`mount(desktop, root)` is the only shape there is. The host gives every mod a root
-to parent into and the `desktop` capability table, and knows nothing else about
-what the mod is built from:
+The entry module returns a table that describes your applet. Loading the module
+only describes it; your interface is built when Dew calls `mount`.
 
 ```luau
 return {
-    id = "nameplate",
     size = { width = 340, height = 148 },
 
     mount = function(desktop, root)
@@ -56,49 +40,55 @@ return {
 }
 ```
 
-Discovery, the manifest, the sandbox, the capability table, `size`, and the
-fact that `mount` runs once are decided the same way for every applet. An
-applet that wants a framework requires one from its own installed packages
-(`@aether`, `@vide`, or anything else) and mounts it itself; an applet that
-wants nothing writes `Instance.new` directly, the way `examples/widgets/nameplate`
-does. Neither is a manifest field, because `mount(desktop, root)` looks identical
-either way -- what differs is what runs *inside* the function the host calls,
-which is the applet's business and not the loader's.
+| Field | Type | Meaning |
+| :--- | :--- | :--- |
+| `size` | `{ width, height }` | The size of the surface, in pixels. Defaults to 380 by 56. |
+| `surface` | table | Which kind of surface to open, and its options. Defaults to a widget. See [Surfaces](#surfaces). |
+| `mount` | `function(desktop, root)` | Builds your interface. Required unless the module asks for its surface while loading. |
 
-This used to be two contracts: `mount(desktop)` for an applet built with Aether,
-called inside a reactive scope with a `Session` the host drove, and
-`mount(desktop, root)` for one built against the DataModel directly. Milestone 9
-removed the first arm along with `Runtime`, the manifest field that chose
-between them, because the difference it named was never the host's to
-ceremony over. `UserInputService` and `RunService.Heartbeat` (ADR-010) are
-real DataModel members now, so a framework that drives itself by polling
-services -- which is what Aether already does on the engine -- drives itself
-identically here. The host delivers input to nobody; it answers when asked.
+### The `desktop` table
 
-**The root is a parameter, like `desktop`.** No applet reaches for a global to
-find where it draws. The root is a `ScreenGui` named `DewRoot` -- not `game`,
-which nothing in Dew installs -- and it exists before `mount` is called,
-whether the applet asked for its surface explicitly or is about to read one
-off the return value below.
+`desktop` holds everything your applet can reach outside its own interface, such
+as the clock, storage or the clipboard. It contains only what your manifest
+grants. Something you did not ask for is `nil`, so a missing permission shows up
+as an error on the line that uses it.
 
-**A mod can be clicked.** Tree navigation (`GetChildren`, `FindFirstChild`,
-`IsA`, `Destroy`), the signal model (`Changed`, `GetPropertyChangedSignal`,
-the tree-and-lifecycle events, `:Connect`/`:Disconnect`), and the whole
-pointer family (`Activated`, hover, hit testing) all reach a mod written with
-no framework at all. Three things to know about them. **Assigning a property
-the value it already has fires nothing** -- that is deliberate, and it is what
-lets the host draw a static mod once instead of every frame. **`signal:Wait()`
-is not available**: it yields on the engine and Dew has no task scheduler, so
-it raises a message saying so rather than pretending; connect a handler. And
-**a handler that errors is reported and does not fail the write that notified
-it**, because on the engine each handler has its own thread and here it does
-not.
+`desktop` is available as a global while your module loads, and Dew passes the
+same table to `mount`. The [`desktop` reference](../reference/desktop.md) lists
+every member.
 
-## Surfaces are capabilities
+### The root
 
-`desktop.Widget{}`, `desktop.Window{}`, `desktop.Overlay{}` and `desktop.popover{}` each ask
-the host for somewhere to draw and hand back the root to parent into --
-**before `mount` is even called, if the applet wants**:
+`root` is the instance you parent your interface to. It is a `ScreenGui` named
+`DewRoot`, and it already exists when `mount` runs. There is no `game` object in
+Dew.
+
+## Mounting
+
+Dew calls `mount` once. Build your interface there, and update it by changing
+properties later, from a timer, an event or a frame callback. You do not redraw
+anything yourself; Dew draws whatever changed on the next frame.
+
+- **Surface requested.** Your module builds its interface as it loads, so
+  `mount` is optional.
+- **No surface requested.** `mount` is required.
+- **Neither.** Dew refuses to load the applet and tells you both ways to fix it.
+
+## Surfaces
+
+A **surface** is where your applet draws. Each kind needs its own permission in
+`dew.toml`:
+
+| Permission | Function | Opens |
+| :--- | :--- | :--- |
+| `widget` | `desktop.Widget` | A borderless panel on the desktop |
+| `window` | `desktop.Window` | An ordinary window with a title bar |
+| `overlay` | `desktop.Overlay` | A layer over the whole desktop |
+| `popover` | `desktop.popover` | Reserved for a future kind of surface |
+
+### Ask for a surface
+
+Call the function, then parent your interface to the root it returns:
 
 ```luau
 local root = desktop.Widget({ width = 220, height = 56, anchor = "top-right" })
@@ -107,319 +97,203 @@ frame.Size = UDim2.new(1, 0, 1, 0)
 frame.Parent = root
 ```
 
-Each is its own permission (`widget`, `window`, `overlay`, `popover`), because
-they differ in weight. A widget draws in a corner. An overlay that is topmost
-and click-through can draw over everything on screen while the user does not
-know it is there. Granting those with one word would be saying they are the
-same request. `desktop.Overlay` is absent from the table unless `dew.toml` grants
-`overlay`, and reaching for it anyway is a nil index at the applet's own call
-site rather than a permission check somewhere else.
+Because the root comes back straight away, you can build your whole interface at
+the top level of the module. If you call more than one surface function, the
+last call wins.
 
-**Asking creates the surface immediately, mid-run, from inside a Luau call.**
-That is what lets a popover open and close repeatedly over one applet's
-lifetime -- `Combobox`, `ContextMenu` and `Tooltip` all work this way -- rather
-than every surface having to exist before the applet's module even loads.
+### Describe a surface
 
-**An applet may also describe its surface by returning one**, instead of or
-alongside asking:
+Alternatively, return the surface as `surface`. Without one, Dew opens a widget.
 
 ```luau
 return {
-    id = "clock",
     size = { width = 220, height = 56 },
     surface = { kind = "widget", anchor = "top-right" },
-    mount = function(desktop, root) --[[ ... ]] end,
+    mount = function(desktop, root) end,
 }
 ```
 
-Omitting `surface` gets a widget. Dew is a desktop applet platform; a default
-of "ordinary window" would make every author opt in to the thing they came
-for. **What was asked for while the module ran wins over what it returned** --
-an applet doing both is mid-migration rather than in conflict, and the call is
-the newer of the two statements.
+If your module both asks for a surface and returns one, the one it asked for wins.
 
-An applet that asked for its surface has already built its tree by the time it
-returns, so there is nothing left to call: `mount` is optional in that case,
-and required otherwise. An applet that does neither -- no ask, no `mount` -- is
-refused at load, naming both ways out.
+### Options
 
-### A tagged union, not a bag of optional fields
-
-`title` means nothing to a floating surface and `anchor` means nothing to a
-window. Whether asked for as a call's options table or read from a returned
-`surface` field, the shape is the same:
+Each kind of surface takes its own options, whether you pass them to the function
+or return them as `surface`. A window takes a title:
 
 ```luau
 desktop.Window({ title = "Time Tracker Settings" })
 ```
 
+A widget takes a position and how it responds to dragging:
+
 ```luau
 desktop.Widget({
-    anchor = "top-right",       -- "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center"
+    anchor = "top-right",   -- "top-left" | "top-right" | "bottom-left" | "bottom-right" | "center"
     offset = { x = 24, y = 24 },
     clickThrough = false,
-    zOrder = "topmost",          -- "bottom" | "normal" | "topmost", defaults to "topmost"
-    draggable = true,            -- grab the body and move it; no title bar needed
-    keepOnScreen = true,         -- default; a dragged widget cannot end up off every display
-    snapToEdges = true,          -- snap to a screen edge while dragging
-    savePosition = true,         -- a dragged position survives to the next launch
+    zOrder = "topmost",     -- "bottom" | "normal" | "topmost"; defaults to "topmost"
+    draggable = true,       -- drag the widget by its body
+    keepOnScreen = true,    -- the default; a dragged widget stays on a display
+    snapToEdges = true,     -- snap to a screen edge while dragging
+    savePosition = true,    -- remember where the widget was dragged
 })
 ```
+
+Anchoring to a corner keeps a widget in that corner on any display size. The drag
+options apply to widgets only, and Dew handles the dragging for you.
+
+An overlay takes `zOrder` and `clickThrough`:
 
 ```luau
 desktop.Overlay({ zOrder = "topmost", clickThrough = false })
 ```
 
-`zOrder` also applies to an overlay. `draggable`, `keepOnScreen`,
-`snapToEdges` and `savePosition` are widget-only: dragging a screen-filling
-overlay, or a window the desktop already lets you drag, makes no sense.
-Dragging is entirely host-driven -- an applet's own code never sees the drag,
-the same way it never sees the pump that delivers its pointer events.
+### Overlays
 
-### An overlay is a widget the size of the desktop
+An overlay always covers the whole desktop, so its size comes from the screen.
+
+Clicks pass through every part of an overlay you do not paint. An overlay that
+draws three cards responds to clicks on those cards, and everywhere else the
+click reaches whatever is underneath.
+
+> [!CAUTION]
+> Give the root frame of an overlay `BackgroundTransparency = 1`. A filled
+> background covers the whole desktop and catches every click on it.
+
+### Widgets
+
+Unpainted parts of a widget are fully transparent, and clicks on them reach the
+desktop behind. A `UICorner` on the root frame therefore gives the widget rounded
+corners that are real, not drawn on a dark rectangle.
+
+## Permissions
+
+List what your applet needs in `dew.toml`:
+
+```toml
+permissions = ["storage", "audio", "notifications"]
+```
+
+Dew builds the `desktop` table from this list and nothing else, so ask for what
+your applet uses and no more. The [manifest reference](../reference/manifest.md) lists every
+permission.
+
+## Frameworks
+
+You can build your interface with `Instance.new` directly, or with a framework
+such as Aether or vide. Install the framework into your applet's directory with
+`pesde`, require it, and mount it inside `mount`:
 
 ```luau
-desktop.Overlay({})   -- zOrder = "topmost", clickThrough = false
+local Aether = require("@aether")
+local create, source = Aether.create, Aether.source
+
+return {
+    size = { width = 380, height = 56 },
+    mount = function(desktop, root)
+        local elapsed = source(0)
+        ;(create "Frame" { --[[ ... ]] } :: any).Parent = root
+    end,
+}
 ```
 
-The screen supplies the size, so a size an applet asks for is ignored for this
-kind -- a mod cannot know the display it will land on, and one that guessed
-would be wrong on every machine but the author's.
+Nothing in `dew.toml` changes either way.
 
-**Clicks fall through wherever nothing was painted**, and that is a property
-of layered windows rather than a trick on top of them: Windows hit-tests one
-against its alpha channel, so a transparent pixel passes the click to whatever
-is behind. An overlay that paints three cards is click-through everywhere
-except those three cards, with no region and no hit-test hook.
+## Events and signals
 
-Which makes one rule absolute: **the root frame must be
-`BackgroundTransparency = 1`.** A filled backdrop turns the overlay into a
-screen-sized sheet of glass that swallows every click on the machine.
+Without a framework, you still have the instance tree and events you know from
+Roblox:
 
-### A widget's shape is its own alpha
+- Navigation, such as `GetChildren`, `FindFirstChild`, `IsA` and `Destroy`
+- Change signals, such as `Changed` and `GetPropertyChangedSignal`
+- Pointer events, such as `Activated` and hover
 
-On a widget surface the frame is cleared to NOTHING, so a pixel the tree did
-not paint is a pixel the window does not occupy -- the desktop shows through
-it and receives the click. A `UICorner` on the root frame is therefore the
-window's real silhouette, not a rounded shape drawn on a dark rectangle.
+Three things work differently from Roblox:
 
-`anchor` rather than raw coordinates because a desktop is not one size: a
-clock pinned 24px from the top-right stays in the corner when the display
-changes; one at `x = 1872` is in the corner of the display it was written on.
+- **Unchanged values.** Setting a property to the value it already has fires no
+  event.
+- **No `Wait`.** `signal:Wait()` raises an error. Connect a handler instead.
+- **Handler errors.** If a handler errors, Dew reports the error and the property
+  change that fired it still takes effect.
 
-## Capabilities arrive as an argument, never as a global
+[Supported classes](../reference/classes.md) lists every property, method and
+event you can use.
 
-`mount` receives `desktop`. `dew.toml` declares `permissions`:
+## Images
 
-```json
-"permissions": ["storage", "audio", "notifications"]
-```
-
-What an applet cannot name in `permissions`, it cannot reach: the capability
-table is built from the granted permissions only, so an applet that quietly
-used `clipboard` without declaring it gets a nil index at its own call site,
-not silent success.
-
-It also makes the boundary testable. "What can this mod do" is the table the
-host built, which can be printed, diffed against the manifest, and asserted
-on.
-
-## `mount` runs once
-
-It builds a tree; it is not a per-frame `render`. A `source` written from a
-hotkey or a timer reaches the screen the way it does on the engine: the graph
-re-runs what depends on it, and the next frame differs. The same component
-behaves identically in both places, which is the property the whole stack
-exists to preserve.
-
-## An Aether applet authors in Aether's own idiom
-
-`create`, `source`, `derive`, and the engine's own property vocabulary --
-`UDim2`, `Color3`, `BackgroundTransparency`. Not a Dew dialect.
-
-This is what keeps a widget's visual half **liftable**: the tree an applet
-builds is an ordinary Aether component, so it can be mounted on a conforming
-engine host unchanged, or previewed with `aether snapshot`. A Dew-specific
-construction API would make every widget a dead end.
-
-Dew's own additions are capabilities and lifecycle, not construction.
-
-The same argument is why an applet with no framework authors in the engine's
-own idiom rather than a host one: `Instance.new`, property assignment and
-`Parent` are what an engine developer already knows, and
-`examples/widgets/nameplate` builds the identical tree an Aether component
-would, one `Instance.new` at a time. Neither is a Dew dialect; they are the
-two idioms that already exist.
-
-## A mod's images live beside it, under `mod://`
-
-An `ImageLabel` or an `ImageButton` names an asset the way an engine
-application does, with either generation of the property:
+An `ImageLabel` or `ImageButton` names its image with `Image` or `ImageContent`.
+Use `mod://` followed by a path inside your applet's directory:
 
 ```luau
 local icon = Instance.new("ImageLabel")
 icon.Size = UDim2.new(0, 44, 0, 44)
 icon.BackgroundTransparency = 1
-icon.ImageContent = Content.fromUri("mod://droplet.png")   -- modern: a Content
--- icon.Image = "mod://droplet.png"                        -- legacy: a ContentId
+icon.ImageContent = Content.fromUri("mod://droplet.png")
 icon.ScaleType = Enum.ScaleType.Fit
 icon.Parent = root
 ```
 
-`mod://` resolves against **the directory the applet was loaded from** -- the
-same directory `require` is allowed to reach, and for the same reason. A path
-that climbs out of it is refused rather than followed, so an image cannot
-become the way around the boundary the requirer already enforces. A
-`--script` run resolves `mod://` beside the script.
+`icon.Image = "mod://droplet.png"` works too. If you set both, `ImageContent` wins.
+A path that leads outside your applet's directory is refused.
 
-**Both properties name the same asset and Dew takes either.** `Image` is the
-legacy `ContentId` string and `ImageContent` is the modern `Content` URI; a
-mod written five years ago needs no editing to draw here. When a guest sets
-both, `ImageContent` wins, because that is the one the engine's own migration
-keeps.
-
-### What is honoured
-
-| | |
+| Property | Behavior |
 | :--- | :--- |
-| `Image`, `ImageContent` | the asset, either generation |
-| `ImageColor3` | multiplied through the asset's pixels, not replacing them |
-| `ImageTransparency` | inverted into alpha, like every other transparency |
-| `ImageRectOffset`, `ImageRectSize` | a sub-rectangle of the source, for sprite sheets |
-| `Enum.ScaleType` | `Stretch`, `Fit` and `Crop` |
+| `Image`, `ImageContent` | The image to draw |
+| `ImageColor3` | Tints the image |
+| `ImageTransparency` | Fades the image |
+| `ImageRectOffset`, `ImageRectSize` | Draws part of the image, for sprite sheets |
+| `ScaleType` | `Stretch`, `Fit` and `Crop` |
 
-**`Enum.ScaleType.Slice` and `.Tile` are NOT drawn yet**, and with them
-`SliceCenter`, `SliceScale` and `TileSize`. They are stretched instead, and
-the host says so by name on the console the first time an element asks for
-one. The properties still assign and still read back; what is missing is the
-drawing, and you are told which of the two of you decided that.
+`Slice` and `Tile` scaling are not drawn yet, and neither are `SliceCenter`,
+`SliceScale` and `TileSize`. Images that ask for them are stretched, and Dew
+prints a message the first time.
 
-### An asset that will not resolve is a missing image, not an error
+### Missing images
 
-`mod://` is the only scheme Dew resolves by default. `rbxassetid://` needs the
-`rbxassetid` permission -- see ADR-003. Until granted, assigning one succeeds,
-the property keeps its value, the host names the URI on the console once, and
-the element is drawn as an empty marked box rather than as nothing at all.
+Dew loads `mod://` images by default. An `rbxassetid://` image needs the
+`rbxassetid` permission; without it, Dew prints the address once. An image Dew
+cannot load draws as an empty, marked box, which is easier to spot than empty
+space.
 
-That last part is deliberate. A blank space is indistinguishable from an
-element that was never created, was positioned off-screen, or was made
-invisible, and an author would check all three before suspecting the asset.
-An engine application moved to Dew with an asset it cannot reach is a correct
-application missing an image, not a broken one.
+## Experimental features
 
-## Experimental DataModel features, pinned by revision
-
-Some DataModel properties and enums are accepted by the host before they are
-part of the surface every applet can rely on staying the same shape. A mod
-opts into one through `experimentalDatamodel`:
+Some DataModel features are available before their design is final. To use one,
+name it in `dew.toml` together with the version you wrote your applet against:
 
 ```toml
 experimentalDatamodel = ["GuiObject.BlendingMode@1"]
 ```
 
-Each entry names a property or enum as `Class.Property`, followed by `@`
-and the revision the mod was written against. The revision is required.
-Loading a mod whose `dew.toml` names an entry with no `@N` refuses rather
-than quietly resolving to whatever revision the registry happens to be at
-today:
+The `@1` is required. If the feature changes in a later version of Dew, your
+applet stops loading with a message that says what to update, instead of quietly
+behaving differently.
 
-```
-dew: mismatch-demo: experimentalDatamodel entry "GuiObject.BlendingMode" has no @revision -- write it as
-"Class.Property@N", pinning the revision this mod was written against
-```
+When your applet loads, Dew prints each feature it turned on:
 
-If the row's shape has changed since the pinned revision, loading also
-refuses, naming both the revision the mod expects and the one the registry
-is actually at:
-
-```
-dew: mismatch-demo: experimentalDatamodel entry "DewSprintTestOnly.RevisionProbe@1" was written against revision 1,
-but the registry is now at revision 2 -- the property's shape changed; update the mod for the new behavior and declare
-@2
-```
-
-An experimental row can be renamed or change shape entirely between one Dew
-build and the next, with no permanent deprecated form kept around for
-compatibility. Pinning a revision is what turns that into a refusal with a
-specific fix, rather than a mod quietly behaving differently after an
-update. A property that is not experimental, `permissions` for instance,
-carries no revision at all, because it is not allowed to move underneath an
-applet the way an experimental one explicitly is.
-
-At load, the console names every experimental flag a mod's declarations
-resolved to:
-
-```
+```text
 [dew] experimental: FFlagDewGuiObjectBlendingMode (revision 1)
 ```
 
-**A local override, independent of any mod's own declarations.** A flat map
-at `DewAppSettings.json`, beside Dew's other per-user files (on Windows,
-`%LOCALAPPDATA%\Dew\DewAppSettings.json`), turns a flag on for every mod run
-on that machine, whether or not the mod running declared it:
+### Trying a feature locally
+
+To turn a feature on for every applet on your computer without editing a
+manifest, add its flag to `DewAppSettings.json` in Dew's settings folder. On
+Windows, that is `%LOCALAPPDATA%\Dew\DewAppSettings.json`:
 
 ```json
 { "FFlagDewGuiObjectBlendingMode": true }
 ```
 
-This is a host-level switch for trying an experimental feature locally
-without editing any mod's manifest, not something a mod ships or reads.
-Nothing writes this file; a person edits it by hand.
+## Manifest fields
 
-## Every `dew.toml` field, and whether the host reads it
-
-A manifest field that is parsed and ignored is indistinguishable, from the
-author's side, from one that works. So the list is exhaustive and the host
-says the difference out loud at load.
-
-| field | read by |
+| Field | What it does |
 | :--- | :--- |
-| `id` | the entry module `<id>.luau` |
-| `permissions` | the capability table, and nothing outside this list is reachable |
-| `name` | the window caption when the declaration sets no `surface.title`, and the tray tooltip |
-| `description` | the tray tooltip |
-| `hotkeys` | **nothing yet.** Declared and inert; see below |
-| `experimentalDatamodel` | gates experimental DataModel properties and enums behind a pinned revision; see above |
+| `id` | Names the entry module, `<id>.luau` |
+| `name` | The window title, unless the surface sets its own, and the tray tooltip |
+| `description` | The tray tooltip |
+| `permissions` | What the applet can reach |
+| `hotkeys` | Not active yet; each binding is reported as not bound |
+| `experimentalDatamodel` | The experimental features the applet uses |
 
-`hotkeys` is the one field Dew accepts and does not act on. Nothing in the
-host registers a global hotkey, so a declared binding has never fired.
-`examples/aether/timetracker` ships three. Rather than delete the field, which
-would make the format quietly narrower without deciding anything, the host
-reports each one by name at load:
-
-```
-[dew] timetracker: hotkey "togglePomodoro" (Alt+Shift+P) is declared and not bound: Dew registers no global hotkeys yet
-```
-
-**Unknown keys are reported, not refused.** `timetracker` also carries
-`version`, `author` and a `settings` block, and serde drops an unknown key
-without a word, so all three went nowhere for as long as they existed. Each
-now prints a line. They are not rejected because a manifest is a
-forward-compatible format: a host that refuses tomorrow's field cannot read
-tomorrow's mod. A `dew.toml` written before milestone 9 that still declares
-`runtime` gets exactly this treatment -- reported once, at load, and
-otherwise ignored -- because `mount(desktop, root)` was always the only signature
-that field ever selected.
-
-The list that closes this out is `Manifest::unhonoured` in
-`host/src/manifest.rs`. Empty is the goal, and a field that stops being read
-cannot be added without appearing in it.
-
-## What Dew owns, and what it does not
-
-| | |
-| :--- | :--- |
-| **Aether** | layout, hit testing, pointer arbitration, focus, motion -- *for an applet that chose it* |
-| **`crates/runtime`** | the VM, require resolution, the frame loop, the display list |
-| **`crates/raster`** | the rasteriser |
-| **`crates/window`** | the window, input, the blit |
-| **Dew** | mod discovery, manifests, capabilities, hotkeys, tray, storage, multi-window placement, and its own DataModel |
-
-**THE BOTTOM FOUR ROWS ARE ALL DEW.** They used to be one row and three
-crates borrowed from Aether's repository, and this section said "when
-something here needs a rendering change, it belongs upstream in Aether, where
-the engine host gets it too". That was wrong, and it was the sentence that
-made adding an image node to the display list look like changing a public
-framework contract. It is a host editing its own renderer. ADR-004 measured
-it and moved the crates; a rendering change belongs in `crates/`, and an
-engine-side author never sees it because they never had it.
+If `dew.toml` contains a field Dew does not recognize, Dew prints a message and
+loads the applet anyway.

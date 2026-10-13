@@ -8,7 +8,7 @@ const RELATIVE_MARKDOWN = /^(?![a-z][a-z0-9+.-]*:|\/|#)([^#?]+\.mdx?)(#.*)?$/i;
 /**
  * Rewrites a relative link to another Markdown file into that page's route.
  *
- * The files in `docs/` link to each other by path, `[scope](datamodel_scope.md)`,
+ * The files in `docs/` link to each other by path, `[manifest](manifest.md)`,
  * which is what GitHub and an editor follow. A route is what the site serves, and
  * the two cannot both be written in the source. A link that leaves `docs/` is left
  * alone, so a broken one stays visible rather than becoming a plausible route.

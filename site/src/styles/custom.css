@@ -481,6 +481,14 @@ h1#_top {
 	color: var(--sl-color-accent);
 }
 
+.dew-steps .sl-markdown-content h2.dew-step-closing {
+	counter-increment: none;
+}
+
+.dew-steps .sl-markdown-content h2.dew-step-closing::before {
+	content: none;
+}
+
 .dew-steps .sl-markdown-content h2 > code:last-child {
 	padding: 0.125rem 0.5rem;
 	border: 1px solid var(--sl-color-hairline);

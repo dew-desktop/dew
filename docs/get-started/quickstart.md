@@ -1,99 +1,104 @@
 ---
 title: Quickstart
-description: Create and run your first Dew desktop applet in under 60 seconds.
+description: Build a widget that shows the time.
+steps: true
+sidebar:
+  order: 1
 ---
 
-Dew applets are self-contained desktop widgets and background daemons powered by sandboxed Luau, Vello/DirectComposition rendering, and reactive state.
+An applet is a directory with two files in it: a manifest that says what the applet
+is and what it can reach, and a Luau module that draws it. This page builds one
+that shows the time in a corner of the desktop.
 
----
-
-## Prerequisites
-
-Before building an applet, ensure you have the Dew CLI installed:
-
-```bash title="Terminal"
-# Check your Dew engine installation
-dew --version
-```
-Expected output format: `0.1.0.<build_number>` (or `0.1.0-dev.<sha>` for dev builds).
-
----
-
-## 1. Scaffold an Applet
-
-Use the `dew init` command to generate an applet scaffold:
-
-```bash title="Terminal"
-dew init ./my-clock
-cd my-clock
+```tree
+clock/
+  dew.toml      # what the applet is, and what it can reach
+  clock.luau    # the entry module, named after the manifest's `id`
 ```
 
-This generates the minimal anatomy of a Dew applet:
-```txt title="Directory Structure"
-my-clock/
-├── dew.toml      # Applet manifest: capabilities, permissions & metadata
-└── main.luau     # Applet lifecycle entry point
-```
+## Create the directory
 
----
+Make a directory called `clock`. Everything your applet needs goes inside it, and
+your applet can read nothing outside it.
 
-## 2. Inspect the Manifest (`dew.toml`)
+## Describe the applet `dew.toml`
 
-Open `dew.toml`. Dew operates on a **least-privilege capability security model**. If your applet needs to spawn a window, it must declare the `desktop.Widget` capability:
+Create `dew.toml` in the directory:
 
-```toml title="dew.toml"
+```toml title="clock/dew.toml"
 id = "clock"
-name = "Desktop Clock"
-description = "A floating clock applet"
+name = "Clock"
+description = "The time, in a corner of the desktop"
 permissions = ["widget"]
 ```
 
----
+- `id` names the entry module, so Dew loads `clock.luau`.
+- `name` is the title the tray shows.
+- `permissions` lists what the applet can reach. `widget` lets it open a
+  borderless surface on the desktop, and nothing else.
 
-## 3. The Entry Point
+## Draw the time `clock.luau`
 
-Mount a simple UI using Dew's global `desktop` table and DataModel primitives:
+Create `clock.luau` beside the manifest:
 
-```luau title="main.luau"
+```luau title="clock/clock.luau"
 --!strict
-local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
--- Open the floating desktop surface
-local root = widget({
-    width = 240,
-    height = 90,
-    anchor = "top-right",
-    offset = { x = 24, y = 24 },
-    draggable = true,
-})
+local function mount(desktop, root: Instance)
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.fromScale(1, 1)
+	label.BackgroundColor3 = Color3.fromRGB(18, 20, 26)
+	label.TextColor3 = Color3.fromRGB(233, 239, 249)
+	label.TextSize = 24
+	label.Parent = root
 
--- Build UI primitives over the DataModel
-local frame = Instance.new("Frame")
-frame.Size = UDim2.fromScale(1, 1)
-frame.BackgroundColor3 = Color3.fromRGB(24, 24, 27)
-frame.Parent = root
+	local corner = Instance.new("UICorner")
+	corner.CornerRadius = UDim.new(0, 8)
+	corner.Parent = label
 
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 8)
-corner.Parent = frame
+	desktop.Clock.OnFrame(function()
+		local t = desktop.Time.local_time()
+		label.Text = string.format("%02d:%02d:%02d", t.hour, t.min, t.sec)
+	end)
+end
 
-local label = Instance.new("TextLabel")
-label.Size = UDim2.fromScale(1, 1)
-label.BackgroundTransparency = 1
-label.TextColor3 = Color3.fromRGB(244, 244, 245)
-label.TextSize = 24
-label.Text = os.date("%H:%M:%S")
-label.Parent = frame
+return {
+	size = { width = 180, height = 56 },
+	surface = { kind = "widget", anchor = "top-right" },
+	mount = mount,
+}
 ```
 
----
+The module returns a table that describes your applet. Dew opens a widget in the
+top-right corner at the size you asked for, then calls `mount` once with the
+`desktop` table and the root to build your interface under.
 
-## 4. Run with Hot Reloading
+- `Instance.new`, `UDim2` and `Color3` work as they do in Roblox.
+- `desktop.Time` reads the wall clock, and `desktop.Clock.OnFrame` calls the
+  function once per frame. Neither needs a permission.
+- Setting `Text` to the value it already has does nothing, so the label redraws
+  only when the second changes.
 
-Start your applet:
+## Run the applet
 
-```bash title="Terminal"
-dew run ./my-clock
+Dew runs an applet from its directory. Today, the development build of the `dew`
+command does this on Windows:
+
+```sh
+dew run clock
 ```
 
-Dew launches your widget with instant GPU presentation and watches the folder for changes. Whenever you edit `init.luau` or change colors in your editor, the engine hot-reloads your state and UI in milliseconds without restarting the host process.
+The time appears in the top-right corner of your screen. To check the applet
+without opening a window, validate it and render one frame to an image:
+
+```sh
+dew check clock
+dew snapshot clock -o clock.png
+```
+
+## Next steps
+
+- [Applet structure](../spec/applet_contract.md) covers every field the module
+  can return, the kinds of surface, and how images load.
+- [Manifest reference](../reference/manifest.md) lists every field and permission
+  in `dew.toml`.

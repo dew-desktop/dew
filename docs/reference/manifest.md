@@ -1,69 +1,82 @@
 ---
-title: Manifest Specification (dew.toml)
-description: Complete reference for the dew.toml applet manifest and permission scopes.
+title: Manifest
+description: Every field and permission you can set in dew.toml.
+sidebar:
+  order: 1
 ---
 
-Every Dew applet must contain a `dew.toml` file at its root. Dew parses and validates the manifest **before** executing any guest code. Unknown keys or ungranted permissions are reported explicitly rather than failing silently.
+Every applet has a `dew.toml` file in its directory. It names the applet and lists
+what the applet can reach. Dew reads it before running any of your code, so a
+problem in the manifest is reported before your applet starts.
 
----
-
-## Minimal Example
-
-```toml
+```toml title="dew.toml"
 id = "clock"
-name = "Desktop Clock"
-description = "A floating desktop clock widget"
+name = "Clock"
+description = "The time, in a corner of the desktop"
 permissions = ["widget"]
 ```
 
----
+## Fields
 
-## Manifest Fields
-
-| Field | Type | Required | Description |
+| Field | Type | Required | What it does |
 | :--- | :--- | :--- | :--- |
-| `id` | `string` | **Yes** | Unique identifier for the applet (e.g. `"clock"`, `"quickpanel"`). |
-| `name` | `string` | No | Display title for the window header and tray tooltip. |
-| `description` | `string` | No | Short summary shown in the dashboard and tray. |
-| `permissions` | `list[string]` | No | Capabilities granted to the guest script. Defaults to `[]` (pure rendering, zero host access). |
-| `hotkeys` | `table` | No | Key combinations reserved for the applet (e.g. `toggle = "Alt+Shift+P"`). |
+| `id` | string | Yes | Names the entry module: Dew loads `<id>.luau`, or `main.luau` if that does not exist. |
+| `name` | string | No | The window title, unless the surface sets its own, and the tray tooltip |
+| `description` | string | No | The tray tooltip |
+| `permissions` | list of strings | No | What the applet can reach. Defaults to nothing. |
+| `hotkeys` | table | No | Not active yet. Dew reports each binding as not bound. |
+| `experimentalDatamodel` | list of strings | No | Experimental features the applet uses, each with its version |
 
----
+An `id` cannot be empty, `.` or `..`, and cannot contain `/`, `\` or `:`.
 
-## Permissions & Capabilities
+If `dew.toml` contains a field Dew does not recognize, Dew prints a message and
+loads the applet anyway.
 
-Permissions in `dew.toml` are categorized into two host-managed capability tiers:
+## Permissions
 
-### 1. User Permissions (Ungated for Installed Applets)
-Any installed applet may request these permissions in `permissions = [...]`:
+An applet with no permissions can draw nothing and reach nothing, so most applets
+list at least one surface. Each permission adds one member to the
+[`desktop` table](desktop.md):
 
-| Permission | Injected Global | Purpose |
+| Permission | Adds | Lets your applet |
 | :--- | :--- | :--- |
-| `"widget"` | `desktop.Widget` | Opens a borderless floating surface. |
-| `"window"` | `desktop.Window` | Opens a native window with title bar and borders. |
-| `"overlay"` | `desktop.Overlay` | Opens a full-screen, click-through desktop overlay. |
-| `"popover"` | `desktop.Popover` | Opens an anchored context popover. |
-| `"storage"` | `desktop.Storage` | Sandboxed key-value state persistence. |
-| `"system"` | `desktop.System` | System resource metrics (CPU, RAM, disk, battery, processes). |
-| `"clipboard"` | `desktop.Clipboard` | Read and write the operating system clipboard. |
-| `"notifications"` | `desktop.Notifications` | Raise desktop notification toasts. |
-| `"audio"` | `desktop.Audio` | Play sound effects through the native audio backend. |
-| `"rbxassetid"` | — | Allows loading `rbxassetid://` asset URIs. |
+| `widget` | `desktop.Widget` | Open a borderless panel on the desktop |
+| `window` | `desktop.Window` | Open an ordinary window |
+| `overlay` | `desktop.Overlay` | Draw over the whole desktop |
+| `popover` | `desktop.popover` | Reserved for a future kind of surface |
+| `storage` | `desktop.Storage` | Save text that persists between runs |
+| `clipboard` | `desktop.Clipboard` | Read and write the clipboard |
+| `notifications` | `desktop.Notifications` | Show desktop notifications |
+| `audio` | `desktop.Audio` | Play sounds |
+| `system` | `desktop.System` | Read CPU, memory, disk, network and battery usage |
+| `rbxassetid` | Nothing on `desktop` | Load images from `rbxassetid://` addresses |
 
-### 2. Host-Only Permissions (Bundled Internal Surfaces)
-These capabilities are strictly reserved for Dew's coordinator (bundled in `dew.exe`, such as `dashboard` and `quickpanel`). If an external applet declares them, the engine refuses to run:
+A permission Dew does not recognize stops the applet from loading, with a message
+naming it.
 
-- `"auth"` — User authentication and token refresh.
-- `"discover"` — Browsing marketplace recipes.
-- `"install"` — Installing or updating applet archives.
-- `"library"` — Global applet supervisor (`dew.Library.List()`, starting/stopping processes).
+> [!NOTE]
+> Dew's own built-in applets also use the permissions `auth`, `discover`,
+> `install` and `library`. Your applet cannot request these: an applet that lists
+> one does not load.
 
----
+## When a permission is missing
 
-## What Happens When a Permission Is Missing?
+Something your manifest does not grant is `nil` on `desktop`. Calling it raises
+an error on that line, which tells you which permission to add. To give a clearer
+message, check first:
 
-If a guest script attempts to call a capability that was not granted in `dew.toml`:
 ```luau
 local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 ```
-`desktop.Widget` evaluates to `nil`, triggering an immediate, informative runtime assertion.
+
+## Experimental features
+
+List each feature as `Class.Property@version`, where the version is the one you
+wrote your applet against:
+
+```toml
+experimentalDatamodel = ["GuiObject.BlendingMode@1"]
+```
+
+The [applet structure](../spec/applet_contract.md#experimental-features) page
+explains how versions work and how to try a feature locally.

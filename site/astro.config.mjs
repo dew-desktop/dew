@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { satteri } from '@astrojs/markdown-satteri';
 import { callouts } from './src/markdown/callouts.mjs';
+import { steps } from './src/markdown/steps.mjs';
 import { trees } from './src/markdown/trees.mjs';
 import { relativeLinks } from './src/markdown/relative-links.mjs';
 import { REPOSITORY } from './src/repository.mjs';
@@ -12,7 +13,7 @@ import { TOPICS } from './src/topics.mjs';
 // https://astro.build/config
 export default defineConfig({
 	markdown: {
-		processor: satteri({ mdastPlugins: [relativeLinks, callouts, trees] }),
+		processor: satteri({ mdastPlugins: [relativeLinks, callouts, steps, trees] }),
 	},
 	integrations: [
 		starlight({
