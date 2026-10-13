@@ -1,0 +1,557 @@
+/* System & Web-Safe Font Stacks (Zero remote network blocking FOUC) */
+:root {
+	--sl-font: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--sl-font-code: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+	--sl-font-headings: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+	/* Light Mode Surfaces & Textures (Clean Slate with Dew Sky & Lilac accents) */
+	--sl-color-bg: #f8fafc;
+	--sl-color-bg-nav: #ffffff;
+	--sl-color-bg-sidebar: #f1f5f9;
+	--sl-color-bg-card: #ffffff;
+	--sl-color-bg-card-hover: #ffffff;
+	--sl-color-bg-table-header: #f1f5f9;
+	--sl-color-bg-table-hover: #f8fafc;
+	--sl-color-bg-chip: #e2e8f0;
+	--sl-color-bg-chip-hover: #cbd5e1;
+
+	--sl-color-hairline-shade: #e2e8f0;
+	--sl-color-hairline-light: #cbd5e1;
+
+	--sl-color-text: #0f172a;
+	--sl-color-text-muted: #64748b;
+	--sl-color-text-subtle: #94a3b8;
+	--sl-color-text-invert: #ffffff;
+
+	--sl-color-accent: #0284c7;
+	--sl-color-accent-purple: #7c3aed;
+	--sl-color-accent-high: #0369a1;
+	--sl-color-accent-wash: rgba(2, 132, 199, 0.08);
+
+	--sl-btn-primary-bg: #0f172a;
+	--sl-btn-primary-text: #ffffff;
+	--sl-btn-primary-border: #0f172a;
+	--sl-btn-primary-hover: #1e293b;
+
+	--sl-btn-secondary-bg: #ffffff;
+	--sl-btn-secondary-text: #0f172a;
+	--sl-btn-secondary-border: #cbd5e1;
+	--sl-btn-secondary-hover: #f1f5f9;
+}
+
+:root[data-theme='dark'] {
+	/* Dark Mode: Full System Monitor Atmosphere */
+	--sl-color-bg: #12141a;              /* SURFACE */
+	--sl-color-bg-nav: #161922;          /* Elevated Surface */
+	--sl-color-bg-sidebar: #0e1015;      /* Deep Shelf */
+	--sl-color-bg-card: #181b22;         /* Card Panel */
+	--sl-color-bg-card-hover: #1c202a;
+	--sl-color-bg-table-header: #1c202a;
+	--sl-color-bg-table-hover: #1e232e;
+	--sl-color-bg-chip: #20242e;         /* TRACK */
+	--sl-color-bg-chip-hover: #262a36;
+
+	--sl-color-hairline-shade: #262a36;  /* RULE */
+	--sl-color-hairline-light: #323848;
+
+	--sl-color-text: #e9eff9;           /* TEXT */
+	--sl-color-text-muted: #92a2bc;     /* MUTED */
+	--sl-color-text-subtle: #606a7c;    /* FAINT */
+	--sl-color-text-invert: #12141a;
+
+	/* Dew Primary Accents */
+	--sl-color-accent: #56a4f0;         /* SKY */
+	--sl-color-accent-purple: #9686ec;  /* LILAC */
+	--sl-color-accent-high: #bae6fd;
+	--sl-color-accent-wash: rgba(86, 164, 240, 0.08);
+
+	--sl-btn-primary-bg: #e9eff9;
+	--sl-btn-primary-text: #12141a;
+	--sl-btn-primary-border: #e9eff9;
+	--sl-btn-primary-hover: #ffffff;
+
+	--sl-btn-secondary-bg: #181b22;
+	--sl-btn-secondary-text: #e9eff9;
+	--sl-btn-secondary-border: #262a36;
+	--sl-btn-secondary-hover: #20242e;
+}
+
+/* Subtle top hairline banner gradient in Dark Mode linking Dew Sky & Lilac */
+:root[data-theme='dark'] header.header {
+	border-bottom: 1px solid var(--sl-color-hairline-shade) !important;
+	box-shadow: inset 0 -1px 0 rgba(86, 164, 240, 0.15);
+}
+
+/* =====================================================================
+   TYPOGRAPHY
+   ===================================================================== */
+h1, h2, h3, h4, h5, h6 {
+	font-family: var(--sl-font-headings) !important;
+	letter-spacing: -0.02em;
+	font-weight: 600;
+	color: var(--sl-color-text) !important;
+	-webkit-text-fill-color: initial !important;
+	background: none !important;
+}
+
+h1 {
+	font-size: 2.25rem !important;
+	line-height: 1.25 !important;
+	margin-bottom: 1rem;
+}
+
+h2 {
+	font-size: 1.45rem !important;
+	margin-top: 2rem;
+	padding-bottom: 0.35rem;
+	border-bottom: 1px solid var(--sl-color-hairline-shade);
+}
+
+/* =====================================================================
+   HEADER & NAVBAR
+   ===================================================================== */
+header.header {
+	background-color: var(--sl-color-bg-nav) !important;
+	border-bottom: 1px solid var(--sl-color-hairline-shade) !important;
+	backdrop-filter: none !important;
+	-webkit-backdrop-filter: none !important;
+}
+
+/* =====================================================================
+   LEFT SIDEBAR (NAVIGATION)
+   ===================================================================== */
+nav.sidebar {
+	background-color: var(--sl-color-bg-sidebar) !important;
+	border-right: 1px solid var(--sl-color-hairline-shade) !important;
+}
+
+.sidebar-content summary {
+	font-size: 0.75rem !important;
+	font-weight: 700 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.06em !important;
+	color: var(--sl-color-text-subtle) !important;
+	padding: 0.5rem 0.6rem !important;
+	border-radius: 4px;
+	transition: color 0.15s ease;
+}
+
+.sidebar-content summary:hover {
+	color: var(--sl-color-text) !important;
+}
+
+.sidebar-content a {
+	font-size: 0.875rem !important;
+	border-radius: 6px;
+	padding: 0.45rem 0.75rem !important;
+	margin: 1px 0;
+	color: var(--sl-color-text-muted) !important;
+	transition: background-color 0.15s ease, color 0.15s ease, transform 0.15s ease;
+}
+
+.sidebar-content a:hover {
+	background-color: var(--sl-color-bg-chip) !important;
+	color: var(--sl-color-text) !important;
+	transform: translateX(2px);
+}
+
+.sidebar-content a[aria-current='page'] {
+	background-color: var(--sl-color-bg-chip) !important;
+	color: var(--sl-color-accent) !important;
+	font-weight: 600 !important;
+	border-left: 2px solid var(--sl-color-accent) !important;
+	border-radius: 0 6px 6px 0 !important;
+	transform: none !important;
+}
+
+/* =====================================================================
+   RIGHT SIDEBAR: "ON THIS PAGE" (TOC)
+   ===================================================================== */
+starlight-toc {
+	border-left: 1px solid var(--sl-color-hairline-shade);
+	padding-left: 1.25rem;
+}
+
+starlight-toc h2 {
+	font-size: 0.75rem !important;
+	font-weight: 700 !important;
+	text-transform: uppercase !important;
+	letter-spacing: 0.08em !important;
+	color: var(--sl-color-text-subtle) !important;
+	margin-bottom: 0.75rem !important;
+	padding-bottom: 0 !important;
+	border-bottom: none !important;
+	display: flex;
+	align-items: center;
+	gap: 0.45rem;
+}
+
+starlight-toc h2::before {
+	content: '';
+	display: inline-block;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background-color: var(--sl-color-accent-purple); /* Dew Lilac indicator pip */
+}
+
+starlight-toc nav ul {
+	position: relative;
+	border-left: 1px solid var(--sl-color-hairline-shade);
+	margin-left: 0.25rem;
+	padding-left: 0;
+	list-style: none;
+}
+
+starlight-toc nav li {
+	margin: 0;
+	position: relative;
+}
+
+starlight-toc nav li a {
+	display: block;
+	font-size: 0.8125rem !important;
+	line-height: 1.5;
+	color: var(--sl-color-text-muted) !important;
+	padding: 0.35rem 0 0.35rem 1rem !important;
+	border-left: 2px solid transparent;
+	margin-left: -1px;
+	transition: all 0.15s ease-in-out;
+	text-decoration: none !important;
+}
+
+starlight-toc nav li a:hover {
+	color: var(--sl-color-text) !important;
+	border-left-color: var(--sl-color-hairline-light);
+}
+
+starlight-toc nav li a[aria-current='true'],
+starlight-toc nav li a.current {
+	color: var(--sl-color-accent) !important;
+	font-weight: 600 !important;
+	border-left-color: var(--sl-color-accent) !important;
+	background: linear-gradient(90deg, var(--sl-color-accent-wash) 0%, transparent 100%);
+}
+
+starlight-toc nav li ul {
+	margin-left: 1rem;
+	border-left: 1px dashed var(--sl-color-hairline-shade);
+}
+
+starlight-toc nav li ul li a {
+	font-size: 0.775rem !important;
+	padding-left: 0.75rem !important;
+	color: var(--sl-color-text-subtle) !important;
+}
+
+starlight-toc nav li ul li a:hover {
+	color: var(--sl-color-text) !important;
+}
+
+starlight-toc nav li ul li a[aria-current='true'],
+starlight-toc nav li ul li a.current {
+	color: var(--sl-color-accent-purple) !important;
+	border-left-color: var(--sl-color-accent-purple) !important;
+}
+
+/* =====================================================================
+   HERO SECTION
+   ===================================================================== */
+.hero {
+	padding-top: 3.5rem !important;
+	padding-bottom: 2.75rem !important;
+	border-bottom: 1px solid var(--sl-color-hairline-shade);
+	margin-bottom: 2.5rem;
+}
+
+.hero::before {
+	display: none !important;
+}
+
+.hero h1 {
+	font-size: 2.75rem !important;
+	font-weight: 700 !important;
+	letter-spacing: -0.03em;
+	color: var(--sl-color-text) !important;
+}
+
+.hero .tagline {
+	font-size: 1.15rem !important;
+	color: var(--sl-color-text-muted) !important;
+	line-height: 1.6;
+	max-width: 42rem;
+}
+
+.hero .actions a {
+	border-radius: 6px !important;
+	font-weight: 500 !important;
+	padding: 0.6rem 1.25rem !important;
+	box-shadow: none !important;
+	transition: background-color 0.15s ease, border-color 0.15s ease !important;
+}
+
+.hero .actions a.primary {
+	background-color: var(--sl-btn-primary-bg) !important;
+	color: var(--sl-btn-primary-text) !important;
+	border: 1px solid var(--sl-btn-primary-border) !important;
+}
+
+.hero .actions a.primary:hover {
+	background-color: var(--sl-btn-primary-hover) !important;
+	transform: none !important;
+}
+
+.hero .actions a.secondary {
+	border: 1px solid var(--sl-btn-secondary-border) !important;
+	background-color: var(--sl-btn-secondary-bg) !important;
+	color: var(--sl-btn-secondary-text) !important;
+}
+
+.hero .actions a.secondary:hover {
+	background-color: var(--sl-btn-secondary-hover) !important;
+	transform: none !important;
+}
+
+/* =====================================================================
+   CARDS & MATERIAL PANELS
+   ===================================================================== */
+.card-grid .card {
+	background-color: var(--sl-color-bg-card) !important;
+	border: 1px solid var(--sl-color-hairline-shade) !important;
+	border-radius: 8px !important;
+	padding: 1.5rem !important;
+	box-shadow: none !important;
+	transition: border-color 0.15s ease, background-color 0.15s ease !important;
+}
+
+.card-grid .card:hover {
+	transform: none !important;
+	background-color: var(--sl-color-bg-card-hover) !important;
+	border-color: var(--sl-color-hairline-light) !important;
+	box-shadow: none !important;
+}
+
+.card-grid .card .title {
+	font-size: 1rem;
+	font-weight: 600;
+	color: var(--sl-color-text) !important;
+	margin-bottom: 0.5rem;
+}
+
+.card-grid .card .body {
+	color: var(--sl-color-text-muted) !important;
+	font-size: 0.9rem;
+	line-height: 1.5;
+}
+
+/* Card Icons: Dew Lilac & Sky */
+.card-grid .card svg {
+	color: var(--sl-color-accent) !important;
+}
+
+/* =====================================================================
+   CODE BLOCKS: ENHANCED CONTRAST & VISUAL TYPE DIFFERENTIATION
+   - Deep Black-Navy Canvas: #090b0f (High contrast against #12141a page)
+   - Code Frame Stroke: #222734 (Clean hairline boundary)
+   - Source Code Tab (Luau/Toml): Elevated Navy #141720 with Sky/Lilac accents
+   - Terminal Frame (bash/sh): Dark Shell #0f1118 with distinct prompt pip
+   ===================================================================== */
+
+:root[data-theme='dark'] {
+	--ec-brdCol: #222734;
+	--ec-brdRad: 8px;
+	--ec-codeBg: #090b0f;              /* Deep black-slate for maximum contrast */
+	--ec-codeFg: #f0f4fc;
+	--ec-frame-frameBoxShdCssVal: 0 4px 16px -4px rgba(0, 0, 0, 0.45);
+	--ec-frame-editorTabsBg: #131620;
+	--ec-frame-editorActiveTabBg: #090b0f;
+	--ec-frame-editorActiveTabFg: #56a4f0;
+	--ec-frame-editorActiveTabBrdCol: #222734;
+	--ec-frame-editorTabBrdCol: #1a1e29;
+	--ec-frm-trmTtbBg: #11141c;
+	--ec-frm-trmTtbFg: #92a2bc;
+	--ec-frm-trmTtbDotsFg: #56a4f0;
+	--ec-frm-trmTtbDotsOpa: 0.9;
+	--ec-termBg: #090b0f;
+	--ec-termFg: #f0f4fc;
+	--ec-termTitleBg: #11141c;
+	--ec-termTitleFg: #92a2bc;
+	--ec-sbThumbBg: #222734;
+	--ec-sbThumbHoverBg: #56a4f0;
+}
+
+:root {
+	--ec-brdCol: #cbd5e1;
+	--ec-brdRad: 8px;
+	--ec-codeBg: #f1f5f9;              /* Distinct contrast against #f8fafc page */
+	--ec-codeFg: #0f172a;
+	--ec-frame-frameBoxShdCssVal: 0 2px 8px -2px rgba(15, 23, 42, 0.08);
+	--ec-frame-editorTabsBg: #e2e8f0;
+	--ec-frame-editorActiveTabBg: #f1f5f9;
+	--ec-frame-editorActiveTabFg: #0284c7;
+	--ec-frame-editorActiveTabBrdCol: #cbd5e1;
+	--ec-frame-editorTabBrdCol: #e2e8f0;
+	--ec-frm-trmTtbBg: #1e293b;
+	--ec-frm-trmTtbFg: #94a3b8;
+	--ec-frm-trmTtbDotsFg: #64748b;
+	--ec-frm-trmTtbDotsOpa: 0.85;
+	--ec-termBg: #0f172a;
+	--ec-termFg: #f8fafc;
+	--ec-termTitleBg: #1e293b;
+	--ec-termTitleFg: #94a3b8;
+}
+
+.expressive-code {
+	margin: 1.5rem 0;
+}
+
+.expressive-code .frame {
+	border-radius: 8px !important;
+	border: 1px solid var(--ec-brdCol) !important;
+	background-color: var(--ec-codeBg) !important;
+	box-shadow: var(--ec-frame-frameBoxShdCssVal) !important;
+	overflow: hidden;
+}
+
+/* File Editor Tab Header */
+.expressive-code .frame.has-title:not(.is-terminal) .header {
+	background-color: var(--ec-frame-editorTabsBg) !important;
+	border-bottom: 1px solid var(--ec-brdCol) !important;
+	padding: 0 0.5rem;
+}
+
+.expressive-code .frame.has-title:not(.is-terminal) .title {
+	font-family: var(--sl-font-code) !important;
+	font-size: 0.8rem !important;
+	color: #56a4f0 !important;
+	background-color: var(--ec-codeBg) !important;
+	border: 1px solid var(--ec-brdCol) !important;
+	border-bottom: none !important;
+	padding: 0.35rem 0.85rem !important;
+	border-radius: 6px 6px 0 0 !important;
+}
+
+/* Terminal Header Bar (Native Expressive Code Terminal) */
+.expressive-code .frame.is-terminal .header {
+	background-color: var(--ec-frm-trmTtbBg) !important;
+	border-bottom: 1px solid var(--ec-brdCol) !important;
+	min-height: 2.25rem;
+}
+
+.expressive-code .frame.is-terminal .header .title {
+	font-family: var(--sl-font-code) !important;
+	font-size: 0.775rem !important;
+	color: var(--ec-frm-trmTtbFg) !important;
+	letter-spacing: 0.04em;
+	font-weight: 500;
+}
+
+.expressive-code pre {
+	background-color: var(--ec-codeBg) !important;
+	padding: 1.15rem 1.25rem !important;
+}
+
+.expressive-code code {
+	font-family: var(--sl-font-code) !important;
+	font-size: 0.85rem !important;
+	line-height: 1.65 !important;
+	letter-spacing: -0.01em;
+}
+
+/* Shiki Tokens in Dark Mode */
+:root[data-theme='dark'] .expressive-code code .token.keyword,
+:root[data-theme='dark'] .expressive-code code span[style*="color:#569cd6"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#569CD6"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#C586C0"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#c586c0"] {
+	color: #56a4f0 !important; /* SKY */
+}
+
+:root[data-theme='dark'] .expressive-code code .token.string,
+:root[data-theme='dark'] .expressive-code code span[style*="color:#ce9178"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#CE9178"] {
+	color: #ff7080 !important; /* CORAL */
+}
+
+:root[data-theme='dark'] .expressive-code code .token.function,
+:root[data-theme='dark'] .expressive-code code span[style*="color:#dcdcaa"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#DCDCAA"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#4ec9b0"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#4EC9B0"] {
+	color: #9686ec !important; /* LILAC */
+}
+
+:root[data-theme='dark'] .expressive-code code .token.comment,
+:root[data-theme='dark'] .expressive-code code span[style*="color:#6a9955"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#6A9955"] {
+	color: #606a7c !important; /* FAINT */
+	font-style: italic;
+}
+
+:root[data-theme='dark'] .expressive-code code .token.number,
+:root[data-theme='dark'] .expressive-code code span[style*="color:#b5cea8"],
+:root[data-theme='dark'] .expressive-code code span[style*="color:#B5CEA8"] {
+	color: #e9eff9 !important; /* TEXT */
+}
+
+.expressive-code .copy button {
+	border: 1px solid var(--ec-brdCol) !important;
+	border-radius: 4px !important;
+	background-color: var(--ec-frame-editorTabsBg) !important;
+	color: #92a2bc !important;
+	transition: all 0.15s ease;
+}
+
+.expressive-code .copy button:hover {
+	background-color: #20242e !important;
+	color: #e9eff9 !important;
+	border-color: #56a4f0 !important;
+}
+
+/* =====================================================================
+   TABLES
+   ===================================================================== */
+table {
+	border-collapse: collapse;
+	width: 100%;
+	margin: 1.5rem 0;
+	border: 1px solid var(--sl-color-hairline-shade);
+	border-radius: 6px;
+	background-color: var(--sl-color-bg-card);
+}
+
+th {
+	background-color: var(--sl-color-bg-table-header);
+	font-weight: 600;
+	font-size: 0.85rem;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: var(--sl-color-text-muted);
+	padding: 0.75rem 1rem;
+	border-bottom: 1px solid var(--sl-color-hairline-shade);
+	border-right: 1px solid var(--sl-color-hairline-shade);
+}
+
+th:last-child {
+	border-right: none;
+}
+
+td {
+	padding: 0.75rem 1rem;
+	font-size: 0.9rem;
+	border-bottom: 1px solid var(--sl-color-hairline-shade);
+	border-right: 1px solid var(--sl-color-hairline-shade);
+	color: var(--sl-color-text);
+}
+
+td:last-child {
+	border-right: none;
+}
+
+tr:last-child td {
+	border-bottom: none;
+}
+
+tr:hover td {
+	background-color: var(--sl-color-bg-table-hover);
+}

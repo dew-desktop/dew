@@ -1,0 +1,38 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import { Card, CardGrid } from '@astrojs/starlight/components';
+---
+
+<StarlightPage
+	frontmatter={{
+		title: 'Dew Docs',
+		description: 'Build native desktop applets and widgets using sandboxed Luau and Vello GPU rendering.',
+		template: 'splash',
+		hero: {
+			tagline:
+				'The modern desktop applet platform powered by sandboxed Luau, least-privilege capabilities, and Vello/DirectComposition rendering.',
+			actions: [
+				{ text: 'Quickstart', link: '/guides/quickstart/', icon: 'right-arrow', variant: 'primary' },
+				{ text: 'Manifest Specification', link: '/reference/manifest/', icon: 'document', variant: 'secondary' },
+				{ text: 'GitHub Repository', link: 'https://github.com/dew-desktop/dew', icon: 'external', variant: 'minimal' },
+			],
+		},
+	}}
+>
+	<h2>Core Architecture</h2>
+
+	<CardGrid stagger>
+		<Card title="DirectComposition & Vello" icon="rocket">
+			Direct hardware presentation without Electron or browser DOM overhead. Renders native frames tear-free at display refresh rate.
+		</Card>
+		<Card title="Least-Privilege Sandboxing" icon="shield">
+			Applets execute within isolated Luau guests. File system access and OS features require explicit capabilities in <code>dew.toml</code>.
+		</Card>
+		<Card title="DataModel Class Hierarchy" icon="puzzle">
+			Roblox-standard classes (<code>Frame</code>, <code>TextLabel</code>, <code>UDim2</code>, <code>Color3</code>) paired with reactive signal subscriptions.
+		</Card>
+		<Card title="Development Inner Loop" icon="laptop">
+			Sub-second hot-reloading via <code>dew run</code>, typed definitions for <code>luau-lsp</code>, and headless testing suites.
+		</Card>
+	</CardGrid>
+</StarlightPage>

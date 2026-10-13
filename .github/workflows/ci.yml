@@ -96,6 +96,7 @@ jobs:
     if: github.ref_type != 'tag'
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      site: ${{ steps.filter.outputs.site }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,27 +126,36 @@ jobs:
             echo "cannot diff $base..$head, so building everything:"
             echo "$changed"
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "site=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           code=false
+          site=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              # The compatibility table in it is generated and checked by
-              # the build job, so a hand edit to it has to reach that job.
-              examples/README.md) ;;
-              docs/*|scripts/*) continue ;;
-              *.md) continue ;;
+              docs/*|site/*) site=true ;;
+            esac
+            case "$f" in
+              # Each of these is generated and checked by the build job, so a
+              # hand edit to it has to reach that job.
+              examples/README.md|docs/spec/datamodel_scope.md) ;;
+              # The `checks` job runs this one on every commit. The other lune
+              # scripts run inside the Rust jobs, so a change to one has to
+              # reach them to be exercised at all.
+              scripts/verify_boundaries.luau) continue ;;
+              docs/*|site/*|*.md) continue ;;
             esac
             echo "triggers the Rust jobs: $f"
             code=true
           done <<< "$changed"
 
           if [ "$code" = false ]; then
-            echo "documentation and lune scripts only; the Rust jobs are skipped"
+            echo "documentation only; the Rust jobs are skipped"
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "site=$site" >> "$GITHUB_OUTPUT"
 
   # THE CHECKS THAT NEED NO TOOLCHAIN, in their own job so they cost seconds.
   #
@@ -167,7 +177,6 @@ jobs:
       - uses: CompeyDev/setup-rokit@v0.1.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
 
       # ARCHITECTURE, CHECKED. Dew owns its host outright: the rendering stack is
       # this repository's, and no framework is a dependency of it. A boundary with
@@ -195,6 +204,30 @@ jobs:
           fi
           echo "built $found Rojo project(s)"
 
+  # THE DOCUMENTATION SITE BUILDS, AND EVERY LINK IN IT RESOLVES. `pnpm build`
+  # renders `docs/` through `site/` and then fails on a link to a page or heading
+  # the build did not produce. Linux, and only when either directory changed.
+  site:
+    name: documentation site
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      # The pnpm version is `packageManager` in `site/package.json`.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: site/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
 
   build:
     name: Windows, build and render every example

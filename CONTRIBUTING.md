@@ -104,6 +104,25 @@ separate fix needed.
 `dew.toml` and an entry module have to say. [examples/](examples/) is the same
 thing working.
 
+## Documentation
+
+`docs/` is the documentation, as plain Markdown that reads correctly on GitHub.
+Pages link to each other by relative path, `[scope](datamodel_scope.md)`, and a
+page is in the site's navigation by being in `guides/`, `reference/` or `spec/`.
+`docs/spec/` is the specification and is MIT, under its own `LICENSE`.
+
+`site/` renders it with Starlight. Pages built from components, like the landing
+page, live in `site/src/pages/`. To preview:
+
+```sh
+cd site && pnpm install && pnpm dev
+```
+
+`pnpm build` fails on a link to a page or heading that does not exist.
+`docs/spec/datamodel_scope.md` is generated: change the classification in
+`host/src/bin/datamodel_surface.rs` and run
+`cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown`.
+
 ## Pull requests
 
 **One observable goal per branch**, and the prefix says which kind of work it
