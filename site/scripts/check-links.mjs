@@ -66,12 +66,17 @@ const markdown = (dir) =>
 		return entry.name.endsWith('.md') && !entry.name.startsWith('_') ? [full] : [];
 	});
 const routes = markdown(DOCS).map((file) => `/${path.relative(DOCS, file).replace(/\\/g, '/').replace(/\.md$/, '')}/`);
+const home = readFileSync(path.join(DIST, 'index.html'), 'utf8');
 for (const route of routes) {
+	if (!home.includes(`href="${route}"`)) broken.push(`/ does not link ${route} (missing from the home page's index)`);
 	const file = fileFor(route);
 	if (!file) continue;
 	const html = readFileSync(file, 'utf8');
 	const topic = route.split('/')[1];
-	for (const other of routes.filter((r) => r.split('/')[1] === topic)) {
+	const siblings = routes.filter((r) => r.split('/')[1] === topic);
+	// A topic with one page has no sidebar; the topic bar and the home page reach it.
+	if (siblings.length < 2) continue;
+	for (const other of siblings) {
 		if (!html.includes(`href="${other}"`)) broken.push(`${route} does not link ${other} (missing from the navigation)`);
 	}
 }

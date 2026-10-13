@@ -7,8 +7,6 @@ import { steps } from './src/markdown/steps.mjs';
 import { trees } from './src/markdown/trees.mjs';
 import { relativeLinks } from './src/markdown/relative-links.mjs';
 import { REPOSITORY } from './src/repository.mjs';
-import { sidebar } from './src/sidebar.mjs';
-import { TOPICS } from './src/topics.mjs';
 
 // https://astro.build/config
 export default defineConfig({
@@ -20,10 +18,8 @@ export default defineConfig({
 			title: 'Dew Docs',
 			description: 'Build apps in Luau, with the interface classes you know from Roblox.',
 			social: [{ icon: 'github', label: 'GitHub', href: REPOSITORY }],
-			// EACH TOPIC IS A DIRECTORY OF `docs/` (`src/topics.mjs`), and each of its
-			// groups a subdirectory. A page is in the navigation by existing; see
-			// `src/sidebar.mjs`, and `src/route-data.ts` for how a topic becomes a tab.
-			sidebar: sidebar(TOPICS),
+			// THE NAVIGATION IS BUILT PER REQUEST in `src/route-data.ts`, from the
+			// topics in `src/topics.mjs`, so it never goes stale in the dev server.
 			routeMiddleware: './src/route-data.ts',
 			components: {
 				Header: './src/components/Header.astro',

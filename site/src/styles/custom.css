@@ -68,6 +68,12 @@
 	}
 }
 
+/* A page in a single-page topic has no sidebar. Starlight widens the content of
+   every page without one, which suits the home page and not an article. */
+html:not([data-has-sidebar])[data-has-toc] {
+	--sl-content-width: 46rem;
+}
+
 /* The header element is Starlight's; the two rows inside it are ours. */
 .header {
 	padding-block: 0;
