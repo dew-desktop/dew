@@ -110,7 +110,7 @@ thing working.
 Each top-level directory is a topic on the site (`get-started/`, `build/`,
 `reference/`, `spec/`), and each subdirectory of a topic is a group in its
 sidebar, listed in `site/src/topics.mjs`. A page is in the navigation by
-existing. Pages link to each other by relative path, `[scope](datamodel_scope.md)`.
+existing. Pages link to each other by relative path, `[manifest](manifest.md)`.
 `docs/spec/` is the specification and is MIT, under its own `LICENSE`.
 
 Three conventions render specially on the site and stay readable on GitHub:
@@ -123,6 +123,13 @@ Three conventions render specially on the site and stay readable on GitHub:
 - **A task page** sets `steps: true` in its frontmatter. Its H2s are numbered
   steps, and a code span ending a step's heading names the file that step edits:
   ``## Grant the permission `dew.toml` ``.
+
+**Write for someone learning Dew for the first time.** The documentation is a
+public reference with a professional, inviting voice. Describe what the reader
+makes and what they will see, never how Dew works inside: no crate or function
+names, no history, and no case for why Dew is designed the way it is. A reason
+belongs on the page only when it helps the reader predict what happens, and then
+as one sentence. Say "Dew", not "the host", and "Roblox", not "the engine".
 
 How a page reads:
 
@@ -137,8 +144,9 @@ How a page reads:
   the code says what the reader now has.
 - **The default, then how to change it.** State each default and each constraint
   as its own sentence.
-- **Only what works.** A feature that is declared but not honoured is described
-  as exactly that.
+- **Only what works.** A feature that is accepted but has no effect yet is
+  described as exactly that.
+- **American spelling,** to match the Roblox names beside it: color, behavior.
 
 `site/` renders `docs/` with Starlight. Pages built from components, like the
 home page, live in `site/src/pages/`. To preview:
@@ -147,8 +155,9 @@ home page, live in `site/src/pages/`. To preview:
 cd site && pnpm install && pnpm dev
 ```
 
-`pnpm build` fails on a link to a page or heading that does not exist, and on a
-page missing from its topic's navigation. `docs/spec/datamodel_scope.md` is
+`pnpm lint:docs` checks every page against the rules in `site/style-rules.mjs`,
+and CI runs it. `pnpm build` fails on a link to a page or heading that does not
+exist, and on a page missing from its topic's navigation. `docs/reference/classes.md` is
 generated: change the classification in `host/src/bin/datamodel_surface.rs` and
 run `cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown`.
 

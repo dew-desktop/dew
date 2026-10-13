@@ -227,6 +227,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: site/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      # The prose rules in `site/style-rules.mjs`, before the slower build.
+      - run: pnpm lint:docs
       - run: pnpm build
 
   build:

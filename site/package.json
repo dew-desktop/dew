@@ -8,7 +8,8 @@
     "start": "astro dev",
     "build": "astro build && node scripts/check-links.mjs",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "lint:docs": "node scripts/lint-docs.mjs"
   },
   "dependencies": {
     "@astrojs/markdown-satteri": "0.4.3",
