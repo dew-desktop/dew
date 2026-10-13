@@ -149,15 +149,10 @@ jobs:
 
   # THE CHECKS THAT NEED NO TOOLCHAIN, in their own job so they cost seconds.
   #
-  # These three ran inside the Windows build job, where they took two seconds
-  # and started fifty-seven seconds in, behind a toolchain install and a cache
-  # restore they do not use. They gate the Rust jobs below rather than running
-  # beside them, which keeps the property the note on commitlint describes: a
-  # malformed subject line fails in half a minute instead of after a GPU build.
-  #
-  # THIS JOB HAS NO `if:`. verify_boundaries is the one check a documentation-only
-  # commit still runs, so the kind of commit that skips every Rust job is exactly
-  # the kind this job exists for.
+  # They gate the Rust jobs below rather than running beside them, so a broken
+  # boundary fails in half a minute instead of after a GPU build. They run on
+  # every commit that is not a tag, documentation-only ones included, which are
+  # exactly the commits that skip every Rust job.
   checks:
     name: architecture boundaries
     runs-on: ubuntu-latest
@@ -168,10 +163,6 @@ jobs:
     if: github.ref_type != 'tag'
     steps:
       - uses: actions/checkout@v4
-        with:
-          # commitlint below diffs against the pull request base, and the
-          # default shallow checkout does not carry it.
-          fetch-depth: 0
 
       - uses: CompeyDev/setup-rokit@v0.1.2
         with:
