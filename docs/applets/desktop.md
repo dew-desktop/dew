@@ -2,7 +2,8 @@
 title: desktop
 description: Everything your applet can reach outside its own interface.
 sidebar:
-  order: 2
+  label: desktop table
+  order: 4
 ---
 
 `desktop` is the table your applet uses to reach things outside its own
@@ -89,7 +90,7 @@ Dew answers immediately, and the size matches what Dew draws. See
 
 `Widget`, `Window` and `Overlay` open a surface and return the root to build
 under. Each takes an optional table of options. The
-[applet structure](../spec/applet_contract.md#surfaces) page describes surfaces in full.
+[Surfaces](surfaces.md) page describes them in full.
 
 ### Widget options
 

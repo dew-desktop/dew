@@ -49,7 +49,7 @@
 //! `FindFirstChild` with a worse failure mode, under the one name whose entire
 //! purpose is the case it cannot serve. A guest writing `WaitForChild` is saying
 //! the child may not exist yet, and an error is a WRONG answer to that, not a
-//! partial one. So it stays on the backlog in `docs/reference/classes.md`, where a
+//! partial one. So it stays on the backlog in `docs/interface/classes.md`, where a
 //! method this host does not implement belongs, and it arrives with the scheduler.
 
 use super::transition::LuaTweenInfo;
@@ -378,7 +378,7 @@ pub fn class_is_a(class: &str, ancestor: &str) -> bool {
 /// Does this host answer `member` when it is called on an instance of `class`?
 ///
 /// The member twin of [`super::accepts`], and the measurement behind the second
-/// half of `docs/reference/classes.md`. `datamodel-surface` calls this and nothing
+/// half of `docs/interface/classes.md`. `datamodel-surface` calls this and nothing
 /// else, so that document cannot report a method the dispatch will not hand out.
 pub fn implements(class: &str, member: &str) -> bool {
     MEMBERS

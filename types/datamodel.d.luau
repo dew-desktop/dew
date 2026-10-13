@@ -4,7 +4,7 @@
 -- and commit the result. CI's `Check the generated DataModel editor types are
 -- current` step runs the same binary with `--check`, which regenerates into
 -- memory and diffs against this file without writing, the same discipline
--- `docs/reference/classes.md` already asks for in its own header comment.
+-- `docs/interface/classes.md` already asks for in its own header comment.
 --
 -- Owns the entire DataModel class and enum hierarchy this host accepts,
 -- including `host/src/datamodel/extensions.rs`'s Dew-original rows

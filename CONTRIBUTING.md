@@ -34,7 +34,7 @@ it even when nobody thought to ask for `dew --version` separately.
 None of it is a compatibility promise. It does not say whether a given mod
 still works after an update; that answer lives entirely in
 `experimentalDatamodel`'s revision pinning (see
-[docs/spec/applet_contract.md](docs/spec/applet_contract.md)), not in this
+[docs/applets/structure.md](docs/applets/structure.md)), not in this
 number. A build with a higher count is not guaranteed to behave the same as one
 with a lower count, and a mod that needs that guarantee should pin the
 revisions it depends on rather than reading this string.
@@ -100,17 +100,23 @@ separate fix needed.
 
 ## Writing an applet
 
-[docs/spec/applet_contract.md](docs/spec/applet_contract.md) is what a
+[docs/applets/structure.md](docs/applets/structure.md) is what a
 `dew.toml` and an entry module have to say. [examples/](examples/) is the same
 thing working.
 
 ## Documentation
 
 `docs/` is the documentation, as plain Markdown that reads correctly on GitHub.
-Each top-level directory is a topic on the site (`get-started/`, `build/`,
-`reference/`, `spec/`), and each subdirectory of a topic is a group in its
-sidebar, listed in `site/src/topics.mjs`. A page is in the navigation by
-existing. Pages link to each other by relative path, `[manifest](manifest.md)`.
+Each top-level directory is a topic on the site, listed with a one-line
+description in `site/src/topics.mjs`, and each subdirectory of a topic is a group
+in its sidebar. A page is in the navigation by existing.
+
+- `get-started/` takes a newcomer from nothing to a running applet.
+- `applets/` is what is specific to applets, the apps people install on their
+  desktop: their files, surfaces, manifest and the `desktop` table.
+- `interface/` is what any Dew app uses to build its interface: the classes,
+  events and images. A page belongs here unless it only makes sense for applets.
+- `spec/` is what every host that runs Dew apps provides. Pages link to each other by relative path, `[manifest](manifest.md)`.
 `docs/spec/` is the specification and is MIT, under its own `LICENSE`.
 
 Three conventions render specially on the site and stay readable on GitHub:
@@ -157,7 +163,7 @@ cd site && pnpm install && pnpm dev
 
 `pnpm lint:docs` checks every page against the rules in `site/style-rules.mjs`,
 and CI runs it. `pnpm build` fails on a link to a page or heading that does not
-exist, and on a page missing from its topic's navigation. `docs/reference/classes.md` is
+exist, and on a page missing from its topic's navigation. `docs/interface/classes.md` is
 generated: change the classification in `host/src/bin/datamodel_surface.rs` and
 run `cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown`.
 

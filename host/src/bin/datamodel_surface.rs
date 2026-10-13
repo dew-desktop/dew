@@ -6,7 +6,7 @@
 //! the pinned dump tracks a new upstream build.
 //!
 //! Run with `cargo run --bin datamodel-surface`. `--markdown` writes the
-//! specification's scope document to `docs/reference/classes.md`, and
+//! specification's scope document to `docs/interface/classes.md`, and
 //! `--markdown --check` fails when the committed one differs.
 
 use dew_host::datamodel::render::honours::{honours, Honour};
@@ -18,7 +18,7 @@ use std::fmt::Write as _;
 use std::path::Path;
 
 /// Where `--markdown` writes, relative to the repository root.
-const SCOPE_DOCUMENT: &str = "docs/reference/classes.md";
+const SCOPE_DOCUMENT: &str = "docs/interface/classes.md";
 
 /// Writes the scope document, or with `check` compares it against the
 /// committed one. `\r\n` is normalized away first: a Windows checkout hands
@@ -685,7 +685,7 @@ fn emit_markdown(
     println!("title: Supported classes");
     println!("description: The Roblox UI classes Dew supports, and how each one works.");
     println!("sidebar:");
-    println!("  order: 2");
+    println!("  order: 1");
     println!("---\n");
     println!("<!-- GENERATED. Regenerate with:");
     println!(

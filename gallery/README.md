@@ -44,7 +44,7 @@ not a name: a bare entry is indistinguishable from something nobody got round to
 ## What the renderer claims is held to this
 
 `dew_host::datamodel::render::honours` answers, per class and property, whether
-Dew's renderer reads it, and `docs/reference/classes.md` prints its answers. A test
+Dew's renderer reads it, and `docs/interface/classes.md` prints its answers. A test
 beside it fails on any claim without evidence: a variant here that moved pixels
 on that class, a passing engine-verified conformance case that sets the property
 on that class, or an entry in `CANNOT_DIFFER`. A renderer change that makes a

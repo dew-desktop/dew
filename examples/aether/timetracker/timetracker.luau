@@ -4,7 +4,7 @@
 
 	A DECLARATION. Requiring this file defines a table and does nothing else; the
 	host reads `id` and `size`, checks `dew.toml`, builds the capability table,
-	and only then calls `mount`. See docs/spec/applet_contract.md.
+	and only then calls `mount`. See docs/applets/structure.md.
 
 	Everything below `mount` is ORDINARY AETHER — `create`, `source`, `derive`,
 	and the engine's property names. There is no Dew dialect, which is what keeps the

@@ -2,7 +2,7 @@
 title: Supported classes
 description: The Roblox UI classes Dew supports, and how each one works.
 sidebar:
-  order: 2
+  order: 1
 ---
 
 <!-- GENERATED. Regenerate with:

@@ -18,7 +18,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Dew Docs',
-			description: 'Build desktop applets in Luau over a native DataModel.',
+			description: 'Build apps in Luau, with the interface classes you know from Roblox.',
 			social: [{ icon: 'github', label: 'GitHub', href: REPOSITORY }],
 			// EACH TOPIC IS A DIRECTORY OF `docs/` (`src/topics.mjs`), and each of its
 			// groups a subdirectory. A page is in the navigation by existing; see

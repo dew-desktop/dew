@@ -98,7 +98,8 @@ dew snapshot clock -o clock.png
 
 ## Next steps
 
-- [Applet structure](../spec/applet_contract.md) covers every field the module
-  can return, the kinds of surface, and how images load.
-- [Manifest reference](../reference/manifest.md) lists every field and permission
-  in `dew.toml`.
+- [Applet structure](../applets/structure.md) explains every file in an applet
+  and what Dew does with it.
+- [Surfaces](../applets/surfaces.md) covers widgets, windows and overlays.
+- [Supported classes](../interface/classes.md) lists the classes you can build
+  your interface from.

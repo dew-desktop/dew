@@ -11,7 +11,7 @@ two services that are not part of the DataModel: **text measurement** and **fram
 timing**. This page describes what you can rely on from each, whichever host your
 applet runs on.
 
-In Dew, you reach both through the [`desktop` table](../reference/desktop.md):
+In Dew, you reach both through the [`desktop` table](../applets/desktop.md):
 `desktop.Text.Measure` and `desktop.Clock`. Another host can name them
 differently.
 

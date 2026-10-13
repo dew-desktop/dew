@@ -2,7 +2,7 @@
 title: Manifest
 description: Every field and permission you can set in dew.toml.
 sidebar:
-  order: 1
+  order: 3
 ---
 
 Every applet has a `dew.toml` file in its directory. It names the applet and lists
@@ -71,12 +71,30 @@ local widget = assert(desktop.Widget, "dew.toml must grant `widget`")
 
 ## Experimental features
 
-List each feature as `Class.Property@version`, where the version is the one you
-wrote your applet against:
+Some DataModel features are available before their design is final. To use one,
+list it as `Class.Property@version`, with the version you wrote your applet
+against:
 
 ```toml
 experimentalDatamodel = ["GuiObject.BlendingMode@1"]
 ```
 
-The [applet structure](../spec/applet_contract.md#experimental-features) page
-explains how versions work and how to try a feature locally.
+The version is required. If the feature changes in a later version of Dew, your
+applet stops loading with a message that says what to update, instead of quietly
+behaving differently.
+
+When your applet loads, Dew prints each feature it turned on:
+
+```text
+[dew] experimental: FFlagDewGuiObjectBlendingMode (revision 1)
+```
+
+### Trying a feature locally
+
+To turn a feature on for every applet on your computer without editing a
+manifest, add its flag to `DewAppSettings.json` in Dew's settings folder. On
+Windows, that is `%LOCALAPPDATA%\Dew\DewAppSettings.json`:
+
+```json
+{ "FFlagDewGuiObjectBlendingMode": true }
+```

@@ -183,7 +183,7 @@ export const RULES = {
 		summary: 'a guide speaks to the reader, as "you" or in the imperative, never about them',
 		level: (page) => (kind(page) === 'guide' ? 'error' : 'off'),
 		check: (page) =>
-			matches(page, /\b(the reader|the user|an? (applet |mod )?author|the author|an? developer|the developer)\b/gi, (m) => `"${m}": address the reader directly`),
+			matches(page, /\b(the reader|the user(?! interface)|an? (applet |mod )?author|the author|an? developer|the developer)\b/gi, (m) => `"${m}": address the reader directly`),
 	},
 	'no-we': {
 		source: 'Roblox',
