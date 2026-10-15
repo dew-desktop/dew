@@ -22,9 +22,9 @@ permissions = ["widget"]
 | :--- | :--- | :--- | :--- |
 | `id` | string | Yes | Names the entry module: Dew loads `<id>.luau`, or `main.luau` if that does not exist. |
 | `name` | string | No | The window title, unless the surface sets its own |
-| `description` | string | No | The tray tooltip |
+| `description` | string | No | Shown under the applet's name in the Library of Dew's dashboard once it is installed. Without one, the Library shows the `id`. |
 | `permissions` | list of strings | No | What the applet can reach. Defaults to nothing. |
-| `hotkeys` | table | No | Not active yet. Dew reports each binding as not bound. |
+| `hotkeys` | table | No | A binding does nothing when pressed. When the applet starts, Dew writes a warning naming each one to the terminal it runs in. |
 | `experimentalDatamodel` | list of strings | No | Experimental features the applet uses, each with its version |
 
 An `id` cannot be empty, `.` or `..`, and cannot contain `/`, `\` or `:`.

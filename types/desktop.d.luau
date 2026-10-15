@@ -269,14 +269,17 @@ declare desktop: {
 	--- starts with empty storage every time it starts.
 	Storage: Storage?,
 
-	--- Requires "clipboard".
+	--- Requires "clipboard". A clipboard Dew keeps for this applet alone,
+	--- separate from the system clipboard and from other applets. It is empty
+	--- each time the applet starts, so `read` returns `""` until `write` is called.
 	Clipboard: Clipboard?,
 
 	--- Requires "notifications". Writes the message to the terminal running Dew,
 	--- on a line that begins with `[dew:notify]`.
 	Notifications: Notifications?,
 
-	--- Requires "audio".
+	--- Requires "audio". `chime` plays nothing: it writes the sound's name to
+	--- the terminal running Dew, on a line that begins with `[dew:chime]`.
 	Audio: Audio?,
 
 	--- Requires "system". Load, memory, disks, network, battery, and the names
