@@ -30,10 +30,10 @@ the Dew repository.
 | `Window` | `window` | Opens a window |
 | `Overlay` | `overlay` | Opens an overlay |
 | `popover` | `popover` | Reserved; no surface kind is behind it yet |
-| `Storage` | `storage` | Key-value storage that persists between runs |
-| `Clipboard` | `clipboard` | The system clipboard |
-| `Notifications` | `notifications` | Desktop notifications |
-| `Audio` | `audio` | Sounds |
+| `Storage` | `storage` | Key-value storage that lasts while your applet runs |
+| `Clipboard` | `clipboard` | A clipboard of your applet's own, separate from the system clipboard |
+| `Notifications` | `notifications` | Messages written to the terminal running Dew |
+| `Audio` | `audio` | Sound names written to the terminal running Dew |
 | `System` | `system` | CPU, memory, disk, network, battery and processes |
 
 ## Time
@@ -135,8 +135,10 @@ describes each kind of surface in full.
 
 ## Storage
 
-With the `storage` permission, `Storage` keeps string values under string keys,
-and the values persist between runs.
+With the `storage` permission, `Storage` keeps string values under string keys
+while your applet runs. Each applet has its own storage, and it starts empty
+every time the applet starts, so a value you set is gone once Dew quits or you
+unload the applet.
 
 | Member | Returns |
 | :--- | :--- |
@@ -145,30 +147,36 @@ and the values persist between runs.
 
 ## Clipboard
 
-With the `clipboard` permission, `Clipboard` reads and writes the text on the
-clipboard.
+With the `clipboard` permission, `Clipboard` reads and writes text on a
+clipboard that Dew keeps for your applet alone. It is separate from the system
+clipboard, so text copied in another program does not appear here, and other
+programs cannot paste the text you write. It starts empty every time the applet
+starts. Copy and paste in a `TextBox` use the system clipboard, not this one.
 
 | Member | Returns |
 | :--- | :--- |
-| `Clipboard.read()` | The clipboard's text |
+| `Clipboard.read()` | The text last written with `Clipboard.write`, or an empty string |
 | `Clipboard.write(text)` | Nothing |
 
 ## Notifications
 
-With the `notifications` permission, `Notifications` shows the message you pass
-as a desktop notification.
+With the `notifications` permission, `Notifications` writes the message you
+pass to the terminal running Dew, on a line that begins with `[dew:notify]`. No
+desktop notification appears.
 
 | Member | Returns |
 | :--- | :--- |
-| `Notifications.show(message)` | Nothing. Shows a desktop notification. |
+| `Notifications.show(message)` | Nothing. Writes the message to the terminal. |
 
 ## Audio
 
-With the `audio` permission, `Audio` plays a sound that you choose by its name.
+With the `audio` permission, `Audio` takes the name of a sound and writes that
+name to the terminal running Dew, on a line that begins with `[dew:chime]`. No
+sound plays.
 
 | Member | Returns |
 | :--- | :--- |
-| `Audio.chime(name)` | Nothing. Plays a named sound. |
+| `Audio.chime(name)` | Nothing. Writes the name to the terminal. |
 
 ## System
 

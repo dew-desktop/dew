@@ -34,7 +34,8 @@ permissions = ["widget"]
 ```
 
 - `id` names the entry module, so Dew loads `clock.luau`.
-- `name` is the title the tray shows.
+- `name` is the title Dew gives a window. The tray menu lists a running applet
+  by the name of its directory instead, so this one appears there as `clock`.
 - `permissions` lists what the applet can reach: `widget` lets it open a
   borderless surface on the desktop, and nothing else.
 

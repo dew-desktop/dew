@@ -21,7 +21,7 @@ permissions = ["widget"]
 | Field | Type | Required | What it does |
 | :--- | :--- | :--- | :--- |
 | `id` | string | Yes | Names the entry module: Dew loads `<id>.luau`, or `main.luau` if that does not exist. |
-| `name` | string | No | The window title, unless the surface sets its own, and the tray tooltip |
+| `name` | string | No | The window title, unless the surface sets its own |
 | `description` | string | No | The tray tooltip |
 | `permissions` | list of strings | No | What the applet can reach. Defaults to nothing. |
 | `hotkeys` | table | No | Not active yet. Dew reports each binding as not bound. |
@@ -44,10 +44,10 @@ list at least one surface. Each permission adds one member to the
 | `window` | `desktop.Window` | Open an ordinary window |
 | `overlay` | `desktop.Overlay` | Draw over the whole desktop |
 | `popover` | `desktop.popover` | Reserved for a future kind of surface |
-| `storage` | `desktop.Storage` | Save text that persists between runs |
-| `clipboard` | `desktop.Clipboard` | Read and write the clipboard |
-| `notifications` | `desktop.Notifications` | Show desktop notifications |
-| `audio` | `desktop.Audio` | Play sounds |
+| `storage` | `desktop.Storage` | Keep text while the applet runs |
+| `clipboard` | `desktop.Clipboard` | Read and write a clipboard of its own, separate from the system clipboard |
+| `notifications` | `desktop.Notifications` | Write messages to the terminal running Dew |
+| `audio` | `desktop.Audio` | Write sound names to the terminal running Dew |
 | `system` | `desktop.System` | Read CPU, memory, disk, network and battery usage |
 | `rbxassetid` | Nothing on `desktop` | Load images from `rbxassetid://` addresses |
 
