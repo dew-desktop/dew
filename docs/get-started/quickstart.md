@@ -18,12 +18,13 @@ clock/
 
 ## Create the directory
 
-Make a directory called `clock`. Everything your applet needs goes inside it, and
-your applet can read nothing outside it.
+Make a directory called `clock`. Everything your applet needs goes inside it,
+because your applet can read nothing outside it.
 
 ## Describe the applet `dew.toml`
 
-Create `dew.toml` in the directory:
+Create `dew.toml` in the directory. Dew reads this manifest first, to learn which
+module to load and what the applet can reach:
 
 ```toml title="clock/dew.toml"
 id = "clock"
@@ -34,12 +35,13 @@ permissions = ["widget"]
 
 - `id` names the entry module, so Dew loads `clock.luau`.
 - `name` is the title the tray shows.
-- `permissions` lists what the applet can reach. `widget` lets it open a
+- `permissions` lists what the applet can reach: `widget` lets it open a
   borderless surface on the desktop, and nothing else.
 
 ## Draw the time `clock.luau`
 
-Create `clock.luau` beside the manifest:
+Create `clock.luau` beside the manifest. It builds a label once, then changes the
+label's text on every frame:
 
 ```luau title="clock/clock.luau"
 --!strict
@@ -69,13 +71,15 @@ return {
 }
 ```
 
-The module returns a table that describes your applet. Dew opens a widget in the
-top-right corner at the size you asked for, then calls `mount` once with the
-`desktop` table and the root to build your interface under.
+The module returns a table that describes your applet: its `size`, the `surface`
+to open, and the `mount` function. Dew opens a widget in the top-right corner at
+the size you asked for, then calls `mount` once with the `desktop` table and the
+root to build your interface under.
 
 - `Instance.new`, `UDim2` and `Color3` work as they do in Roblox.
 - `desktop.Time` reads the wall clock, and `desktop.Clock.OnFrame` calls the
-  function once per frame. Neither needs a permission.
+  function once per frame. Neither needs a permission, so `widget` is the only
+  one in the manifest.
 - Setting `Text` to the value it already has does nothing, so the label redraws
   only when the second changes.
 
@@ -88,8 +92,9 @@ command does this on Windows:
 dew run clock
 ```
 
-The time appears in the top-right corner of your screen. To check the applet
-without opening a window, validate it and render one frame to an image:
+The time appears in the top-right corner of your screen and changes every second.
+To check the applet without opening a window, validate it and render one frame to
+an image:
 
 ```sh
 dew check clock
