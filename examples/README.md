@@ -255,16 +255,16 @@ Globals the host installs that the engine has no counterpart for: `DewRoot`, `de
 Read in part, in the renderer's own words:
 
 - `ImageLabel.ScaleType`: Stretch, Fit and Crop are drawn; Slice and Tile fall back to Stretch
-- `TextButton.FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
-- `TextLabel.Font`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
-- `TextLabel.FontFace`: a family Dew ships, or finds in a local Studio install, is drawn in its own face; any other is drawn in the nearest shipped face
-- `TextLabel.TextTruncate`: AtEnd is drawn with an ellipsis; SplitWord is drawn as None
-- `UICorner.CornerRadius`: the offset rounds the corners; the scale is dropped
-- `UIPadding.PaddingBottom`: the offset insets the content; the scale is discarded
-- `UIPadding.PaddingLeft`: the offset insets the content; the scale is discarded
-- `UIPadding.PaddingRight`: the offset insets the content; the scale is discarded
-- `UIPadding.PaddingTop`: the offset insets the content; the scale is discarded
-- `UIStroke.Thickness`: around glyphs, drawn as copies of the text stamped out to the thickness, so joins are always round
-- `UIStroke.Transparency`: around glyphs, the stamped copies overlap, so a translucent outline reads more solid than the engine's
+- `TextButton.FontFace`: fonts Dew includes, or finds in a local Roblox Studio install, are drawn as themselves; any other font is drawn in the closest one Dew includes
+- `TextLabel.Font`: fonts Dew includes, or finds in a local Roblox Studio install, are drawn as themselves; any other font is drawn in the closest one Dew includes
+- `TextLabel.FontFace`: fonts Dew includes, or finds in a local Roblox Studio install, are drawn as themselves; any other font is drawn in the closest one Dew includes
+- `TextLabel.TextTruncate`: AtEnd shows an ellipsis; SplitWord behaves like None
+- `UICorner.CornerRadius`: the offset rounds the corners; the scale is ignored
+- `UIPadding.PaddingBottom`: the offset is applied; the scale is ignored
+- `UIPadding.PaddingLeft`: the offset is applied; the scale is ignored
+- `UIPadding.PaddingRight`: the offset is applied; the scale is ignored
+- `UIPadding.PaddingTop`: the offset is applied; the scale is ignored
+- `UIStroke.Thickness`: around text, the outline always has round corners
+- `UIStroke.Transparency`: around text, a translucent outline looks more solid than in Roblox
 
 <!-- END GENERATED: examples compatibility -->
