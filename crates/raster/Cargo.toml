@@ -1,8 +1,8 @@
 [package]
 name = "dew_raster"
-version = "0.0.1"
-license-file = "../../LICENSE"
-edition = "2021"
+version.workspace = true
+license-file.workspace = true
+edition.workspace = true
 description = "Aether's rasterizer: a C ABI over tiny-skia, consumed by zune.ffi"
 
 [lib]

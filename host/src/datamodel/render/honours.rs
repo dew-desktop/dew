@@ -116,12 +116,12 @@ fn gui_object(class: &str, property: &str) -> Honour {
             // `Font` sets `FontFace`, so both reach the same face.
             "FontFace" | "Font" => {
                 return Partial(
-                    "a family Dew ships, or finds in a local Studio install, is drawn in \
-                     its own face; any other is drawn in the nearest shipped face",
+                    "fonts Dew includes, or finds in a local Roblox Studio install, are \
+                     drawn as themselves; any other font is drawn in the closest one Dew includes",
                 )
             }
             "InputAction" => {
-                return Partial("drawn as its own name in text; no glyph for the bound input")
+                return Partial("shown as the action's name; no icon for the bound input is drawn")
             }
             _ => {}
         }
@@ -139,27 +139,28 @@ fn gui_object(class: &str, property: &str) -> Honour {
             // selection is highlighted from its anchor.
             "CursorPosition" | "SelectionStart" if class == "TextBox" => {
                 return Partial(
-                    "drawn as the focused box's caret and selection; positions count \
-                     UTF-8 bytes, and the engine's unit for non-ASCII text is not measured",
+                    "shown as the caret and selection of a focused box; positions count \
+                     UTF-8 bytes, so they can differ from Roblox in text beyond ASCII",
                 )
             }
             "PlaceholderText" if class == "TextBox" => {
                 return Divergent(
-                    "RichText markup is applied to a placeholder; the engine draws a \
-                     placeholder's markup as written",
+                    "rich text markup in a placeholder is applied; Roblox shows the markup \
+                     as written",
                 )
             }
             "TextTruncate" if class == "TextBox" => {
                 return Partial(
-                    "AtEnd is drawn with an ellipsis, except while the box holds focus, when its whole line is shown and scrolled; SplitWord is drawn as None",
+                    "AtEnd shows an ellipsis, except while the box has focus, when the whole \
+                     line scrolls; SplitWord behaves like None",
                 )
             }
             "TextTruncate" => {
-                return Partial("AtEnd is drawn with an ellipsis; SplitWord is drawn as None")
+                return Partial("AtEnd shows an ellipsis; SplitWord behaves like None")
             }
             "RichText" => {
                 return Partial(
-                    "markup is stripped and measured; bold, italic, colour and other tags \
+                    "markup is removed from the text; bold, italic, color and other tags \
                      are not drawn",
                 )
             }
@@ -242,9 +243,9 @@ fn aspect_ratio_constraint(property: &str) -> Honour {
     match property {
         // `aspect_size`.
         "Parent" | "AspectRatio" | "AspectType" => Honour::Implemented,
-        "DominantAxis" => Honour::Partial(
-            "read only under ScaleWithParentSize; FitWithinMaxSize ignores it, which is unverified",
-        ),
+        "DominantAxis" => {
+            Honour::Partial("used only with ScaleWithParentSize; FitWithinMaxSize ignores it")
+        }
         _ => Honour::Absent,
     }
 }
@@ -254,7 +255,7 @@ fn padding(property: &str) -> Honour {
         "Parent" => Honour::Implemented,
         // `padding_of` keeps the offset of each `UDim`.
         "PaddingLeft" | "PaddingTop" | "PaddingRight" | "PaddingBottom" => {
-            Honour::Partial("the offset insets the content; the scale is discarded")
+            Honour::Partial("the offset is applied; the scale is ignored")
         }
         _ => Honour::Absent,
     }
@@ -265,7 +266,7 @@ fn corner(property: &str) -> Honour {
         "Parent" => Honour::Implemented,
         // `corner_radius` keeps the offset; the four per-corner radii are
         // never read.
-        "CornerRadius" => Honour::Partial("the offset rounds the corners; the scale is dropped"),
+        "CornerRadius" => Honour::Partial("the offset rounds the corners; the scale is ignored"),
         _ => Honour::Absent,
     }
 }
@@ -278,14 +279,10 @@ fn stroke(property: &str) -> Honour {
         // `strokes_of` turns it into the stroke's offset from the box edge,
         // and `paint_node` strokes the box grown or shrunk by that offset.
         "BorderStrokePosition" => Honour::Implemented,
-        "Thickness" => Honour::Partial(
-            "around glyphs, drawn as copies of the text stamped out to the thickness, \
-             so joins are always round",
-        ),
-        "Transparency" => Honour::Partial(
-            "around glyphs, the stamped copies overlap, so a translucent outline reads \
-             more solid than the engine's",
-        ),
+        "Thickness" => Honour::Partial("around text, the outline always has round corners"),
+        "Transparency" => {
+            Honour::Partial("around text, a translucent outline looks more solid than in Roblox")
+        }
         _ => Honour::Absent,
     }
 }

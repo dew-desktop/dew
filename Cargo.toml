@@ -20,6 +20,17 @@ members = [
     "crates/window",
 ]
 
+# THE ONE PLACE DEW'S VERSION IS WRITTEN. Every member inherits it, `dew --version`
+# prints it through `CARGO_PKG_VERSION`, and a release tag is checked against it.
+# There is no second copy for anything to drift from.
+#
+# PolyForm Shield 1.0.0 is not an SPDX identifier, so the licence is named by file
+# rather than by `license`, which tools validate against the SPDX list.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license-file = "LICENSE"
+
 # OPTIMISE THE DEPENDENCIES EVEN IN A DEBUG BUILD.
 #
 # `cargo run` was unusable and it read as a Dew problem: dragging a window in the

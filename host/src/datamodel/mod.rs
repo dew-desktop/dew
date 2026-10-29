@@ -14,7 +14,7 @@
 //! before the value reaches layout, which is the security argument for a
 //! host-owned datamodel made concrete". No file in the host binary imported any
 //! of them. The only consumer was the reporting tool that prints
-//! `docs/datamodel_scope.md`. The mechanism described in the present tense had
+//! `docs/interface/classes.md`. The mechanism described in the present tense had
 //! never existed, and nothing said so. This file is that comment becoming true.
 //!
 //! THE SHAPE, and why it is an arena
@@ -1119,7 +1119,7 @@ pub(crate) fn pixel_i32(value: f64) -> i32 {
 fn coerce(value: &LuaValue, want: VariantType, class: &str, property: &str) -> LuaResult<Variant> {
     if !supported(want) {
         return Err(LuaError::runtime(format!(
-            "{class}.{property} is a {want:?}, which this host cannot accept yet.              The property is real and the value may well be correct; Dew's DataModel              implements primitive-typed properties in this slice and the vocabulary              types in the next. See docs/datamodel_scope.md."
+            "{class}.{property} is a {want:?}, which this host cannot accept yet.              The property is real and the value may well be correct; Dew's DataModel              implements primitive-typed properties in this slice and the vocabulary              types in the next. See docs/interface/classes.md."
         )));
     }
     let wrong = |expected: &str| {
@@ -1202,7 +1202,7 @@ fn coerce(value: &LuaValue, want: VariantType, class: &str, property: &str) -> L
 ///
 /// ONE PREDICATE, READ BY THREE THINGS: `coerce` refuses anything it rejects,
 /// `accepts` reports on it, and `datamodel-surface` counts with it to generate
-/// `docs/datamodel_scope.md`. A hand-kept list in the reporting tool says
+/// `docs/interface/classes.md`. A hand-kept list in the reporting tool says
 /// whatever it was last edited to say, which is how that document came to report
 /// Aether's numbers under the host's name.
 pub fn supported(ty: VariantType) -> bool {
@@ -1229,7 +1229,7 @@ pub fn supported(ty: VariantType) -> bool {
 
 /// Would this host accept an assignment to `class.property` from a guest?
 ///
-/// The measurement behind the number in `docs/datamodel_scope.md`. It answers
+/// The measurement behind the number in `docs/interface/classes.md`. It answers
 /// for the REAL code path: the property must exist on the class or an ancestor,
 /// be writable, and carry a type `coerce` can store.
 pub fn accepts(class: &str, property: &str) -> bool {

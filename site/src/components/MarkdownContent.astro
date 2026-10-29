@@ -1,0 +1,9 @@
+---
+import Default from '@astrojs/starlight/components/MarkdownContent.astro';
+
+const { entry } = Astro.locals.starlightRoute;
+---
+
+<div class:list={{ 'dew-steps': entry.data.steps }}>
+	<Default><slot /></Default>
+</div>

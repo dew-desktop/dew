@@ -2,14 +2,13 @@ MIT License
 
 Applies to the SPECIFICATION DOCUMENTS in this directory, and to nothing else.
 
-WHY THIS DIRECTORY IS DIFFERENT (ADR-011). The repository is licensed under
-PolyForm Shield 1.0.0, whose noncompete protects the client and the services built
-with it. That protection would defeat the purpose of a specification: the
-DataModel standard described here is worth nothing unless OTHER implementations
-read it and run against it, and a noncompete over a standard is a standard nobody
-can adopt.
+WHY THIS DIRECTORY IS DIFFERENT. The repository is licensed under PolyForm Shield
+1.0.0, whose noncompete protects the client and the services built with it. That
+protection would defeat the purpose of a specification: the DataModel standard
+described here is worth nothing unless OTHER implementations read it and run
+against it, and a noncompete over a standard is a standard nobody can adopt.
 
-Roblox made the same split -- Luau is MIT while the client and the platform are
+Roblox made the same split: Luau is MIT while the client and the platform are
 not.
 
 The conformance cases that verify this specification live in the Aether

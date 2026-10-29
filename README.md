@@ -156,7 +156,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for workflow details. Contributions requi
 | Component | License |
 | :--- | :--- |
 | Client (`host/`, `crates/`) | [PolyForm Shield 1.0.0](LICENSE): permitted for all uses except competing commercial products |
-| Specification (`docs/`) | [MIT](docs/LICENSE), allowing third-party implementations to adopt the standard |
+| Specification (`docs/spec/`) | [MIT](docs/spec/LICENSE), allowing third-party implementations to adopt the standard |
 | Applets | Authored applets maintain their own licenses and never link against Dew |
 
 ---

@@ -199,12 +199,13 @@ print("the build identifier")
 -- THE DOTTED, ROBLOX-SHAPED FORM (`0.1.0.482`), NOT `+g<sha>` -- the build
 -- number itself moves every commit, so this checks for the stable prefix
 -- (Cargo's own version, dot-terminated) rather than an exact fourth segment.
--- Read from host/Cargo.toml rather than hardcoded, so a version bump cannot
+-- Read from the workspace rather than hardcoded, so a version bump cannot
 -- make this assertion quietly stop checking anything.
-local cargoToml = fs.readFile("host/Cargo.toml")
-local cargoVersion = string.match(cargoToml, '\nversion = "([^"]+)"')
-	or error("smoke: could not find a version in host/Cargo.toml")
+local workspaceToml = string.gsub(fs.readFile("Cargo.toml"), "\r\n", "\n")
+local cargoVersion = string.match(workspaceToml, '\n%[workspace%.package%]\nversion = "([^"]+)"')
+	or error("smoke: Cargo.toml's [workspace.package] does not open with a version")
 local versionPrefix = `{cargoVersion}.`
+
 ok("--version prints the build identifier", { "--version" }, versionPrefix)
 ok("-V is the same command", { "-V" }, versionPrefix)
 

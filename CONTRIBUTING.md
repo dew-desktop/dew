@@ -25,18 +25,18 @@ version plus a running build count, for example:
 0.1.0.242
 ```
 
-The first three numbers are `host/Cargo.toml`'s version. The last is a
-plain count of commits, incrementing on every commit regardless of what
-changed. The same identifier appears in the tray's About entry and at the
-top of a panic report, so a crash always carries it even when nobody
-thought to ask for `dew --version` separately.
+The first three numbers are the workspace version, `[workspace.package]` in
+the root `Cargo.toml`. The last is a plain count of commits, incrementing on
+every commit regardless of what changed. The same identifier appears in the
+tray's About entry and at the top of a panic report, so a crash always carries
+it even when nobody thought to ask for `dew --version` separately.
 
 None of it is a compatibility promise. It does not say whether a given mod
 still works after an update; that answer lives entirely in
 `experimentalDatamodel`'s revision pinning (see
-[docs/applet_contract.md](docs/applet_contract.md)), not in this number. A
-build with a higher count is not guaranteed to behave the same as one with
-a lower count, and a mod that needs that guarantee should pin the
+[docs/applets/structure.md](docs/applets/structure.md)), not in this
+number. A build with a higher count is not guaranteed to behave the same as one
+with a lower count, and a mod that needs that guarantee should pin the
 revisions it depends on rather than reading this string.
 
 ## Checking it
@@ -100,8 +100,72 @@ separate fix needed.
 
 ## Writing an applet
 
-[docs/applet_contract.md](docs/applet_contract.md) is what a `dew.toml` and an
-entry module have to say. [examples/](examples/) is the same thing working.
+[docs/applets/structure.md](docs/applets/structure.md) is what a
+`dew.toml` and an entry module have to say. [examples/](examples/) is the same
+thing working.
+
+## Documentation
+
+`docs/` is the documentation, as plain Markdown that reads correctly on GitHub.
+Each top-level directory is a topic on the site, listed with a one-line
+description in `site/src/topics.mjs`, and each subdirectory of a topic is a group
+in its sidebar. A page is in the navigation by existing.
+
+- `get-started/` takes a newcomer from nothing to a running applet.
+- `applets/` is what is specific to applets, the apps people install on their
+  desktop: their files, surfaces, manifest and the `desktop` table.
+- `interface/` is what any Dew app uses to build its interface: the classes,
+  events and images. A page belongs here unless it only makes sense for applets.
+- `spec/` is what every host that runs Dew apps provides. Pages link to each other by relative path, `[manifest](manifest.md)`.
+`docs/spec/` is the specification and is MIT, under its own `LICENSE`.
+
+Three conventions render specially on the site and stay readable on GitHub:
+
+- **A directory layout** is a fenced block marked `tree`. Two spaces of indent are
+  one level, a name ending in `/` is a directory, and text after `#` describes
+  the entry.
+- **A callout** is GitHub's alert syntax: `> [!NOTE]`, `> [!TIP]`,
+  `> [!IMPORTANT]`, `> [!WARNING]` or `> [!CAUTION]` on the first line of a quote.
+- **A task page** sets `steps: true` in its frontmatter. Its H2s are numbered
+  steps, and a code span ending a step's heading names the file that step edits:
+  ``## Grant the permission `dew.toml` ``.
+
+**Write for someone learning Dew for the first time.** The documentation is a
+public reference with a professional, inviting voice. Describe what the reader
+makes and what they will see, never how Dew works inside: no crate or function
+names, no history, and no case for why Dew is designed the way it is. A reason
+belongs on the page only when it helps the reader predict what happens, and then
+as one sentence. Say "Dew", not "the host", and "Roblox", not "the engine".
+
+How a page reads:
+
+- **Teach the files.** An applet is a directory, and its layout and the contents
+  of its files are the instruction. A `dew` command is one way to run what the
+  files describe today, not the subject of the page.
+- **Title by task or by name.** A task is imperative, "Store settings between
+  runs". A concept is a noun, "Surfaces". A reference page is the thing's name.
+- **One sentence of lede.** The frontmatter `description` says what the reader
+  gets, in under a dozen words, and is shown under the title.
+- **Second person, present tense.** One action per step, and the sentence after
+  the code says what the reader now has.
+- **The default, then how to change it.** State each default and each constraint
+  as its own sentence.
+- **Only what works.** A feature that is accepted but has no effect yet is
+  described as exactly that.
+- **American spelling,** to match the Roblox names beside it: color, behavior.
+
+`site/` renders `docs/` with Starlight. Pages built from components, like the
+home page, live in `site/src/pages/`. To preview:
+
+```sh
+cd site && pnpm install && pnpm dev
+```
+
+`pnpm lint:docs` checks every page against the rules in `site/style-rules.mjs`,
+and CI runs it. `pnpm build` fails on a link to a page or heading that does not
+exist, and on a page missing from its topic's navigation. `docs/interface/classes.md` is
+generated: change the classification in `host/src/bin/datamodel_surface.rs` and
+run `cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown`.
 
 ## Pull requests
 
@@ -114,14 +178,14 @@ runs.
 ## Releases
 
 A release is a tag on `main`, not a branch. Tagging a commit `v0.1.0` (`v`
-plus whatever `host/Cargo.toml`'s `version` field reads at that commit)
-triggers a workflow that builds `dew.exe` in release mode on Windows and
-attaches it to a GitHub Release for that tag. Cutting a release means
-bumping `host/Cargo.toml`'s version in an ordinary pull request first, then
-tagging the resulting commit once it lands: the release workflow checks the
-tag's version against `host/Cargo.toml` and refuses to build if they
-disagree, so a shipped `dew.exe`'s own `--version` output always matches the
-tag it was published under.
+plus the workspace version at that commit) triggers a workflow that builds
+`dew.exe` in release mode on Windows and attaches it to a GitHub Release for
+that tag, with notes generated from the pull requests merged since the last
+one. Cutting a release means bumping `version` under `[workspace.package]` in
+the root `Cargo.toml` in an ordinary pull request first, then tagging the
+resulting commit once it lands. The workflow refuses to build a tag whose
+version disagrees, so a shipped `dew.exe`'s own `--version` output always
+matches the tag it was published under.
 
 There is no `release/x.y` branch maintained alongside ongoing work on
 `main`. The one case that branch is for is reactive: hotfixing something

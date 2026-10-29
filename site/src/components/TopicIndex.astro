@@ -1,0 +1,101 @@
+---
+/**
+ * Every topic as a card: its name, what it covers, and its pages, from the
+ * route's own sidebar. On a page that belongs to no topic, the home page,
+ * `src/route-data.ts` leaves the sidebar whole, so this lists exactly what the
+ * navigation does. A new topic in `src/topics.mjs` appears here by existing.
+ *
+ * A component rather than markup in the page: Starlight's route data exists only
+ * once `StarlightPage` is rendering, which is when it renders this.
+ */
+import type { StarlightRouteData } from '@astrojs/starlight/route-data';
+import { TOPICS } from '../topics.mjs';
+
+type Entry = StarlightRouteData['sidebar'][number];
+type Link = Extract<Entry, { type: 'link' }>;
+const links = (entry: Entry): Link[] => (entry.type === 'link' ? [entry] : entry.entries.flatMap(links));
+const describe = new Map(TOPICS.map((topic) => [topic.label, topic.description]));
+
+const topics = Astro.locals.starlightRoute.sidebar.filter((entry) => entry.type === 'group');
+---
+
+<div class="dew-topic-index">
+	{
+		topics.map((topic) => {
+			const pages = links(topic);
+			return (
+				<section>
+					<h3>
+						<a href={pages[0]?.href}>{topic.label}</a>
+					</h3>
+					<p>{describe.get(topic.label)}</p>
+					<ul>
+						{pages.map((link) => (
+							<li>
+								<a href={link.href}>{link.label}</a>
+							</li>
+						))}
+					</ul>
+				</section>
+			);
+		})
+	}
+</div>
+
+<style>
+	.dew-topic-index {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+		gap: 1rem;
+		margin-top: 1rem;
+	}
+
+	section {
+		padding: 1.25rem;
+		border: 1px solid var(--sl-color-hairline);
+		border-radius: 0.5rem;
+	}
+
+	h3 {
+		margin: 0;
+		font-size: 1rem;
+		font-weight: 650;
+	}
+
+	h3 a {
+		color: var(--sl-color-white);
+		text-decoration: none;
+	}
+
+	h3 a:hover {
+		color: var(--sl-color-accent);
+	}
+
+	p {
+		margin: 0.375rem 0 1rem;
+		font-size: var(--sl-text-sm);
+		line-height: 1.5;
+		color: var(--sl-color-gray-3);
+	}
+
+	ul {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+	}
+
+	li + li {
+		margin-top: 0.375rem;
+	}
+
+	li a {
+		font-size: var(--sl-text-sm);
+		font-weight: 500;
+		color: var(--sl-color-accent);
+		text-decoration: none;
+	}
+
+	li a:hover {
+		text-decoration: underline;
+	}
+</style>

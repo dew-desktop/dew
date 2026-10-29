@@ -218,7 +218,7 @@ impl UserData for LuaSignal {
         methods.add_method("Wait", |_, this, ()| -> LuaResult<()> {
             Err(LuaError::runtime(format!(
                 "{}:Wait() yields, and this host has no task scheduler yet. \
-                 Connect a handler instead. See docs/datamodel_scope.md.",
+                 Connect a handler instead. See docs/interface/events.md.",
                 this.kind.label()
             )))
         });

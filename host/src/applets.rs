@@ -413,7 +413,7 @@ pub fn load_observed(
         Err(_) if asked.is_some() => None,
         Err(_) => {
             return Err(format!(
-                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `desktop.Widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applet_contract.md",
+                "{}: the module neither asked for a surface nor returned a `mount`.                  Call `desktop.Widget{{ width = 200, height = 100 }}` and parent your                  tree into what it returns, or return {{ size = ..., {signature} }}.                  See docs/applets/structure.md",
                 manifest.id
             ))
         }

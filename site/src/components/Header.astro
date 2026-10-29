@@ -1,0 +1,26 @@
+---
+import Default from '@astrojs/starlight/components/Header.astro';
+
+const { topics } = Astro.locals.dew;
+---
+
+<div class="dew-header">
+	<div class="dew-header-row">
+		<Default />
+	</div>
+	{
+		topics.length > 0 && (
+			<nav class="dew-topics print:hidden" aria-label="Documentation topics">
+				<ul>
+					{topics.map((topic) => (
+						<li>
+							<a href={topic.href} data-current={topic.current || undefined}>
+								{topic.label}
+							</a>
+						</li>
+					))}
+				</ul>
+			</nav>
+		)
+	}
+</div>

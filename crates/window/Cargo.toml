@@ -1,9 +1,9 @@
 [package]
 name = "dew_window"
-version = "0.0.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "A native window and message pump for Aether's off-engine hosts"
-license-file = "../../LICENSE"
+license-file.workspace = true
 
 # NO RASTERISER AND NO LUAU. This crate opens a window, reports input, and blits
 # a buffer of bytes. It does not know what produced them, which is what lets the

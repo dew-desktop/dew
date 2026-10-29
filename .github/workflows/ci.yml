@@ -96,6 +96,7 @@ jobs:
     if: github.ref_type != 'tag'
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      site: ${{ steps.filter.outputs.site }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -125,39 +126,43 @@ jobs:
             echo "cannot diff $base..$head, so building everything:"
             echo "$changed"
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "site=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           code=false
+          site=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
             case "$f" in
-              # The compatibility table in it is generated and checked by
-              # the build job, so a hand edit to it has to reach that job.
-              examples/README.md) ;;
-              docs/*|scripts/*) continue ;;
-              *.md) continue ;;
+              docs/*|site/*) site=true ;;
+            esac
+            case "$f" in
+              # Each of these is generated and checked by the build job, so a
+              # hand edit to it has to reach that job.
+              examples/README.md|docs/interface/classes.md) ;;
+              # The `checks` job runs this one on every commit. The other lune
+              # scripts run inside the Rust jobs, so a change to one has to
+              # reach them to be exercised at all.
+              scripts/verify_boundaries.luau) continue ;;
+              docs/*|site/*|*.md) continue ;;
             esac
             echo "triggers the Rust jobs: $f"
             code=true
           done <<< "$changed"
 
           if [ "$code" = false ]; then
-            echo "documentation and lune scripts only; the Rust jobs are skipped"
+            echo "documentation only; the Rust jobs are skipped"
           fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "site=$site" >> "$GITHUB_OUTPUT"
 
   # THE CHECKS THAT NEED NO TOOLCHAIN, in their own job so they cost seconds.
   #
-  # These three ran inside the Windows build job, where they took two seconds
-  # and started fifty-seven seconds in, behind a toolchain install and a cache
-  # restore they do not use. They gate the Rust jobs below rather than running
-  # beside them, which keeps the property the note on commitlint describes: a
-  # malformed subject line fails in half a minute instead of after a GPU build.
-  #
-  # THIS JOB HAS NO `if:`. verify_boundaries is the one check a documentation-only
-  # commit still runs, so the kind of commit that skips every Rust job is exactly
-  # the kind this job exists for.
+  # They gate the Rust jobs below rather than running beside them, so a broken
+  # boundary fails in half a minute instead of after a GPU build. They run on
+  # every commit that is not a tag, documentation-only ones included, which are
+  # exactly the commits that skip every Rust job.
   checks:
     name: architecture boundaries
     runs-on: ubuntu-latest
@@ -168,15 +173,10 @@ jobs:
     if: github.ref_type != 'tag'
     steps:
       - uses: actions/checkout@v4
-        with:
-          # commitlint below diffs against the pull request base, and the
-          # default shallow checkout does not carry it.
-          fetch-depth: 0
 
       - uses: CompeyDev/setup-rokit@v0.1.2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
 
       # ARCHITECTURE, CHECKED. Dew owns its host outright: the rendering stack is
       # this repository's, and no framework is a dependency of it. A boundary with
@@ -204,6 +204,32 @@ jobs:
           fi
           echo "built $found Rojo project(s)"
 
+  # THE DOCUMENTATION SITE BUILDS, AND EVERY LINK IN IT RESOLVES. `pnpm build`
+  # renders `docs/` through `site/` and then fails on a link to a page or heading
+  # the build did not produce. Linux, and only when either directory changed.
+  site:
+    name: documentation site
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.site == 'true'
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v4
+      # The pnpm version is `packageManager` in `site/package.json`.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: site/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # The prose rules in `site/style-rules.mjs`, before the slower build.
+      - run: pnpm lint:docs
+      - run: pnpm build
 
   build:
     name: Windows, build and render every example
@@ -472,13 +498,18 @@ jobs:
         run: cargo clippy --manifest-path host/Cargo.toml --all-targets -- -D warnings
 
       # `types/datamodel.d.luau` IS GENERATED, matching the discipline
-      # `docs/datamodel_scope.md` already asks for in its own header comment.
+      # `docs/interface/classes.md` already asks for in its own header comment.
       # `--check` regenerates into memory and diffs against the checked-in
       # file without writing, so a PR that changes `extensions.rs` or lands on
       # a newer `rbx_reflection_database` without regenerating fails here
       # instead of silently going stale.
       - name: Check the generated DataModel editor types are current
         run: cargo run --manifest-path host/Cargo.toml --bin generate-datamodel-types -- --check
+
+      # THE SPECIFICATION'S SCOPE DOCUMENT IS GENERATED THE SAME WAY, from the
+      # API dump fetched above, and checked the same way.
+      - name: Check the generated DataModel scope document is current
+        run: cargo run --manifest-path host/Cargo.toml --bin datamodel-surface -- --markdown --check
 
       # THE EXAMPLES COMPATIBILITY TABLE IS GENERATED TOO. `dew compat --check`
       # loads every example the way `dew snapshot` does, rebuilds the table in
@@ -745,27 +776,21 @@ jobs:
           workspaces: .
           shared-key: ${{ runner.os }}-release
 
-      # THE TAG-TO-VERSION DECISION, ENFORCED, NOT JUST STATED. Sprint 3 left
-      # open whether `host/Cargo.toml`'s `version` field, reused as the build
-      # identifier's source, would ever need to serve two masters at once.
-      # A release tag is the concrete case: this sprint decides that cutting
-      # a release requires `Cargo.toml`'s version to already read what the
-      # tag says, checked here rather than left as an unenforced convention,
-      # so a tag and the build identifier it ships can never silently drift.
-      # A tag's own pre-release or build-metadata suffix (`-rc1`, `+test`) is
-      # stripped before comparing, since that suffix describes the TAG
-      # (a staging or verification cut) rather than the crate version it was
-      # built from.
-      - name: Verify the tag's version matches host/Cargo.toml
+      # A TAG MUST NAME THE VERSION IT SHIPS. The version lives once, in the
+      # root Cargo.toml's `[workspace.package]`, and Cargo is asked for it rather
+      # than a manifest being grepped. A suffix (`-rc1`, `+test`) describes the
+      # tag, not the crate, and is stripped before comparing.
+      - name: Verify the tag's version matches the workspace version
         shell: bash
         run: |
           tag="${GITHUB_REF_NAME#v}"
           core="${tag%%-*}"
           core="${core%%+*}"
-          cargo_version=$(grep -m1 -oE '^version = "[^"]+"' host/Cargo.toml | cut -d'"' -f2)
-          echo "tag: $GITHUB_REF_NAME (core version $core), host/Cargo.toml: $cargo_version"
+          pkgid=$(cargo pkgid --manifest-path host/Cargo.toml)
+          cargo_version="${pkgid##*@}"
+          echo "tag: $GITHUB_REF_NAME (core version $core), workspace: $cargo_version"
           test "$core" = "$cargo_version" || {
-            echo "::error::Tag $GITHUB_REF_NAME's version ($core) does not match host/Cargo.toml's version ($cargo_version). Bump host/Cargo.toml's version in the commit a release tag points at before tagging it."
+            echo "::error::Tag $GITHUB_REF_NAME names $core but the workspace version is $cargo_version. Bump [workspace.package] version in Cargo.toml, merge, then tag that commit."
             exit 1
           }
 
@@ -806,4 +831,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "target/release/dew.exe" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Automated release build for $GITHUB_REF_NAME."
+            --generate-notes

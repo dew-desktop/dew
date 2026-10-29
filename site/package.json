@@ -1,0 +1,22 @@
+{
+  "name": "dew-docs-site",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build && node scripts/check-links.mjs",
+    "preview": "astro preview",
+    "astro": "astro",
+    "lint:docs": "node scripts/lint-docs.mjs"
+  },
+  "dependencies": {
+    "@astrojs/markdown-satteri": "0.4.3",
+    "@astrojs/starlight": "^0.42.6",
+    "@fontsource-variable/inter": "5.3.0",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
+    "astro": "^7.2.10",
+    "sharp": "^0.35.3"
+  }
+}

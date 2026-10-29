@@ -1,9 +1,9 @@
 [package]
 name = "dew_runtime"
-version = "0.0.1"
-edition = "2021"
+version.workspace = true
+edition.workspace = true
 description = "Rust-owned host runtime for Aether: an embedded Luau guest, driven frame by frame"
-license-file = "../../LICENSE"
+license-file.workspace = true
 
 # THE INVERSION, IN ONE DEPENDENCY LIST.
 #

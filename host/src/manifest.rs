@@ -179,7 +179,8 @@ impl Permission {
 ///
 /// EVERY FIELD HERE IS READ BY SOMETHING. `id` names the mod and picks its entry
 /// module, `permissions` builds the capability table, `name` titles the window
-/// and the tray, `description` fills the tray tooltip. `hotkeys` is the one
+/// and the tray, `description` labels the applet in the dashboard's Library
+/// (`library::list`). `hotkeys` is the one
 /// exception, and it is a LOUD one: nothing in the host registers a global
 /// hotkey yet, so `unhonoured()` names every binding a mod declared, at load.
 ///
