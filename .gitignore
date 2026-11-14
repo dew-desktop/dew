@@ -69,4 +69,4 @@ host/datamodel/api_surface.json
 CLAUDE.md
 CLAUDE.local.md
 AGENTS.md
-.claude/settings.local.json
+.claude/
